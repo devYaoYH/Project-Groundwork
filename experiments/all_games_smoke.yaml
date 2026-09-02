@@ -1,0 +1,58 @@
+name: all_games_smoke
+description: >
+  One batch per registered game, all writing to a single SQLite sink. This is
+  the repo-wide integration check: it proves every game still satisfies the game
+  contract, that batches can select games independently, and that the whole
+  trace -> manifest -> sink -> readback path works.
+
+  Run it with:
+
+      a2a-run experiments/all_games_smoke.yaml --smoke-test
+
+  Every batch runs with its game's scripted stand-in agents, so this needs no
+  API keys, no cloud credentials, and costs nothing.
+
+# Named sink from the sibling storage.yaml. Override the file it writes with
+# A2A_TRACE_DB, or on the command line with --storage-path.
+storage:
+  extends: local_db
+
+defaults:
+  num_agents: 2
+
+batches:
+  - label: word_guess
+    count: 1
+    config:
+      game_name: word_guess
+      secret_word: dog
+      max_turns: 6
+      seed: 1
+
+  - label: buyer_seller
+    count: 1
+    config:
+      game_name: buyer_seller
+      num_items: 3
+      seller_cost: 10
+      buyer_value: 40
+      max_rounds: 10
+      discount_factor: 0.9
+      seed: 2
+
+  - label: calendar
+    count: 1
+    config:
+      game_name: calendar
+      num_agents: 3
+      num_slots: 6
+      num_meetings: 3
+      max_turns_per_round: 4
+      seed: 3
+
+  - label: negotiation
+    count: 1
+    config:
+      game_name: negotiation
+      num_rounds: 2
+      seed: 4

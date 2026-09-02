@@ -1,0 +1,39 @@
+schema_version: 1
+id: calendar.tiny-5a3p
+revision: v1
+description: A pinned, five-agent Calendar task suitable for offline local smoke tests.
+engine:
+  game_name: calendar
+  defaults:
+    num_agents: 5
+    num_slots: 8
+    num_meetings: 1
+    task_path: games/calendar/tasks/tiny_varied_density_5a3p.jsonl
+    task_id: b001_easy_5a_3p_d0p8_c1_1
+    communication_protocol: dm
+inputs:
+  - id: calendar-task-corpus
+    path: ../tasks/tiny_varied_density_5a3p.jsonl
+    sha256: "9f1b6f0216b1ae5dcdbfccd91ff07cc4254c8e5547fb1fec8871fad6b7f0d7a6"
+roles:
+  - id: calendar-agent
+    count: 5
+    description: One agent per private calendar.
+resources:
+  - id: private-calendars
+    kind: in-memory-calendar-state
+    description: Private schedules and meeting proposals for the episode.
+metrics:
+  - name: headline_score
+    producer: game
+    direction: maximize
+  - name: excess_cost
+    producer: derived
+    scope: participant
+    direction: minimize
+    extractor: calendar.score_margin
+adapter_bindings:
+  model: engine.llm
+  communication: local.in_process
+  resources:
+    private-calendars: calendar.in_memory

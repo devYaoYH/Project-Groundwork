@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Project Optimizer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;color:#1a1a1a;background:#f5f4f0;padding:1rem}
+h3{font-size:15px;font-weight:500;margin-bottom:8px}
+.sec{margin-bottom:1.5rem}
+.res-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.res-card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px 12px}
+.res-lbl{font-size:12px;color:#666;margin-bottom:4px;text-transform:capitalize}
+input[type=number]{border:1px solid #ccc;border-radius:6px;background:#fff;color:#1a1a1a;padding:3px 6px;font-size:13px}
+input[type=range]{width:100%;accent-color:#185FA5}
+.num-in{width:52px}.sm-in{width:36px;font-size:11px}
+.row{display:flex;align-items:center;gap:8px}
+.muted{font-size:12px;color:#666}
+.players{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pcol{background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px}
+.phdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee}
+.pname{font-size:15px;font-weight:500}
+.p1 .pname{color:#185FA5}.p2 .pname{color:#0F6E56}
+.badge{font-size:13px;font-weight:500;padding:3px 10px;border-radius:6px}
+.p1 .badge{background:#E6F1FB;color:#0C447C}.p2 .badge{background:#E1F5EE;color:#085041}
+.drop{min-height:80px;border:2px dashed #ccc;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.drop.over{background:#EBF5FF;border-color:#378ADD}
+.drop.needs-more{border-color:#e2a000;background:#fffbf0}
+.pcard{background:#f5f4f0;border:1px solid #ddd;border-radius:8px;padding:8px 10px;cursor:grab;user-select:none}
+.pcard:active{cursor:grabbing}.pcard.dragging{opacity:.3}
+.synergy-tag{display:inline-block;font-size:10px;font-weight:500;background:#FFF8E1;color:#7a5800;border:1px solid #f0d070;border-radius:4px;padding:2px 6px;margin-top:4px}
+.synergy-tag.active{background:#E8F5E9;color:#1b5e20;border-color:#81c784}
+.pt{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.pnm{font-size:13px;font-weight:500;text-transform:capitalize}
+.prw{font-size:12px;color:#666}
+.preq{font-size:11px;color:#999;margin-bottom:5px}
+.pedit{display:flex;flex-wrap:wrap;gap:5px}
+.ef{display:flex;align-items:center;gap:3px;font-size:11px;color:#666}
+.stats2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.sc{background:#f5f4f0;border-radius:8px;padding:10px 12px}
+.slbl{font-size:12px;color:#666;margin-bottom:3px}
+.sval{font-size:20px;font-weight:500}
+.p1 .sval{color:#185FA5}.p2 .sval{color:#0F6E56}
+.dline{font-size:11px;color:#999;margin-top:2px;line-height:1.4}
+.cbar{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px;display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.ci{display:flex;flex-direction:column;gap:2px}
+.clbl{font-size:12px;color:#666}
+.cval{font-size:22px;font-weight:500}
+.csub{font-size:11px;color:#999;max-width:200px;word-break:break-word;line-height:1.4}
+.gpill{padding:4px 12px;border-radius:6px;font-size:13px;font-weight:500}
+.gg{background:#E1F5EE;color:#085041}.gok{background:#FAEEDA;color:#633806}.gb{background:#FCEBEB;color:#791F1F}
+.llm-panel{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px}
+.llm-prompt{width:100%;font-size:12px;font-family:monospace;border:1px solid #ccc;border-radius:6px;padding:8px;background:#f9f9f9;color:#333;resize:vertical;line-height:1.5;margin-bottom:10px}
+.llm-result-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.llm-pcol{background:#f5f4f0;border:1px solid #ddd;border-radius:8px;padding:12px}
+.llm-pname{font-size:13px;font-weight:500;margin-bottom:8px}
+.llm-p1 .llm-pname{color:#185FA5}.llm-p2 .llm-pname{color:#0F6E56}
+.llm-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid #eee}
+.llm-row:last-child{border-bottom:none}
+.llm-key{color:#666}.llm-val{font-weight:500}
+.llm-score{margin-top:8px;font-size:13px;font-weight:500;padding:6px 10px;border-radius:6px;background:#fff;border:1px solid #ddd}
+.llm-p1 .llm-score{color:#0C447C}.llm-p2 .llm-score{color:#085041}
+.llm-compare{margin-top:10px;background:#f5f4f0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;color:#333}
+.llm-status{font-size:12px;min-height:20px;margin-top:6px;color:#666}
+.llm-status.ok{color:#0F6E56}.llm-status.err{color:#a32d2d}
+.btn{padding:7px 16px;font-size:13px;font-weight:500;border:1px solid #ccc;border-radius:8px;background:#fff;color:#1a1a1a;cursor:pointer}
+.btn:hover{background:#f5f4f0}.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:#185FA5;color:#fff;border-color:#185FA5}.btn-primary:hover{background:#0f4a82}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.upool{background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px}
+.warn-note{font-size:11px;color:#9a6500;margin-top:5px;min-height:14px}
+.gen-panel{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px}
+.gen-top{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+.knob-wrap{flex:1;min-width:200px}
+.knob-lbl{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:#666;margin-bottom:6px}
+.delta-disp{font-size:20px;font-weight:500;color:#185FA5}
+.knob-ticks{display:flex;justify-content:space-between;font-size:10px;color:#aaa;margin-top:3px}
+.solver-progress{height:4px;background:#eee;border-radius:2px;margin-bottom:10px;overflow:hidden}
+.solver-bar{height:4px;background:#185FA5;border-radius:2px;width:0%;transition:width .1s}
+.gen-status{font-size:12px;color:#666;min-height:32px;line-height:1.6;background:#f5f4f0;border-radius:6px;padding:8px 10px}
+.gen-status.ok{color:#0F6E56;background:#f0faf5}.gen-status.err{color:#a32d2d;background:#fdf0f0}
+.spinner{display:inline-block;width:11px;height:11px;border:2px solid #ccc;border-top-color:#185FA5;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.solver-stats{font-size:11px;color:#aaa;margin-top:4px}
+</style>
+</head>
+<body>
+
+<div class="sec">
+  <h3>Resource pool &amp; costs</h3>
+  <div class="res-grid" id="resGrid"></div>
+</div>
+
+<div class="sec">
+  <h3>Scenario synergy</h3>
+  <div style="background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px 16px">
+    <div style="font-size:12px;color:#666;margin-bottom:10px">Public — visible to both players. A flat round bonus awarded to each player when the joint resource threshold is crossed.</div>
+    <div id="synergy-panel"></div>
+  </div>
+</div>
+
+<div class="sec">
+  <h3>Generate scenario</h3>
+  <div class="gen-panel">
+    <div class="gen-top">
+      <div class="knob-wrap">
+        <div class="knob-lbl">
+          <span>Collaboration ratio target — M/C (collab max / combined score)</span>
+          <span class="delta-disp" id="delta-disp">0.75</span>
+        </div>
+        <input type="range" id="competition-knob" min="50" max="150" value="75" step="5"
+          oninput="document.getElementById('delta-disp').textContent=(this.value/100).toFixed(2)">
+        <div class="knob-ticks"><span>← interfering floor (0.5)</span><span>non-interfering (1.0)</span><span>superadditive (>1) →</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="btn btn-primary" id="gen-btn" onclick="runGenerate()">Generate</button>
+        <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="llm-toggle" checked> Claude narration
+        </label>
+      </div>
+    </div>
+    <div class="solver-progress"><div class="solver-bar" id="solver-bar"></div></div>
+    <div class="gen-status" id="gen-status">Tune the M/C ratio and hit Generate. M/C = 0.5 is the theoretical floor (one player gets everything); M/C = 1 is non-interfering (both hit individual maxima); M/C > 1 is superadditive (synergy bonuses unlock surplus). The solver adjusts project assignments, rewards, and resource quantities to hit the target.</div>
+    <div class="solver-stats" id="solver-stats"></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="algo-header" onclick="toggleAlgo()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+    <h3 style="margin:0">Algorithm — simulated annealing</h3>
+    <span id="algo-chevron" style="font-size:13px;color:#666;transition:transform .2s">▼</span>
+  </div>
+  <div id="algo-body" style="display:none;margin-top:12px;background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px 18px;font-size:13px;line-height:1.75;color:#333">
+
+    <p style="margin-bottom:12px">The generator uses <strong>simulated annealing</strong> (SA), a stochastic local-search metaheuristic that approximates a global optimum of a non-convex objective by accepting worsening moves with a temperature-dependent probability — allowing escape from local minima early in the search and converging to a near-optimal solution as the system cools.</p>
+
+    <p style="font-weight:500;margin-bottom:4px">Problem formulation</p>
+    <p style="margin-bottom:10px">Let <em>P</em> be the set of projects, <em>R</em> the set of resource types, and <em>Z</em> = {p1, p2, unassigned} the set of zones. The solver searches over the joint space:</p>
+    <ul style="margin:0 0 10px 18px;line-height:2">
+      <li><strong>Assignment</strong> σ : <em>P</em> → <em>Z</em>, subject to |σ⁻¹(p1)| ≥ 2 and |σ⁻¹(p2)| ≥ 2</li>
+      <li><strong>Reward</strong> r(p) ∈ [1, 10] ∩ ℤ for each p ∈ P</li>
+      <li><strong>Resource quantities</strong> q(p, ρ) ∈ [1, 6] ∩ ℤ for each p ∈ P, ρ ∈ R(p)</li>
+    </ul>
+    <p style="margin-bottom:10px">The following are <strong>fixed external parameters</strong> not modified by the solver: number of resource types |R|, per-unit resource costs c(ρ), cash budget B (identical for both players), and which resource types each project uses.</p>
+
+    <p style="font-weight:500;margin-bottom:4px">Objective function</p>
+    <p style="margin-bottom:6px">Define the individual maximum reward for player <em>i</em> as:</p>
+    <p style="margin-bottom:6px;font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px">V_i(σ, q, r, B) = max over feasible run-count vectors n satisfying resource and budget constraints of Σ n(p)·r(p)</p>
+    <p style="margin-bottom:6px">The combined score is <em>C</em> = V₁ + V₂. The true collaborative maximum <em>M</em> is the optimal combined reward when both players draw simultaneously from the shared resource pool, <em>including synergy bonuses</em> (a joint integer program solved by bounded enumeration). The <strong>M/C ratio</strong> = M / C characterises resource interaction across three regimes:</p>
+    <ul style="margin:0 0 10px 18px;line-height:2">
+      <li><strong>M/C = 1</strong> (non-interfering): joint play recovers exactly the sum of individual optima — projects use disjoint resources and no synergies apply. Distributive game; the pie is fixed.</li>
+      <li><strong>M/C ∈ (0,1)</strong> (partially interfering): resource contention means joint play recovers less than individual optima summed. Partially competitive.</li>
+      <li><strong>M/C → 0</strong> (destructive): near-total contention; simultaneous play collapses combined reward. Negative-sum.</li>
+      <li><strong>M/C > 1</strong> (superadditive): synergy bonuses make joint purchasing strictly better than solo play — cooperation produces surplus value. True cooperative game in the game-theoretic sense.</li>
+    </ul>
+    <p style="margin-bottom:6px"><strong>Synergy bonuses</strong> are project-level conditions of the form: if total units of resource ρ purchased by both players combined ≥ θ, then the triggering player receives an additional +β reward per run of that project. This is evaluated after all purchases are made using only publicly observable information (total resource consumption), preserving project privacy. Formally, the effective reward is:</p>
+    <p style="margin-bottom:10px;font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px">r̃(p, n_p, u_other) = r(p) + β(p) · 𝟙[n_p·q(p,ρ) + u_other[ρ] ≥ θ(p)]</p>
+    <p style="margin-bottom:10px">The solver minimises the composite loss, where τ ∈ [0, ∞) is the user-supplied target M/C ratio (values > 1 target superadditive outcomes):</p>
+    <p style="font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px;margin-bottom:10px">L = |M/C − τ| · 100 + 300 · 𝟙[τ≤1 ∧ M/C>1] + 0.5 · (|V₁ − V₂| / max(C,1)) · 100 + 1.5 · |C − 40| + 200 · 𝟙[C &lt; 2]</p>
+    <p style="margin-bottom:10px">The first term drives M/C toward τ. The second is a hard penalty preventing synergy leakage when targeting τ ≤ 1. The third penalises player asymmetry. The fourth anchors the combined score C near 40 (≈20 per player), reducing variance in reward magnitude across different M/C targets. The fifth guards against degenerate zero-reward solutions.</p>
+
+    <p style="font-weight:500;margin-bottom:4px">Search procedure</p>
+    <p style="margin-bottom:6px">At each iteration the solver samples a neighbouring state via one of four equiprobable move operators:</p>
+    <ol style="margin:0 0 10px 18px;line-height:2">
+      <li><strong>Reassign</strong> — move one project to the next zone in the cycle p1 → p2 → unassigned → p1, provided the source player zone retains ≥ 2 projects.</li>
+      <li><strong>Reward perturbation</strong> — increment or decrement r(p) by 1 or 2 for a uniformly sampled project p.</li>
+      <li><strong>Quantity perturbation</strong> — increment or decrement q(p, ρ) by 1 for a uniformly sampled (project, resource) pair.</li>
+      <li><strong>Player swap</strong> — exchange the zone assignments of one project from each player, preserving the min-2 constraint.</li>
+      <li><strong>Synergy perturbation</strong> — for a uniformly sampled project: add a synergy condition (random resource, threshold, bonus), remove an existing condition, or perturb threshold θ or bonus β by ±1–2. This allows the solver to discover superadditive configurations when targeting M/C > 1.</li>
+    </ol>
+    <p style="margin-bottom:10px">A candidate state s′ with loss L(s′) is accepted with probability:</p>
+    <p style="font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px;margin-bottom:10px">P(accept) = 1 if L(s′) ≤ L(s), else exp(−(L(s′) − L(s)) / T)</p>
+    <p style="margin-bottom:10px">Temperature decays geometrically: T_k = T₀ · α^k, with T₀ = 80, T_min = 0.5. The decay rate α is calibrated to span the full iteration budget exactly: α = (T_min / T₀)^(1 / K_max) = (0.5 / 80)^(1/5000) ≈ 0.99895, ensuring T reaches T_min precisely at step K_max = 5,000. Each outer step evaluates 12 candidate neighbours, giving a total evaluation budget of 60,000. The search terminates at whichever comes first: (a) exhaustion of the 5,000-step budget, or (b) early exit when the best loss L falls below 0.5, indicating a near-perfect match to the target M/C with negligible player gap. The best state encountered across all iterations is retained and applied regardless of the final current state.</p>
+
+    <p style="font-weight:500;margin-bottom:4px">Theoretical M/C floor</p>
+    <p style="margin-bottom:10px">The M/C ratio is bounded below by 0.5 (assuming balanced players). The joint optimum M can always assign all resources to whichever player has the higher individual maximum, guaranteeing M ≥ max(V₁, V₂). Since C = V₁ + V₂ and max(V₁, V₂) ≥ C/2, it follows that M/C ≥ 0.5. Equality holds when V₁ = V₂ and both players compete for exactly the same resources. The target slider is therefore clamped to [0.5, 1.5]: the left endpoint is the tightest achievable interference floor; 1.0 is non-interfering; values above 1.0 require active synergy bonuses.</p>
+
+    <p style="font-weight:500;margin-bottom:4px">Complexity note</p>
+    <p>Evaluating V_i is O(B · |P_i|²) via a bounded two-project loop. Evaluating M requires enumerating run-count combinations up to a per-project cap of 10, giving worst-case O(10^|P|) — kept tractable by the small problem size (≤ 5 assigned projects). The full SA run is O(K · eval) where K = 60,000.</p>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="topbar">
+    <h3 style="margin:0">Unassigned projects</h3>
+    <button class="btn" onclick="fairSplit()">Auto fair split</button>
+  </div>
+  <div class="upool"><div class="drop" id="zone-unassigned"></div></div>
+</div>
+
+<div class="sec">
+  <div class="topbar" style="margin-bottom:10px">
+    <h3 style="margin:0">Players — drag to reassign</h3>
+    <div class="row"><span class="muted">Cash per player:</span><input class="num-in" type="number" id="cash" value="20" min="1" oninput="recalc()"><span class="muted">each</span></div>
+  </div>
+  <div class="players">
+    <div class="pcol p1">
+      <div class="phdr"><span class="pname">Player 1</span><span class="badge" id="badge-p1">★ 0</span></div>
+      <div class="drop" id="zone-p1"></div>
+      <div class="warn-note" id="warn-p1"></div>
+      <div class="stats2">
+        <div class="sc p1"><div class="slbl">Max reward</div><div class="sval" id="rew-p1">0</div><div class="dline" id="det-p1">—</div></div>
+        <div class="sc"><div class="slbl">Spent / budget</div><div class="sval" style="font-size:14px" id="spent-p1">0/20</div><div class="dline" id="syn-p1" style="color:#7a5800"></div></div>
+      </div>
+    </div>
+    <div class="pcol p2">
+      <div class="phdr"><span class="pname">Player 2</span><span class="badge" id="badge-p2">★ 0</span></div>
+      <div class="drop" id="zone-p2"></div>
+      <div class="warn-note" id="warn-p2"></div>
+      <div class="stats2">
+        <div class="sc p2"><div class="slbl">Max reward</div><div class="sval" id="rew-p2">0</div><div class="dline" id="det-p2">—</div></div>
+        <div class="sc"><div class="slbl">Spent / budget</div><div class="sval" style="font-size:14px" id="spent-p2">0/20</div><div class="dline" id="syn-p2" style="color:#7a5800"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h3>Collaborative view</h3>
+  <div class="cbar">
+    <div class="ci"><span class="clbl">Combined score (C)</span><span class="cval" id="col-combined">0</span><span class="csub">V₁ + V₂ individual maxes</span></div>
+    <div class="ci"><span class="clbl">Collab max (M)</span><span class="cval" id="col-true">0</span><span class="csub" id="col-sub">—</span></div>
+    <div class="ci"><span class="clbl">P1 base score</span><span class="cval" id="col-base1" style="color:#185FA5">0</span><span class="csub">without synergy</span></div>
+    <div class="ci"><span class="clbl">P2 base score</span><span class="cval" id="col-base2" style="color:#0F6E56">0</span><span class="csub">without synergy</span></div>
+    <div class="ci"><span class="clbl">Synergy bonus ⚡</span><span class="cval" id="col-syn-bonus" style="color:#7a5800">+0</span><span class="csub" id="col-syn-detail">+bonus/run to each player</span></div>
+    <div class="ci"><span class="clbl">M/C ratio</span><span class="cval" id="col-mc">—</span><span class="csub" id="col-mc-sub">0=destructive · 1=non-interfering · >1=superadditive</span></div>
+    <div class="ci"><span class="clbl">Score gap V₁ vs V₂</span><span class="gpill gg" id="gap-pill">—</span></div>
+    <div class="ci"><span class="clbl">Fairness</span><span class="cval" style="font-size:15px" id="col-fair">—</span></div>
+  </div>
+  <div id="col-res-wrap" style="margin-top:10px;background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px 16px">
+    <div style="font-size:12px;color:#666;margin-bottom:8px;font-weight:500">Resource usage in optimal joint allocation</div>
+    <div id="col-res-bars"></div>
+  </div>
+</div>
+
+<div class="sec">
+  <h3>LLM agent solver</h3>
+  <div class="llm-panel">
+    <div style="font-size:12px;color:#666;margin-bottom:8px">The oracle has full visibility into both players' projects and maximises the joint collaborative score. Compare its answer against the computed collab max to see how well the model reasons about the problem. Assign at least 2 projects per player first.</div>
+    <textarea class="llm-prompt" id="llm-prompt" rows="12" readonly></textarea>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="btn btn-primary" id="llm-solve-btn" onclick="runLLMSolver()">Ask Claude to solve</button>
+      <button class="btn" onclick="buildLLMPrompt()">Refresh prompt</button>
+      <select id="llm-model" style="font-size:12px;padding:4px 8px;border:1px solid #ccc;border-radius:6px;background:#fff;color:#1a1a1a">
+        <option value="claude-opus-4-6">Opus 4.6</option>
+        <option value="claude-sonnet-4-20250514" selected>Sonnet 4.6</option>
+        <option value="claude-sonnet-4-5">Sonnet 4.5</option>
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+        <option value="claude-haiku-4-6">Haiku 4.6</option>
+        <option value="claude-haiku-3-5">Haiku 3</option>
+      </select>
+    </div>
+    <div class="llm-status" id="llm-status"></div>
+    <div class="llm-result-grid" id="llm-result" style="display:none">
+      <div class="llm-pcol llm-p1">
+        <div class="llm-pname">Player 1 — Claude's answer</div>
+        <div id="llm-p1-purchases"></div>
+        <div id="llm-p1-projects"></div>
+        <div class="llm-score" id="llm-p1-score"></div>
+      </div>
+      <div class="llm-pcol llm-p2">
+        <div class="llm-pname">Player 2 — Claude's answer</div>
+        <div id="llm-p2-purchases"></div>
+        <div id="llm-p2-projects"></div>
+        <div class="llm-score" id="llm-p2-score"></div>
+      </div>
+    </div>
+    <div class="llm-compare" id="llm-compare" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+var resources = {wood:{total:10,cost:2}, stone:{total:10,cost:1}, gold:{total:6,cost:4}};
+var scenarioSynergy = {res:'gold', threshold:5, bonus:3}; // null when inactive
+var projects = [
+  {id:'p0',name:'Coffee table', req:{wood:3,stone:2}, reward:2},
+  {id:'p1',name:'Necklace',     req:{gold:2},          reward:1},
+  {id:'p2',name:'Gold bowl',    req:{stone:2,gold:1},  reward:5},
+  {id:'p3',name:'Wooden shrine',req:{wood:4,gold:1},   reward:4},
+];
+var assignment = {};
+projects.forEach(function(p){assignment[p.id]='unassigned'});
+var dragId = null;
+
+// ── Core math — greedy-fill purchase-vector model ─────────────────────────────
+//
+// Agent action: {resource purchases} — projects are decoded deterministically.
+// Ordering rule: multi-resource projects fill first, single-resource projects last.
+// Greedy fill: iterate ordered projects; each consumes as many runs as purchased
+// resources allow; remainder after all projects = discretionary (synergy signal).
+
+// ── Core math ─────────────────────────────────────────────────────────────────
+function cpr(p){
+  return Object.keys(p.req).reduce(function(s,r){return s+(resources[r]?resources[r].cost:0)*p.req[r];},0);
+}
+function maxRuns(p, cash){
+  var byRes=Infinity;
+  Object.keys(p.req).forEach(function(r){byRes=Math.min(byRes,Math.floor((resources[r]?resources[r].total:0)/p.req[r]));});
+  var cp=cpr(p);
+  return Math.min(isFinite(byRes)?byRes:0,cp>0?Math.floor(cash/cp):9999);
+}
+
+// Synergy fires when both players contribute >=1 of syn.res AND combined >= threshold.
+// Solo play (otherUsed={}) structurally cannot fire.
+function checkSynergy(syn, myTotal, otherTotal){
+  if(!syn) return false;
+  return myTotal>=1 && otherTotal>=1 && myTotal+otherTotal>=syn.threshold;
+}
+
+// maxForPlayer: enumerate run counts, no synergy in solo context.
+// Returns {reward, baseReward, synergyBonus, detail, spent}
+function maxForPlayer(projs, cash, otherPurchase){
+  otherPurchase=otherPurchase||{};
+  if(!projs.length) return {reward:0,baseReward:0,synergyBonus:0,detail:'---',spent:0};
+  var best={reward:0,baseReward:0,synergyBonus:0,detail:'---',spent:0};
+  projs.forEach(function(p){
+    var n=maxRuns(p,cash),sp=n*cpr(p),base=n*p.reward;
+    if(base>best.reward) best={reward:base,baseReward:base,synergyBonus:0,detail:p.name+' x'+n,spent:sp};
+  });
+  for(var i=0;i<projs.length;i++) for(var j=i+1;j<projs.length;j++){
+    var pa=projs[i],pb=projs[j],cpA=cpr(pa),cpB=cpr(pb);
+    var mA=maxRuns(pa,cash),mB=maxRuns(pb,cash);
+    for(var a=0;a<=Math.min(mA,30);a++){
+      var rem=cash-a*cpA; if(rem<0) break;
+      var b=cpB>0?Math.min(mB,Math.floor(rem/cpB)):mB;
+      var tot=a*pa.reward+b*pb.reward,sp2=a*cpA+b*cpB,base2=a*pa.reward+b*pb.reward;
+      if(tot>best.reward) best={reward:tot,baseReward:base2,synergyBonus:0,
+        detail:pa.name+' x'+a+', '+pb.name+' x'+b,spent:sp2};
+    }
+  }
+  return best;
+}
+
+// collabMax: enumerate run counts jointly (fast O(10^|P|)), check joint pool constraint,
+// then try thin discretionary additions on synRes only (O(threshold^2)).
+// Both players get +bonus/run symmetrically when synergy fires.
+// Returns {total,detail,resUsed,discUsed1,discUsed2,baseScore,baseScore1,baseScore2,synergyBonus,synergyTriggered[]}
+function collabMax(pp1, pp2, cash1, cash2){
+  var empty={total:0,detail:'---',resUsed:{},discUsed1:{},discUsed2:{},
+    baseScore:0,baseScore1:0,baseScore2:0,synergyBonus:0,synergyTriggered:[]};
+  if(!pp1.length&&!pp2.length) return empty;
+  var rkeys=Object.keys(resources);
+  var best=JSON.parse(JSON.stringify(empty));
+  var synRes=scenarioSynergy?scenarioSynergy.res:null;
+  var synThresh=scenarioSynergy?scenarioSynergy.threshold:0;
+  var synBonus=scenarioSynergy?scenarioSynergy.bonus:0;
+  var caps1=pp1.map(function(p){return Math.min(maxRuns(p,cash1),10);});
+  var caps2=pp2.map(function(p){return Math.min(maxRuns(p,cash2),10);});
+  var cprs1=pp1.map(cpr),cprs2=pp2.map(cpr);
+  var discCap=synRes?Math.min(synThresh,resources[synRes]?resources[synRes].total:0):0;
+  var synCost=synRes?(resources[synRes]?resources[synRes].cost:0):0;
+  var r1arr=new Array(pp1.length).fill(0), r2arr=new Array(pp2.length).fill(0);
+
+  function evalAlloc(d1,d2){
+    var used={};rkeys.forEach(function(r){used[r]=0;});
+    var c1=0,c2=0;
+    r1arr.forEach(function(n,i){var p=pp1[i];Object.keys(p.req).forEach(function(r){used[r]=(used[r]||0)+n*p.req[r];});c1+=n*cprs1[i];});
+    r2arr.forEach(function(n,i){var p=pp2[i];Object.keys(p.req).forEach(function(r){used[r]=(used[r]||0)+n*p.req[r];});c2+=n*cprs2[i];});
+    if(synRes){used[synRes]=(used[synRes]||0)+d1+d2;c1+=d1*synCost;c2+=d2*synCost;}
+    if(!rkeys.every(function(r){return(used[r]||0)<=(resources[r]?resources[r].total:0);})||c1>cash1||c2>cash2) return;
+    var pu1={},pu2={};
+    r1arr.forEach(function(n,i){var p=pp1[i];Object.keys(p.req).forEach(function(r){pu1[r]=(pu1[r]||0)+n*p.req[r];});});
+    r2arr.forEach(function(n,i){var p=pp2[i];Object.keys(p.req).forEach(function(r){pu2[r]=(pu2[r]||0)+n*p.req[r];});});
+    if(synRes){pu1[synRes]=(pu1[synRes]||0)+d1;pu2[synRes]=(pu2[synRes]||0)+d2;}
+    var disc1={},disc2={};
+    if(synRes&&d1>0) disc1[synRes]=d1;
+    if(synRes&&d2>0) disc2[synRes]=d2;
+    var base1=0,base2=0,synBon=0,triggered=[];
+    r1arr.forEach(function(n,i){base1+=n*pp1[i].reward;});
+    r2arr.forEach(function(n,i){base2+=n*pp2[i].reward;});
+    // Synergy: scenario-level flat round bonus, independent of projects
+    if(synRes){
+      var myT1=pu1[synRes]||0, myT2=pu2[synRes]||0;
+      if(checkSynergy(scenarioSynergy,myT1,myT2)){
+        synBon+=synBonus*2;
+        triggered.push({name:'Round synergy',side:'both',res:synRes,myU:myT1,otherU:myT2,
+          myDisc:disc1[synRes]||0,otherDisc:disc2[synRes]||0,bonus:synBonus});
+      }
+    }
+    var tot=base1+base2+synBon;
+    if(tot>best.total){
+      var parts=r1arr.map(function(n,i){return pp1[i].name+'x'+n;})
+        .concat(r2arr.map(function(n,i){return pp2[i].name+'x'+n;}))
+        .concat(d1>0&&synRes?['disc:'+synRes+'x'+d1+'(P1)']:[])
+        .concat(d2>0&&synRes?['disc:'+synRes+'x'+d2+'(P2)']:[]);
+      parts=parts.filter(function(s){return s.indexOf('x0')===-1;});
+      best={total:tot,detail:parts.join(', ')||'---',resUsed:Object.assign({},used),
+        discUsed1:disc1,discUsed2:disc2,baseScore:base1+base2,
+        baseScore1:base1,baseScore2:base2,synergyBonus:synBon,synergyTriggered:triggered};
+    }
+  }
+
+  function loop2(i2,cashLeft2){
+    if(i2===pp2.length){
+      for(var d1=0;d1<=discCap;d1++) for(var d2=0;d2<=discCap;d2++) evalAlloc(d1,d2);
+      return;
+    }
+    var maxN=Math.min(caps2[i2],cashLeft2>0?Math.floor(cashLeft2/cprs2[i2]):0);
+    for(var n=0;n<=maxN;n++){r2arr[i2]=n;loop2(i2+1,cashLeft2-n*cprs2[i2]);}
+    r2arr[i2]=0;
+  }
+  function loop1(i1,cashLeft1){
+    if(i1===pp1.length){loop2(0,cash2);return;}
+    var maxN=Math.min(caps1[i1],cashLeft1>0?Math.floor(cashLeft1/cprs1[i1]):0);
+    for(var n=0;n<=maxN;n++){r1arr[i1]=n;loop1(i1+1,cashLeft1-n*cprs1[i1]);}
+    r1arr[i1]=0;
+  }
+  loop1(0,cash1);
+  return best;
+}
+
+function evaluate(projs, assign, cash){
+  var pp1=projs.filter(function(p){return assign[p.id]==='p1';});
+  var pp2=projs.filter(function(p){return assign[p.id]==='p2';});
+  var r1=maxForPlayer(pp1,cash,{});
+  var r2=maxForPlayer(pp2,cash,{});
+  var combined=r1.reward+r2.reward;
+  var cm=collabMax(pp1,pp2,cash,cash);
+  var mcRatio=combined>0?cm.total/combined:1;
+  return {combined:combined,collab:cm.total,mcRatio:mcRatio,gap:Math.abs(r1.reward-r2.reward),
+    r1:r1.reward,r2:r2.reward,base1:cm.baseScore1,base2:cm.baseScore2};
+}
+
+function score(ev, targetMC){
+  var ratioErr=Math.abs(ev.mcRatio-targetMC)*100;
+  var leakPenalty=(targetMC<=1.0&&ev.mcRatio>1.0)?300:0;
+  var gapPenalty=ev.combined>0?100*ev.gap/Math.max(ev.combined,1):0;
+  var trivialPenalty=ev.combined<2?200:0;
+  var scorePenalty=Math.abs(ev.combined-40)*1.5;
+  // Superadditive constraint: each player's base (pre-synergy) must be < their solo max.
+  // This ensures synergy is what makes joint play worthwhile, not just better solo play.
+  var superPenalty=0;
+  if(targetMC>1.0){
+    if(ev.base1>=ev.r1) superPenalty+=100;
+    if(ev.base2>=ev.r2) superPenalty+=100;
+  }
+  return ratioErr+leakPenalty+0.5*gapPenalty+trivialPenalty+scorePenalty+superPenalty;
+}
+
+// ── Simulated Annealing ────────────────────────────────────────────────────────
+function deepCloneProjects(projs){
+  return projs.map(function(p){
+    return {id:p.id,name:p.name,req:Object.assign({},p.req),reward:p.reward};
+  });
+}
+function cloneAssign(a){return Object.assign({},a);}
+function randInt(lo,hi){return lo+Math.floor(Math.random()*(hi-lo+1));}
+function pick(arr){return arr[Math.floor(Math.random()*arr.length)];}
+
+// Within-group swap: swap req/reward/synergy of two projects in the same group
+// (multi or single) within a player zone, preserving the ordering invariant.
+function neighbour(projs, assign, cash, allowSynergy){
+  var p2=deepCloneProjects(projs), a2=cloneAssign(assign);
+  var move=randInt(0, allowSynergy?4:3);
+  if(move===0){
+    var zones=['p1','p2','unassigned'], p=pick(p2), from=a2[p.id];
+    var fromCount=p2.filter(function(x){return a2[x.id]===from;}).length;
+    if(from==='unassigned'||fromCount>2) a2[p.id]=zones[(zones.indexOf(from)+1)%3];
+  } else if(move===1){
+    var p=pick(p2);
+    p.reward=Math.min(10,Math.max(1,p.reward+pick([-2,-1,1,2])));
+  } else if(move===2){
+    var p=pick(p2), rkeys=Object.keys(p.req);
+    if(rkeys.length){var r=pick(rkeys);p.req[r]=Math.min(6,Math.max(1,p.req[r]+pick([-1,1])));}
+  } else if(move===3){
+    var pp1z=p2.filter(function(x){return a2[x.id]==='p1';}),pp2z=p2.filter(function(x){return a2[x.id]==='p2';});
+    if(pp1z.length>=2&&pp2z.length>=2){var pa=pick(pp1z),pb=pick(pp2z);a2[pa.id]='p2';a2[pb.id]='p1';}
+  } else {
+    // Synergy perturbation — tweaks scenario-level scenarioSynergy, not any project
+    var rkeys=Object.keys(resources);
+    if(!scenarioSynergy){
+      scenarioSynergy={res:pick(rkeys),threshold:randInt(4,10),bonus:randInt(1,4)};
+    } else {
+      var sub=randInt(0,2);
+      if(sub===0) scenarioSynergy=null;
+      else if(sub===1) scenarioSynergy=Object.assign({},scenarioSynergy,{threshold:Math.max(2,scenarioSynergy.threshold+pick([-2,-1,1,2]))});
+      else scenarioSynergy=Object.assign({},scenarioSynergy,{bonus:Math.min(8,Math.max(1,scenarioSynergy.bonus+pick([-1,1])))});
+    }
+  }
+  return {projs:p2,assign:a2,cash:cash};
+}
+
+function solve(targetMC, onProgress){
+  var projs=deepCloneProjects(projects);
+  var assign=cloneAssign(assignment);
+  var allowSynergy=targetMC>1.0;
+  var savedSynergy=scenarioSynergy;
+  if(!allowSynergy) scenarioSynergy=null;
+  var pp1=projs.filter(function(p){return assign[p.id]==='p1';}),
+      pp2=projs.filter(function(p){return assign[p.id]==='p2';});
+  var unass=projs.filter(function(p){return assign[p.id]==='unassigned';}),idx=0;
+  while(pp1.length<2&&idx<unass.length){assign[unass[idx].id]='p1';pp1.push(unass[idx]);idx++;}
+  while(pp2.length<2&&idx<unass.length){assign[unass[idx].id]='p2';pp2.push(unass[idx]);idx++;}
+  var cash=+(document.getElementById('cash').value)||20;
+  var curEv=evaluate(projs,assign,cash);
+  var curScore=score(curEv,targetMC);
+  var bestState={projs:deepCloneProjects(projs),assign:cloneAssign(assign),cash:cash,ev:curEv,score:curScore,synergy:scenarioSynergy?Object.assign({},scenarioSynergy):null};
+  var T0=80,Tmin=0.5,maxIter=5000,alpha=Math.pow(Tmin/T0,1/maxIter),T=T0;
+  var iter=0,improvements=0;
+  function step(){
+    if(iter>=maxIter||bestState.score<0.5){
+      scenarioSynergy=bestState.synergy; // apply best synergy found
+      onProgress(100,bestState,iter*12,improvements);return;
+    }
+    for(var k=0;k<12;k++){
+      var nb=neighbour(projs,assign,cash,allowSynergy);
+      var nbEv=evaluate(nb.projs,nb.assign,nb.cash);
+      var nbScore=score(nbEv,targetMC);
+      var diff=nbScore-curScore;
+      if(diff<0||Math.random()<Math.exp(-diff/T)){
+        projs=nb.projs;assign=nb.assign;cash=nb.cash;curEv=nbEv;curScore=nbScore;
+        if(curScore<bestState.score){
+          bestState={projs:deepCloneProjects(projs),assign:cloneAssign(assign),cash:cash,ev:curEv,score:curScore,synergy:scenarioSynergy?Object.assign({},scenarioSynergy):null};
+          improvements++;
+        }
+      }
+      T*=alpha;iter++;
+    }
+    onProgress(Math.round(100*iter/maxIter),bestState,iter*12,improvements);
+    setTimeout(step,0);
+  }
+  step();
+}
+
+
+// ── Generation entry point ────────────────────────────────────────────────────
+function runGenerate(){
+  var knobVal=+(document.getElementById('competition-knob').value);
+  var targetMC=knobVal/100; // slider 0→100 maps to MC 0.0→1.0
+  var btn=document.getElementById('gen-btn');
+  btn.disabled=true;
+  setStatus('<span class="spinner"></span>Solver running…','');
+  document.getElementById('solver-stats').textContent='';
+
+  solve(targetMC, function(pct, bestState, candidateCount, improvements){
+    document.getElementById('solver-bar').style.width=pct+'%';
+    if(pct<100){
+      document.getElementById('solver-stats').textContent=
+        'candidates '+candidateCount+' / 60000 · best score '+bestState.score.toFixed(1)+' · M/C '+bestState.ev.mcRatio.toFixed(3);
+      return;
+    }
+    bestState.projs.forEach(function(bp){
+      var p=projects.find(function(x){return x.id===bp.id});
+      if(!p) return;
+      p.reward=bp.reward;
+      Object.keys(bp.req).forEach(function(r){if(p.req.hasOwnProperty(r)) p.req[r]=bp.req[r]});
+    });
+    scenarioSynergy=bestState.synergy; // null when stripped (τ≤1), object when superadditive
+    Object.keys(bestState.assign).forEach(function(id){assignment[id]=bestState.assign[id]});
+    document.getElementById('cash').value=bestState.cash;
+    renderAllCards();recalc();
+
+    var ev=bestState.ev;
+    document.getElementById('solver-stats').textContent=
+      'Solver done · '+candidateCount+' candidates · '+improvements+' improvements · M/C '+ev.mcRatio.toFixed(3)+' (target '+targetMC.toFixed(2)+') · score '+bestState.score.toFixed(1);
+
+    var useLLM=document.getElementById('llm-toggle').checked;
+    if(useLLM){
+      setStatus('<span class="spinner"></span>Claude is narrating…','');
+      narrateResult(targetMC, bestState, ev);
+    } else {
+      setStatus('Solver complete — M/C '+ev.mcRatio.toFixed(3)+' (target '+targetMC.toFixed(2)+').','ok');
+    }
+    btn.disabled=false;
+  });
+}
+
+async function narrateResult(targetMC, bestState, ev){
+  var pp1=bestState.projs.filter(function(p){return bestState.assign[p.id]==='p1'});
+  var pp2=bestState.projs.filter(function(p){return bestState.assign[p.id]==='p2'});
+  var unass=bestState.projs.filter(function(p){return bestState.assign[p.id]==='unassigned'});
+  var prompt='A game balance solver produced this scenario targeting M/C = '+targetMC.toFixed(2)
+    +' (M/C = collab_max/combined; >1 = superadditive via synergy bonuses, 1 = non-interfering, 0 = destructive). Achieved M/C = '+ev.mcRatio.toFixed(3)
+    +' (combined='+ev.combined+', collab='+ev.collab+'). Narrate in 2 sentences: explain the strategic character and specifically how resource overlap and any synergy conditions drive the achieved M/C.'
+    +'\nCash per player: '+bestState.cash
+    +'\\nPlayer 1: '+pp1.map(function(p){return p.name+' ['+Object.keys(p.req).map(function(r){return r+'x'+p.req[r]}).join(',')+'] rew='+p.reward;}).join('; ')
+    +'\\nPlayer 2: '+pp2.map(function(p){return p.name+' ['+Object.keys(p.req).map(function(r){return r+'x'+p.req[r]}).join(',')+'] rew='+p.reward;}).join('; ')
+    +(scenarioSynergy?'\\nSynergy: if '+scenarioSynergy.res+' >='+scenarioSynergy.threshold+' total (each >=1) -> +'+scenarioSynergy.bonus+' flat each':'')
+    +(unass.length?'\nUnassigned: '+unass.map(function(p){return p.name}).join(', '):'')
+    +'\nResources: '+Object.keys(resources).map(function(r){return r+'('+resources[r].total+'u @$'+resources[r].cost+')'}).join(', ');
+  try{
+    var resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:120,messages:[{role:'user',content:prompt}]})
+    });
+    var data=await resp.json();
+    var text=(data.content||[]).filter(function(b){return b.type==='text'}).map(function(b){return b.text}).join('').trim();
+    setStatus(text,'ok');
+  } catch(e){
+    setStatus('Solver complete — M/C '+ev.mcRatio.toFixed(3)+' vs target '+targetMC.toFixed(2)+'.','ok');
+  }
+}
+
+// ── Fair split ────────────────────────────────────────────────────────────────
+function fairSplit(){
+  var assignable=projects.filter(function(p){return assignment[p.id]!=='unassigned'});
+  if(assignable.length<4){
+    // Try assigning all projects
+    assignable=projects.slice();
+  }
+  if(assignable.length<4){alert('Need at least 4 projects to split with min 2 each.');return;}
+  var cash=+(document.getElementById('cash').value)||0;
+  var bestGap=Infinity,bestMask=-1;
+  var n=assignable.length;
+  for(var mask=0;mask<(1<<n);mask++){
+    var a1=[],a2=[];
+    assignable.forEach(function(p,i){(mask>>i&1?a1:a2).push(p)});
+    if(a1.length<2||a2.length<2) continue;
+    var r1=maxForPlayer(a1,cash,{}).reward,r2=maxForPlayer(a2,cash,{}).reward;
+    var gap=Math.abs(r1-r2);
+    if(gap<bestGap){bestGap=gap;bestMask=mask}
+  }
+  if(bestMask<0) return;
+  assignable.forEach(function(p,i){assignment[p.id]=bestMask>>i&1?'p1':'p2'});
+  renderAllCards();recalc();
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function setStatus(msg,cls){
+  var el=document.getElementById('gen-status');
+  el.innerHTML=msg;el.className='gen-status'+(cls?' '+cls:'');
+}
+
+function buildResGrid(){
+  var g=document.getElementById('resGrid');g.innerHTML='';
+  Object.keys(resources).forEach(function(r){
+    var d=document.createElement('div');d.className='res-card';
+    d.innerHTML='<div class="res-lbl">'+r+'</div>'
+      +'<div class="row"><input class="num-in" type="number" min="0" value="'+resources[r].total+'" oninput="resources[\''+r+'\'].total=+this.value;recalc()"><span class="muted">units</span></div>'
+      +'<div class="row" style="margin-top:5px"><span class="muted" style="font-size:11px">cost/unit:</span><input class="num-in" type="number" min="0" value="'+resources[r].cost+'" oninput="resources[\''+r+'\'].cost=+this.value;recalc()"></div>';
+    g.appendChild(d);
+  });
+}
+
+function buildCard(proj){
+  var div=document.createElement('div');div.className='pcard';div.id='card-'+proj.id;div.draggable=true;
+  var rq=Object.keys(proj.req).map(function(k){return k+'x'+proj.req[k]}).join(', ');
+  var editHtml='<div class="ef">reward:<input class="sm-in" type="number" min="1" max="10" value="'+proj.reward+'" oninput="updRew(\''+proj.id+'\',+this.value)"></div>';
+  Object.keys(proj.req).forEach(function(r){
+    editHtml+='<div class="ef">'+r+':<input class="sm-in" type="number" min="1" max="6" value="'+proj.req[r]+'" oninput="updReq(\''+proj.id+'\',\''+r+'\',+this.value)"></div>';
+  });
+  div.innerHTML='<div class="pt"><span class="pnm">'+proj.name+'</span><span class="prw">★ <span id="rv-'+proj.id+'">'+proj.reward+'</span>/run</span></div>'
+    +'<div class="preq" id="rq-'+proj.id+'">'+rq+'</div>'
+    +'<div class="pedit">'+editHtml+'</div>';
+  div.addEventListener('dragstart',function(e){dragId=proj.id;div.classList.add('dragging');e.dataTransfer.effectAllowed='move'});
+  div.addEventListener('dragend',function(){div.classList.remove('dragging');dragId=null});
+  return div;
+}
+
+function renderAllCards(){
+  ['unassigned','p1','p2'].forEach(function(z){
+    var zone=document.getElementById('zone-'+z);zone.innerHTML='';
+    projects.filter(function(p){return assignment[p.id]===z}).forEach(function(p){zone.appendChild(buildCard(p))});
+  });
+  setupDrop();
+  ['p1','p2'].forEach(function(z){
+    var zone=document.getElementById('zone-'+z);
+    var count=projects.filter(function(p){return assignment[p.id]===z}).length;
+    if(count>0&&count<2) zone.classList.add('needs-more'); else zone.classList.remove('needs-more');
+  });
+}
+
+function setupDrop(){
+  ['unassigned','p1','p2'].forEach(function(zid){
+    var zone=document.getElementById('zone-'+zid);
+    zone.addEventListener('dragover',function(e){e.preventDefault();zone.classList.add('over')});
+    zone.addEventListener('dragleave',function(){zone.classList.remove('over')});
+    zone.addEventListener('drop',function(e){
+      e.preventDefault();zone.classList.remove('over');
+      if(dragId){assignment[dragId]=zid;renderAllCards();recalc()}
+    });
+  });
+}
+
+function updRew(id,val){
+  var p=projects.find(function(x){return x.id===id});
+  if(p){p.reward=val;document.getElementById('rv-'+id).textContent=val;recalc()}
+}
+function updReq(id,res,val){
+  var p=projects.find(function(x){return x.id===id});if(!p)return;
+  p.req[res]=val;
+  document.getElementById('rq-'+id).textContent=Object.keys(p.req).map(function(k){return k+'x'+p.req[k]}).join(', ');
+  recalc();
+}
+
+function addSyn(){
+  var rkeys=Object.keys(resources);
+  scenarioSynergy={res:rkeys[0],threshold:6,bonus:3};
+  buildSynergyPanel();recalc();
+}
+function updSyn(field,val){
+  if(field==='remove'){scenarioSynergy=null;}
+  else if(scenarioSynergy){scenarioSynergy=Object.assign({},scenarioSynergy,{[field]:val});}
+  buildSynergyPanel();recalc();
+}
+function buildSynergyPanel(){
+  var el=document.getElementById('synergy-panel');
+  if(!el) return;
+  if(!scenarioSynergy){
+    el.innerHTML='<span style="font-size:12px;color:#666">No synergy active. </span>'
+      +'<button style="font-size:11px;padding:2px 8px;border:1px solid #ccc;border-radius:5px;background:#fff;cursor:pointer" onclick="addSyn()">+ add synergy</button>';
+    return;
+  }
+  var syn=scenarioSynergy, rkeys=Object.keys(resources);
+  el.innerHTML='<span class="synergy-tag">⚡ if total '+syn.res+' purchased by both ≥ '+syn.threshold+' (each ≥1) → +'+syn.bonus+' flat bonus each player</span>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">'
+    +'<div class="ef">resource: <select onchange="updSyn(\'res\',this.value)" style="font-size:11px;border:1px solid #ccc;border-radius:4px;padding:2px 4px">'+rkeys.map(function(r){return '<option value="'+r+'"'+(r===syn.res?' selected':'')+'>'+r+'</option>';}).join('')+'</select></div>'
+    +'<div class="ef">threshold:<input class="sm-in" type="number" min="2" max="20" value="'+syn.threshold+'" oninput="updSyn(\'threshold\',+this.value)"></div>'
+    +'<div class="ef">bonus:<input class="sm-in" type="number" min="1" max="10" value="'+syn.bonus+'" oninput="updSyn(\'bonus\',+this.value)"></div>'
+    +'<button style="font-size:10px;padding:2px 6px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer" onclick="updSyn(\'remove\',0)">✕ remove</button>'
+    +'</div>';
+}
+
+function recalc(){
+  var cash=+(document.getElementById('cash').value)||0;
+  var pp1=projects.filter(function(p){return assignment[p.id]==='p1'});
+  var pp2=projects.filter(function(p){return assignment[p.id]==='p2'});
+  document.getElementById('warn-p1').textContent=pp1.length>0&&pp1.length<2?'⚠ needs at least 2 projects':'';
+  document.getElementById('warn-p2').textContent=pp2.length>0&&pp2.length<2?'⚠ needs at least 2 projects':'';
+  var r1=maxForPlayer(pp1,cash,{}),r2=maxForPlayer(pp2,cash,{});
+  document.getElementById('rew-p1').textContent=r1.reward;
+  document.getElementById('rew-p2').textContent=r2.reward;
+  document.getElementById('badge-p1').textContent='★ '+r1.reward;
+  document.getElementById('badge-p2').textContent='★ '+r2.reward;
+  document.getElementById('det-p1').textContent=r1.detail;
+  document.getElementById('det-p2').textContent=r2.detail;
+  document.getElementById('spent-p1').textContent=r1.spent+' / '+cash;
+  document.getElementById('spent-p2').textContent=r2.spent+' / '+cash;
+  // Synergy note on player cards — solo play can never trigger (requires both players ≥1)
+  function synNote(r){
+    if(r.synergyBonus>0) return 'base '+r.baseReward+' + ⚡'+r.synergyBonus+' synergy';
+    return 'base '+r.baseReward+' · synergy needs joint play';
+  }
+  document.getElementById('syn-p1').textContent=synNote(r1);
+  document.getElementById('syn-p2').textContent=synNote(r2);
+  var combined=r1.reward+r2.reward;
+  document.getElementById('col-combined').textContent=combined;
+  var cm=collabMax(pp1,pp2,cash,cash);
+  document.getElementById('col-true').textContent=cm.total;
+  document.getElementById('col-sub').textContent=cm.detail;
+  document.getElementById('col-base1').textContent=cm.baseScore1;
+  document.getElementById('col-base2').textContent=cm.baseScore2;
+  var synBonEl=document.getElementById('col-syn-bonus');
+  synBonEl.textContent='+'+cm.synergyBonus;
+  synBonEl.style.color=cm.synergyBonus>0?'#7a5800':'#aaa';
+  var synDetail=document.getElementById('col-syn-detail');
+  if(cm.synergyTriggered.length){
+    synDetail.innerHTML=cm.synergyTriggered.map(function(t){
+      var discNote=(t.myDisc>0||t.otherDisc>0)?' (disc: +'+t.myDisc+'/+'+t.otherDisc+')':'';
+      return '⚡ '+t.res+' total: '+t.myU+'+'+t.otherU+'='+(t.myU+t.otherU)+discNote+' → +'+t.bonus+' flat each player';
+    }).join('<br>');
+  } else {
+    synDetail.textContent='flat round bonus to each player when triggered';
+  }
+  // Resource bars
+  var barsEl=document.getElementById('col-res-bars');
+  barsEl.innerHTML='';
+  Object.keys(resources).forEach(function(r){
+    var used=cm.resUsed[r]||0;
+    var disc=(cm.discUsed1[r]||0)+(cm.discUsed2[r]||0);
+    var projUsed=used-disc;
+    var total=resources[r].total;
+    var pct=total>0?Math.round(100*used/total):0;
+    var projPct=total>0?Math.round(100*projUsed/total):0;
+    var barColor=pct>=100?'#a32d2d':pct>=75?'#9a6500':'#185FA5';
+    var synActive=cm.synergyTriggered.some(function(t){return t.res===r;});
+    var discLabel=disc>0?' (+'+disc+' disc)':'';
+    var row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:7px';
+    row.innerHTML='<span style="font-size:12px;color:#666;width:52px;text-transform:capitalize;flex-shrink:0">'
+      +r+(synActive?' ⚡':'')+'</span>'
+      +'<div style="flex:1;background:#eee;border-radius:4px;height:10px;overflow:hidden;position:relative">'
+      +'<div style="width:'+projPct+'%;height:10px;background:'+barColor+';border-radius:4px 0 0 4px"></div>'
+      +(disc>0?'<div style="position:absolute;top:0;left:'+projPct+'%;width:'+(pct-projPct)+'%;height:10px;background:#9a6500;opacity:0.7"></div>':'')
+      +'</div>'
+      +'<span style="font-size:12px;color:#666;width:72px;text-align:right;flex-shrink:0">'+used+' / '+total+discLabel+'</span>'
+      +'<span style="font-size:11px;color:'+barColor+';width:32px;flex-shrink:0">'+pct+'%</span>';
+    barsEl.appendChild(row);
+  });
+  var mcRatio=combined>0?(cm.total/combined):1;
+  document.getElementById('col-mc').textContent=mcRatio.toFixed(3);
+  var mcPill=document.getElementById('col-mc-sub');
+  var mcLabel, mcSub;
+  if(mcRatio>1){
+    mcLabel='superadditive (M > C, synergy active)';
+    mcSub='surplus = +'+(100*(mcRatio-1)).toFixed(1)+'% above combined';
+  } else if(mcRatio===1){
+    mcLabel='non-interfering (M = C)';
+    mcSub='no contention, no surplus';
+  } else {
+    mcLabel='interfering';
+    mcSub='δ = '+(100*(1-mcRatio)).toFixed(1)+'% contention loss';
+  }
+  mcPill.textContent=combined>0?mcLabel+' | '+mcSub:'1=non-interfering · 0=destructive';
+  var gap=Math.abs(r1.reward-r2.reward);
+  var pill=document.getElementById('gap-pill');
+  pill.textContent='gap: '+gap;
+  pill.className='gpill '+(gap===0?'gg':gap<=3?'gok':'gb');
+  var mx=Math.max(r1.reward,r2.reward);
+  var pct=mx>0?Math.round(100-100*gap/mx):100;
+  document.getElementById('col-fair').textContent=pct+'% balanced';
+  buildSynergyPanel();
+}
+
+
+// ── LLM Agent Solver ──────────────────────────────────────────────────────────
+function buildLLMPrompt(){
+  var pp1=projects.filter(function(p){return assignment[p.id]==='p1';}).slice(0,2);
+  var pp2=projects.filter(function(p){return assignment[p.id]==='p2';}).slice(0,2);
+  if(pp1.length<2||pp2.length<2){
+    document.getElementById('llm-status').textContent='Assign at least 2 projects per player first.';
+    document.getElementById('llm-status').className='llm-status err';
+    return null;
+  }
+  var cash=+(document.getElementById('cash').value)||20;
+  var rkeys=Object.keys(resources);
+  var syn=scenarioSynergy;
+  var lines=[];
+  lines.push('ORACLE RESOURCE ALLOCATION — MAXIMISE JOINT SCORE');
+  lines.push('');
+  lines.push('You are an omniscient oracle with full visibility into both players\' projects.');
+  lines.push('Your goal is to determine the purchase vector for each player that MAXIMISES the combined total reward (P1 score + P2 score), including any synergy bonus.');
+  lines.push('');
+  lines.push('SHARED RESOURCE POOL:');
+  rkeys.forEach(function(r){lines.push('  '+r+': '+resources[r].total+' units total, $'+resources[r].cost+'/unit');});
+  lines.push('');
+  lines.push('CASH BUDGET: $'+cash+' per player (independent budgets)');
+  lines.push('');
+  lines.push('PLAYER 1 PROJECTS:');
+  pp1.forEach(function(p){
+    lines.push('  '+p.name+': requires '+Object.keys(p.req).map(function(r){return p.req[r]+' '+r;}).join(' + ')+' per run | reward: '+p.reward+'/run');
+  });
+  lines.push('');
+  lines.push('PLAYER 2 PROJECTS:');
+  pp2.forEach(function(p){
+    lines.push('  '+p.name+': requires '+Object.keys(p.req).map(function(r){return p.req[r]+' '+r;}).join(' + ')+' per run | reward: '+p.reward+'/run');
+  });
+  lines.push('');
+  if(syn){
+    lines.push('SYNERGY BONUS:');
+    lines.push('  Trigger: combined '+syn.res+' purchased by both players >= '+syn.threshold+' AND each player bought >= 1 unit of '+syn.res);
+    lines.push('  Reward: flat +'+syn.bonus+' added to EACH player\'s score for the round (independent of run count)');
+    lines.push('  This bonus may justify discretionary over-purchasing of '+syn.res+' beyond project needs.');
+  } else {
+    lines.push('SYNERGY BONUS: none active.');
+  }
+  lines.push('');
+  lines.push('MECHANICS:');
+  lines.push('  runs(project) = floor(purchased[r] / required[r]) for the limiting resource r');
+  lines.push('  score_i = sum of (runs * reward_per_run) across player i\'s projects + synergy bonus if triggered');
+  lines.push('  joint_score = score_1 + score_2  <-- THIS IS WHAT YOU ARE MAXIMISING');
+  lines.push('  Pool constraint: p1_purchases[r] + p2_purchases[r] <= pool[r] for all r');
+  lines.push('  Cash constraint: sum of (units * cost) <= budget for each player independently');
+  lines.push('');
+  lines.push('Think step by step: compute the best allocation for each player given full knowledge, then output JSON.');
+  lines.push('');
+  lines.push('Respond ONLY with raw JSON (no markdown):');
+  lines.push('{');
+  lines.push('  "reasoning": "step-by-step explanation of why this allocation maximises joint score",');
+  lines.push('  "player1": {"purchases": {"wood":0,"stone":0,"gold":0}},');
+  lines.push('  "player2": {"purchases": {"wood":0,"stone":0,"gold":0}}');
+  lines.push('}');
+  lines.push('Include all resources even if 0.');
+  var prompt=lines.join('\n');
+  document.getElementById('llm-prompt').value=prompt;
+  document.getElementById('llm-status').textContent='';
+  document.getElementById('llm-status').className='llm-status';
+  return {prompt:prompt,pp1:pp1,pp2:pp2,cash:cash,syn:syn};
+}
+
+function computeLLMScore(purchases, projs, otherPurchases, syn){
+  var rem=Object.assign({},purchases);
+  var totalRew=0, details=[];
+  projs.forEach(function(p){
+    var n=Infinity;
+    Object.keys(p.req).forEach(function(r){n=Math.min(n,Math.floor((rem[r]||0)/p.req[r]));});
+    n=Math.max(0,isFinite(n)?n:0);
+    Object.keys(p.req).forEach(function(r){rem[r]=(rem[r]||0)-n*p.req[r];});
+    var rew=n*p.reward;
+    if(n>0) details.push(p.name+' x'+n+' = '+rew);
+    totalRew+=rew;
+  });
+  // Synergy: round-level flat bonus, independent of projects
+  var synTriggered=false;
+  if(syn){
+    var myT=purchases[syn.res]||0, otherT=otherPurchases[syn.res]||0;
+    if(checkSynergy(syn,myT,otherT)){synTriggered=true;totalRew+=syn.bonus;}
+  }
+  var spent=Object.keys(purchases).reduce(function(s,r){return s+(resources[r]?resources[r].cost:0)*(purchases[r]||0);},0);
+  return {reward:totalRew,spent:spent,details:details,synTriggered:synTriggered};
+}
+
+async function runLLMSolver(){
+  var ctx=buildLLMPrompt();
+  if(!ctx) return;
+  var btn=document.getElementById('llm-solve-btn');
+  var model=document.getElementById('llm-model').value;
+  var modelLabel=document.getElementById('llm-model').options[document.getElementById('llm-model').selectedIndex].text;
+  btn.disabled=true;
+  document.getElementById('llm-result').style.display='none';
+  document.getElementById('llm-compare').style.display='none';
+  document.getElementById('llm-status').innerHTML='<span class="spinner"></span>'+modelLabel+' is solving\u2026';
+  document.getElementById('llm-status').className='llm-status';
+  try{
+    var resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:model,max_tokens:2000,
+        messages:[{role:'user',content:ctx.prompt}]})
+    });
+    var data=await resp.json();
+    var text=(data.content||[]).filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('').trim();
+    var clean=text.replace(/```json|```/g,'').trim();
+
+    // Helper: render parsed JSON into the result panel
+    function renderResult(parsed, note){
+      var rkeys=Object.keys(resources);
+      var p1pv={},p2pv={};
+      rkeys.forEach(function(r){
+        p1pv[r]=+(parsed.player1&&parsed.player1.purchases&&parsed.player1.purchases[r]||0);
+        p2pv[r]=+(parsed.player2&&parsed.player2.purchases&&parsed.player2.purchases[r]||0);
+      });
+      var cash=ctx.cash;
+      var p1cost=rkeys.reduce(function(s,r){return s+(resources[r]?resources[r].cost:0)*p1pv[r];},0);
+      var p2cost=rkeys.reduce(function(s,r){return s+(resources[r]?resources[r].cost:0)*p2pv[r];},0);
+      var poolOk=rkeys.every(function(r){return p1pv[r]+p2pv[r]<=(resources[r]?resources[r].total:0);});
+      var warns=[];
+      if(p1cost>cash) warns.push('P1 over budget ($'+p1cost+'>$'+cash+')');
+      if(p2cost>cash) warns.push('P2 over budget ($'+p2cost+'>$'+cash+')');
+      if(!poolOk) warns.push('Joint purchases exceed pool');
+      var s1=computeLLMScore(p1pv,ctx.pp1,p2pv,ctx.syn);
+      var s2=computeLLMScore(p2pv,ctx.pp2,p1pv,ctx.syn);
+      var opt1=maxForPlayer(ctx.pp1,cash,{});
+      var opt2=maxForPlayer(ctx.pp2,cash,{});
+      var cm=collabMax(ctx.pp1,ctx.pp2,cash,cash);
+      var p1html=rkeys.filter(function(r){return p1pv[r]>0;}).map(function(r){
+        return '<div class="llm-row"><span class="llm-key">'+r+'</span><span class="llm-val">'+p1pv[r]+'u ($'+(p1pv[r]*(resources[r]?resources[r].cost:0))+')</span></div>';
+      }).join('');
+      document.getElementById('llm-p1-purchases').innerHTML='<div style="font-size:11px;color:#666;margin-bottom:4px">Purchases ($'+p1cost+' spent)</div>'+(p1html||'<div class="llm-row"><span class="llm-key">nothing</span></div>');
+      document.getElementById('llm-p1-projects').innerHTML='<div style="font-size:11px;color:#666;margin:6px 0 4px">Runs</div>'+s1.details.map(function(d){return '<div class="llm-row"><span class="llm-key">'+d+'</span></div>';}).join('')+(s1.synTriggered&&ctx.syn?'<div class="llm-row"><span class="llm-key" style="color:#7a5800">⚡ synergy +'+ctx.syn.bonus+'</span></div>':'');
+      document.getElementById('llm-p1-score').innerHTML='Score: <b>'+s1.reward+'</b> &nbsp;|&nbsp; solo optimal: '+opt1.reward;
+      var p2html=rkeys.filter(function(r){return p2pv[r]>0;}).map(function(r){
+        return '<div class="llm-row"><span class="llm-key">'+r+'</span><span class="llm-val">'+p2pv[r]+'u ($'+(p2pv[r]*(resources[r]?resources[r].cost:0))+')</span></div>';
+      }).join('');
+      document.getElementById('llm-p2-purchases').innerHTML='<div style="font-size:11px;color:#666;margin-bottom:4px">Purchases ($'+p2cost+' spent)</div>'+(p2html||'<div class="llm-row"><span class="llm-key">nothing</span></div>');
+      document.getElementById('llm-p2-projects').innerHTML='<div style="font-size:11px;color:#666;margin:6px 0 4px">Runs</div>'+s2.details.map(function(d){return '<div class="llm-row"><span class="llm-key">'+d+'</span></div>';}).join('')+(s2.synTriggered&&ctx.syn?'<div class="llm-row"><span class="llm-key" style="color:#7a5800">⚡ synergy +'+ctx.syn.bonus+'</span></div>':'');
+      document.getElementById('llm-p2-score').innerHTML='Score: <b>'+s2.reward+'</b> &nbsp;|&nbsp; solo optimal: '+opt2.reward;
+      document.getElementById('llm-result').style.display='grid';
+      var llmCombined=s1.reward+s2.reward;
+      var warnHtml=warns.length?'<b style="color:#a32d2d">Violations: '+warns.join(', ')+'</b><br>':'';
+      document.getElementById('llm-compare').innerHTML=warnHtml
+        +(note?'<div style="font-size:11px;color:#9a6500;margin-bottom:6px">'+note+'</div>':'')
+        +'<b>Claude combined:</b> '+llmCombined+' (P1: '+s1.reward+', P2: '+s2.reward+')<br>'
+        +'<b>True collab max:</b> '+cm.total+'<br>'
+        +'<b>Solo optimal combined:</b> '+(opt1.reward+opt2.reward)+' (P1: '+opt1.reward+', P2: '+opt2.reward+')<br>'
+        +'<b>Efficiency vs collab max:</b> '+Math.round(100*llmCombined/Math.max(cm.total,1))+'%<br>'
+        +'<b>Reasoning:</b> '+(parsed.reasoning||'\u2014')+'<br>'
+        +'<span style="font-size:11px;color:#aaa">Answered by '+modelLabel+'</span>';
+      document.getElementById('llm-compare').style.display='block';
+    }
+
+    // Stage 1: try direct parse
+    var parsed=null;
+    try{ parsed=JSON.parse(clean); } catch(e1){
+      // Stage 2: show raw text immediately so user isn't left with nothing
+      document.getElementById('llm-status').innerHTML='<span class="spinner"></span>JSON parse failed — showing raw output, attempting repair with Haiku 3\u2026';
+      document.getElementById('llm-compare').innerHTML='<b style="color:#9a6500">Raw response (parse failed):</b><br>'
+        +'<pre style="font-size:11px;white-space:pre-wrap;margin-top:6px;max-height:200px;overflow:auto">'+clean.replace(/</g,'&lt;')+'</pre>';
+      document.getElementById('llm-compare').style.display='block';
+
+      // Stage 3: ask Haiku 3 to repair the JSON
+      try{
+        var repairResp=await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({model:'claude-haiku-3-5',max_tokens:400,
+            messages:[{role:'user',content:'The following is a truncated or malformed JSON response. Extract the purchase values for player1 and player2 as best you can and return ONLY valid JSON in this exact schema (use 0 for any missing values):\n{"reasoning":"...","player1":{"purchases":{"wood":0,"stone":0,"gold":0}},"player2":{"purchases":{"wood":0,"stone":0,"gold":0}}}\n\nMalformed input:\n'+clean}]})
+        });
+        var repairData=await repairResp.json();
+        var repairText=(repairData.content||[]).filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('').trim();
+        parsed=JSON.parse(repairText.replace(/```json|```/g,'').trim());
+        renderResult(parsed, 'Repaired by Haiku 3 — values may be incomplete');
+        document.getElementById('llm-status').textContent='Done (repaired) — answered by '+modelLabel+', fixed by Haiku 3.';
+        document.getElementById('llm-status').className='llm-status ok';
+      }catch(e2){
+        document.getElementById('llm-status').textContent='Parse failed and repair failed: '+e2.message+'. Raw output shown above.';
+        document.getElementById('llm-status').className='llm-status err';
+        btn.disabled=false;
+        return;
+      }
+    }
+
+    if(parsed) renderResult(parsed, null);
+    if(parsed){
+      document.getElementById('llm-status').textContent='Done \u2014 answered by '+modelLabel+'.';
+      document.getElementById('llm-status').className='llm-status ok';
+    }
+  }catch(e){
+    document.getElementById('llm-status').textContent='Error: '+(e.message||String(e));
+    document.getElementById('llm-status').className='llm-status err';
+  }
+  btn.disabled=false;
+}
+
+function toggleAlgo(){
+  var body=document.getElementById('algo-body');
+  var chev=document.getElementById('algo-chevron');
+  var open=body.style.display==='none';
+  body.style.display=open?'block':'none';
+  chev.style.transform=open?'rotate(180deg)':'rotate(0deg)';
+}
+
+buildResGrid();renderAllCards();recalc();buildLLMPrompt();buildSynergyPanel();
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calendar stream replay</title>
+<link rel="stylesheet" href="/css/styles.css">
+<style>
+  main { max-width: 760px; margin: 48px auto; padding: 0 20px; }
+  input { width: 100%; padding: 8px; box-sizing: border-box; }
+  button { padding: 8px 14px; margin-top: 12px; }
+  .muted { color: #6b7280; }
+</style>
+</head>
+<body data-game="calendar">
+<main>
+  <a href="/control.html">← Control plane</a>
+  <h1>Calendar stream replay</h1>
+  <p class="muted">
+    Replays a rollout's Redis event stream through Calendar's own trace viewer.
+    An episode that is still running renders as far as it has got.
+  </p>
+  <label for="stream">Redis stream</label>
+  <input id="stream" placeholder="a2a:rollout:…:episode:…">
+  <button id="open">Open in Calendar viewer</button>
+  <p id="status" class="muted"></p>
+</main>
+<script type="module">
+// Calendar ships a full trace viewer that already accepts `?trace=<url>`, so
+// the replay path is a projection of the stream into the trace shape it reads.
+// Nothing about the viewer needs to know the trace came from Redis.
+const params = new URLSearchParams(location.search);
+const input = document.getElementById("stream");
+const status = document.getElementById("status");
+
+function viewerUrl(stream) {
+  const trace = `/api/streams/${encodeURIComponent(stream)}/trace`;
+  return `/game-assets/calendar/tasks/viewer.html?trace=${encodeURIComponent(trace)}`;
+}
+
+async function open_(stream) {
+  if (!stream) { status.textContent = "Enter a stream id."; return; }
+  status.textContent = "Projecting stream…";
+  try {
+    const response = await fetch(`/api/streams/${encodeURIComponent(stream)}/trace`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const { partial, event_count } = payload.projection;
+    status.textContent = partial
+      ? `Episode still running — replaying ${event_count} events so far.`
+      : `Episode complete — replaying ${event_count} events.`;
+    location.href = viewerUrl(stream);
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+document.getElementById("open").addEventListener("click", () => open_(input.value.trim()));
+
+const stream = params.get("stream");
+if (stream) { input.value = stream; open_(stream); }
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+name: word_guess_pool_example
+description: >
+  The same study as example.yaml, but naming participants from the shared agent
+  pool instead of pinning models inline. Change how you reach a provider by
+  editing agents.local.yaml; this file does not change.
+
+# Positional: one entry per agent seat.
+participants: [gpt-mini, haiku]
+
+defaults:
+  game_name: word_guess
+  num_agents: 2
+  max_turns: 10
+
+batches:
+  - label: dog
+    count: 1
+    config:
+      secret_word: dog
+      seed: 1
+  - label: apple
+    count: 1
+    config:
+      secret_word: apple
+      seed: 2

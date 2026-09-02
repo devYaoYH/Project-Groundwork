@@ -1,0 +1,24 @@
+name: v2_projects_test
+description: 'test for v2 projects with shifting and rotating conditions set.'
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: gpt54m-qwen_stable_rotate_share_named_tom_mc08
+  count: 1
+  config:
+    num_rounds: 2
+    mode: stable
+    balance_turn_order: false
+    rotate_projects: true
+    enable_cheap_talk: true
+    share_projects: true
+    named_projects: true
+    think_about_opponent: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: gpt-5.4-mini-2026-03-17
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+

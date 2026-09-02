@@ -1,0 +1,156 @@
+name: projects_study_llama4_maverick_self_play_010
+description: >
+  R10 Llama 4 Maverick self-play condition: 1 model x 4 paradigms x
+  3 MC ratios x 10 games = 120 self-play games. Cheap talk remains enabled;
+  no joint-goal intervention is applied.
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+  vertex_adc_file: ${A2A_VERTEX_MAAS_ADC_FILE}
+  gcp_project: ${A2A_VERTEX_MAAS_PROJECT}
+  gcp_location: us-east5
+batches:
+- label: llama4m_selfplay_stable_fixed_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_stable_fixed_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_stable_fixed_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_stable_rotate_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_stable_rotate_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_stable_rotate_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_fixed_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_fixed_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_fixed_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_rotate_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_rotate_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+- label: llama4m_selfplay_shifting_rotate_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas
+    - type: llm
+      model: meta/llama-4-maverick-17b-128e-instruct-maas

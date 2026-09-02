@@ -1,0 +1,4 @@
+interface:
+  display_name: "A2A Data Exploration"
+  short_description: "Explore local A2A SQLite experiment traces"
+  default_prompt: "Use $a2a-data-exploration to analyze this local experiment database."

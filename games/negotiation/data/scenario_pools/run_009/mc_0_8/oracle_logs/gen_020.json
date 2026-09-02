@@ -1,0 +1,250 @@
+{
+  "candidate_id": "gen_020",
+  "agent_projects": [
+    [
+      {
+        "name": "project_a",
+        "requirements": {
+          "r2": 2
+        },
+        "reward": 3
+      },
+      {
+        "name": "project_b",
+        "requirements": {
+          "r3": 4
+        },
+        "reward": 6
+      },
+      {
+        "name": "project_c",
+        "requirements": {
+          "r1": 2
+        },
+        "reward": 2
+      }
+    ],
+    [
+      {
+        "name": "project_a",
+        "requirements": {
+          "r3": 1,
+          "r1": 3
+        },
+        "reward": 5
+      },
+      {
+        "name": "project_b",
+        "requirements": {
+          "r3": 1
+        },
+        "reward": 1
+      },
+      {
+        "name": "project_c",
+        "requirements": {
+          "r1": 3,
+          "r2": 2
+        },
+        "reward": 6
+      }
+    ]
+  ],
+  "scenario_synergy": null,
+  "oracle_stats": {
+    "v1": 18,
+    "v2": 18,
+    "combined": 36,
+    "collab_max": 30,
+    "mc_ratio": 0.8333333333333334,
+    "base_score_a": 12,
+    "base_score_b": 18,
+    "synergy_bonus": 0,
+    "collab_detail": "p0x2, p1x1, p5x3",
+    "res_used": {
+      "r1": 9,
+      "r2": 10,
+      "r3": 4
+    },
+    "asc1": 35,
+    "asc2": 19,
+    "best_p1_favor": 30,
+    "best_p2_favor": 30,
+    "swap_fairness": 1,
+    "optimal_paths": 2,
+    "solo_overlap": 1,
+    "collab_divergence": 0.33333333333333337,
+    "negotiation_pressure": 0.33333333333333337
+  },
+  "validation": {
+    "all_passed": false,
+    "threshold": 0.9,
+    "k": 1,
+    "target_score": 27.0
+  },
+  "model_results": {
+    "claude-sonnet-4-5": {
+      "passed": false,
+      "best_score": 25,
+      "attempts": [
+        {
+          "attempt": 1,
+          "combined": 25,
+          "passed": false,
+          "target_score": 27.0,
+          "warnings": [],
+          "reasoning": "Step 1: Analyze efficiency (reward/cost) for each project. P1: project_a=3/(2*1.5)=1.0, project_b=6/(4*3)=0.5, project_c=2/(2*1)=1.0. P2: project_a=5/(1*3+3*1)=0.83, project_b=1/(1*3)=0.33, project_c=6/(3*1+2*1.5)=1.0. Best projects are P1_a, P1_c, and P2_c (all 1.0 efficiency). Step 2: Given 2-resource-type limit, optimal strategy is P1 buys r1+r2 (for projects a+c), P2 buys r1+r2 (for project_c). Step 3: P1 allocation with $18: Max r2 for project_a (efficiency 1.0). Buy 10 r2 ($15), run project_a 5 times (reward=15). Remaining $3 buys 3 r1, run project_c 1 time (reward=2). P1 total=17. Step 4: P2 allocation with $18: Project_c needs 3r1+2r2 per run. With 7 r1 available (10-3 from P1) and 0 r2 available (P1 took all 10), recalculate. P1 should leave r2 for P2. Optimal: P1 buys 6 r2 ($9) + 9 r1 ($9), runs project_a 3 times (6 r2, reward=9) + project_c 1 time (2 r1, reward=2). P1=11. P2 buys 1 r1 ($1) + 4 r2 ($6), runs project_c 2 times (needs 6 r1+4 r2, but only 1 r1 purchased). Recalculate: P2 buys 7 r1 ($7) + 4 r2 ($6=$6), runs project_c 2 times (6 r1+4 r2, reward=12). P2=12. Joint=23. Verify: P1 uses 6 r2+2 r1, P2 uses 4 r2+6 r1. Total: 10 r2, 8 r1. Pools OK. Both use 2 resource types. Cash: P1=$9+$2=$11<18, P2=$7+$6=$13<18. Optimize further: P1 buys 2 r1 ($2) + 10 r2 ($15=$15), runs project_a 5 times (10 r2, reward=15) + project_c 1 time (2 r1, reward=2). P1=17. P2 buys 8 r1 ($8) + 6 r2 (exceeds pool). Adjust: P1 takes 6 r2+4 r1, P2 takes 4 r2+6 r1. P1: project_a 3 times + project_c 2 times = 9+4=13. P2: project_c 2 times = 12. Joint=25.",
+          "player1": {
+            "purchases": {
+              "r1": 4,
+              "r2": 6,
+              "r3": 0
+            },
+            "project_runs": {
+              "project_a": 3,
+              "project_b": 0,
+              "project_c": 2
+            },
+            "reward": 13,
+            "spent": 13.0,
+            "details": [
+              "project_a x3 = 9",
+              "project_c x2 = 4"
+            ],
+            "synergy_bonus": 0
+          },
+          "player2": {
+            "purchases": {
+              "r1": 6,
+              "r2": 4,
+              "r3": 0
+            },
+            "project_runs": {
+              "project_a": 0,
+              "project_b": 0,
+              "project_c": 2
+            },
+            "reward": 12,
+            "spent": 12.0,
+            "details": [
+              "project_c x2 = 12"
+            ],
+            "synergy_bonus": 0
+          },
+          "prompt": "ORACLE RESOURCE ALLOCATION \u2014 MAXIMISE JOINT SCORE\n\nYou are an omniscient oracle with full visibility into both players' projects.\nYour goal is to determine the purchase vector for each player that MAXIMISES the combined total reward (P1 score + P2 score), including any synergy bonus.\n\nTOKEN BUDGET: You have 4,096 tokens total for reasoning + output. Be concise.\n\nSHARED RESOURCE POOL:\n  r1: 10 units total, $1.0/unit\n  r2: 10 units total, $1.5/unit\n  r3: 6 units total, $3.0/unit\n\nCASH BUDGET: $18.0 per player (independent budgets)\n\nPLAYER 1 PROJECTS:\n  project_a: requires 2 r2 per run | reward: 3/run\n  project_b: requires 4 r3 per run | reward: 6/run\n  project_c: requires 2 r1 per run | reward: 2/run\n\nPLAYER 2 PROJECTS:\n  project_a: requires 1 r3 + 3 r1 per run | reward: 5/run\n  project_b: requires 1 r3 per run | reward: 1/run\n  project_c: requires 3 r1 + 2 r2 per run | reward: 6/run\n\nSYNERGY BONUS: none active.\n\nMECHANICS:\n  Each player purchases resources and allocates them across their projects.\n  A player chooses how many times to run each project. Running a project N times\n  CONSUMES N * required[r] of each resource r. The total resources consumed across\n  ALL of a player's project runs must not exceed their purchases:\n    sum over all projects p: runs(p) * p.required[r]  <=  purchased[r]  for every resource r\n  score_i = sum of (runs * reward_per_run) across player i's projects + synergy bonus if triggered\n  joint_score = score_1 + score_2  <-- THIS IS WHAT YOU ARE MAXIMISING\n\nHARD CONSTRAINTS (violating ANY of these invalidates the solution):\n  1. RESOURCE TYPE LIMIT: each player may purchase AT MOST 2 distinct resource types.\n     A player's purchases must have at most 2 non-zero entries. This is strictly enforced.\n  2. Pool constraint: p1_purchases[r] + p2_purchases[r] <= pool[r] for all r\n  3. Cash constraint: sum of (units * cost) <= budget for each player independently\n\nThink step by step:\n  1. First, note that each player can only buy 2 resource types \u2014 plan project runs around this limit.\n  2. Determine how many runs of each project each player should do.\n  3. Compute the total resources consumed: for each resource r, sum up runs(p) * p.required[r] across ALL projects.\n     The purchases for resource r must be >= total consumed. Do NOT assume each project's resources are independent.\n  4. Verify ALL constraints: resource type limit, pool, cash budget, and that purchases cover all project runs.\n  5. Output JSON.\n\nNOTE: Keep your reasoning concise to stay within your token budget.\n\nRespond ONLY with raw JSON (no markdown):\n{\n  \"reasoning\": \"step-by-step explanation of why this allocation maximises joint score\",\n  \"player1\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}},\n  \"player2\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}}\n}\nInclude all resources and projects even if 0. The projects field maps project name to number of runs.",
+          "duration_s": 18.74,
+          "timestamp": "2026-03-30T02:42:59.759171+00:00"
+        }
+      ]
+    },
+    "gpt-5-mini": {
+      "passed": true,
+      "best_score": 30,
+      "attempts": [
+        {
+          "attempt": 1,
+          "combined": 30,
+          "passed": true,
+          "target_score": 27.0,
+          "warnings": [],
+          "reasoning": "Key observations: each player may buy at most 2 resource types. Projects with highest reward per dollar / per scarce resource should be prioritized. P2: p2_c (3 r1 + 2 r2, reward 6, cost $6) gives 6 reward per run and is very efficient in both r1 and r2; with $18 P2 can run it 3 times (cost $18), consuming 9 r1 and 6 r2 and yielding 18 reward. This uses two resource types (r1,r2) so satisfies the type constraint. After that run, pool remaining: r1 = 10-9 =1, r2 = 10-6 =4, r3 = 6. P1: best use of remaining pool is to purchase r2 and r3 (two types) and spend $18 to maximize reward: buy r3=4 (cost $12) and r2=4 (cost $6). That allows p1_b = 1 run (needs 4 r3 -> reward 6) and p1_a = 2 runs (needs 4 r2 -> reward 6), total P1 reward = 12. These purchases consume r3=4 (<=6) and r2=4 (<= remaining 4). All hard constraints satisfied: each player purchases at most 2 resource types; pooled purchases: r1 0+9=9<=10, r2 4+6=10<=10, r3 4+0=4<=6; cash per player: both $18 exactly. Joint score = P1 12 + P2 18 = 30. Given project efficiencies and pool limits, any shift (e.g., giving P2 fewer p2_c runs) lowers joint reward because p2_c is the best use of r1 and r2 and P1 cannot exceed one p1_b run due to r3 pool and budget. Therefore this allocation maximises the combined total reward (30).",
+          "player1": {
+            "purchases": {
+              "r1": 0,
+              "r2": 4,
+              "r3": 4
+            },
+            "project_runs": {
+              "project_a": 2,
+              "project_b": 1,
+              "project_c": 0
+            },
+            "reward": 12,
+            "spent": 18.0,
+            "details": [
+              "project_a x2 = 6",
+              "project_b x1 = 6"
+            ],
+            "synergy_bonus": 0
+          },
+          "player2": {
+            "purchases": {
+              "r1": 9,
+              "r2": 6,
+              "r3": 0
+            },
+            "project_runs": {
+              "project_a": 0,
+              "project_b": 0,
+              "project_c": 3
+            },
+            "reward": 18,
+            "spent": 18.0,
+            "details": [
+              "project_c x3 = 18"
+            ],
+            "synergy_bonus": 0
+          },
+          "prompt": "ORACLE RESOURCE ALLOCATION \u2014 MAXIMISE JOINT SCORE\n\nYou are an omniscient oracle with full visibility into both players' projects.\nYour goal is to determine the purchase vector for each player that MAXIMISES the combined total reward (P1 score + P2 score), including any synergy bonus.\n\nTOKEN BUDGET: You have 16,000 tokens total for reasoning + output. Be concise.\n\nSHARED RESOURCE POOL:\n  r1: 10 units total, $1.0/unit\n  r2: 10 units total, $1.5/unit\n  r3: 6 units total, $3.0/unit\n\nCASH BUDGET: $18.0 per player (independent budgets)\n\nPLAYER 1 PROJECTS:\n  project_a: requires 2 r2 per run | reward: 3/run\n  project_b: requires 4 r3 per run | reward: 6/run\n  project_c: requires 2 r1 per run | reward: 2/run\n\nPLAYER 2 PROJECTS:\n  project_a: requires 1 r3 + 3 r1 per run | reward: 5/run\n  project_b: requires 1 r3 per run | reward: 1/run\n  project_c: requires 3 r1 + 2 r2 per run | reward: 6/run\n\nSYNERGY BONUS: none active.\n\nMECHANICS:\n  Each player purchases resources and allocates them across their projects.\n  A player chooses how many times to run each project. Running a project N times\n  CONSUMES N * required[r] of each resource r. The total resources consumed across\n  ALL of a player's project runs must not exceed their purchases:\n    sum over all projects p: runs(p) * p.required[r]  <=  purchased[r]  for every resource r\n  score_i = sum of (runs * reward_per_run) across player i's projects + synergy bonus if triggered\n  joint_score = score_1 + score_2  <-- THIS IS WHAT YOU ARE MAXIMISING\n\nHARD CONSTRAINTS (violating ANY of these invalidates the solution):\n  1. RESOURCE TYPE LIMIT: each player may purchase AT MOST 2 distinct resource types.\n     A player's purchases must have at most 2 non-zero entries. This is strictly enforced.\n  2. Pool constraint: p1_purchases[r] + p2_purchases[r] <= pool[r] for all r\n  3. Cash constraint: sum of (units * cost) <= budget for each player independently\n\nThink step by step:\n  1. First, note that each player can only buy 2 resource types \u2014 plan project runs around this limit.\n  2. Determine how many runs of each project each player should do.\n  3. Compute the total resources consumed: for each resource r, sum up runs(p) * p.required[r] across ALL projects.\n     The purchases for resource r must be >= total consumed. Do NOT assume each project's resources are independent.\n  4. Verify ALL constraints: resource type limit, pool, cash budget, and that purchases cover all project runs.\n  5. Output JSON.\n\nNOTE: Keep your reasoning concise to stay within your token budget.\n\nRespond ONLY with raw JSON (no markdown):\n{\n  \"reasoning\": \"step-by-step explanation of why this allocation maximises joint score\",\n  \"player1\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}},\n  \"player2\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}}\n}\nInclude all resources and projects even if 0. The projects field maps project name to number of runs.",
+          "duration_s": 52.46,
+          "timestamp": "2026-03-30T02:43:53.223454+00:00"
+        }
+      ]
+    },
+    "qwen/qwen3.5-flash-02-23": {
+      "passed": true,
+      "best_score": 30,
+      "attempts": [
+        {
+          "attempt": 1,
+          "combined": 30,
+          "passed": true,
+          "target_score": 27.0,
+          "warnings": [],
+          "reasoning": "Maximizing joint score requires balancing resource pool limits (r1=10, r2=10, r3=6) and budget ($18) while respecting the 2-resource type limit. Player 1 (P1) is most efficient with Project A (1.5 score/r2) and Project B (1.5 score/r3). Player 2 (P2) is most efficient with Project C (1.0 score/$). P2 Project C consumes r1 and r2. P1 Project A consumes r2. To avoid r2 conflict, P2 prioritizes C (max 3 runs = 6 r2, 9 r1, Score 18). This leaves 4 r2 and 1 r1 for P1. P1 uses 4 r2 for 2 runs of A (Score 6) and 4 r3 (Pool 6 available) for 1 run of B (Score 6). Total P1 Score 12. Total Joint Score 30. Alternative P2 A=3 (Score 15) allows P1 A=5 (Score 15), also totaling 30. The P2=C allocation maximizes P2's specific efficiency.",
+          "player1": {
+            "purchases": {
+              "r1": 0,
+              "r2": 4,
+              "r3": 4
+            },
+            "project_runs": {
+              "project_a": 2,
+              "project_b": 1,
+              "project_c": 0
+            },
+            "reward": 12,
+            "spent": 18.0,
+            "details": [
+              "project_a x2 = 6",
+              "project_b x1 = 6"
+            ],
+            "synergy_bonus": 0
+          },
+          "player2": {
+            "purchases": {
+              "r1": 9,
+              "r2": 6,
+              "r3": 0
+            },
+            "project_runs": {
+              "project_a": 0,
+              "project_b": 0,
+              "project_c": 3
+            },
+            "reward": 18,
+            "spent": 18.0,
+            "details": [
+              "project_c x3 = 18"
+            ],
+            "synergy_bonus": 0
+          },
+          "prompt": "ORACLE RESOURCE ALLOCATION \u2014 MAXIMISE JOINT SCORE\n\nYou are an omniscient oracle with full visibility into both players' projects.\nYour goal is to determine the purchase vector for each player that MAXIMISES the combined total reward (P1 score + P2 score), including any synergy bonus.\n\nTOKEN BUDGET: You have 16,000 tokens total for reasoning + output. Be concise.\n\nSHARED RESOURCE POOL:\n  r1: 10 units total, $1.0/unit\n  r2: 10 units total, $1.5/unit\n  r3: 6 units total, $3.0/unit\n\nCASH BUDGET: $18.0 per player (independent budgets)\n\nPLAYER 1 PROJECTS:\n  project_a: requires 2 r2 per run | reward: 3/run\n  project_b: requires 4 r3 per run | reward: 6/run\n  project_c: requires 2 r1 per run | reward: 2/run\n\nPLAYER 2 PROJECTS:\n  project_a: requires 1 r3 + 3 r1 per run | reward: 5/run\n  project_b: requires 1 r3 per run | reward: 1/run\n  project_c: requires 3 r1 + 2 r2 per run | reward: 6/run\n\nSYNERGY BONUS: none active.\n\nMECHANICS:\n  Each player purchases resources and allocates them across their projects.\n  A player chooses how many times to run each project. Running a project N times\n  CONSUMES N * required[r] of each resource r. The total resources consumed across\n  ALL of a player's project runs must not exceed their purchases:\n    sum over all projects p: runs(p) * p.required[r]  <=  purchased[r]  for every resource r\n  score_i = sum of (runs * reward_per_run) across player i's projects + synergy bonus if triggered\n  joint_score = score_1 + score_2  <-- THIS IS WHAT YOU ARE MAXIMISING\n\nHARD CONSTRAINTS (violating ANY of these invalidates the solution):\n  1. RESOURCE TYPE LIMIT: each player may purchase AT MOST 2 distinct resource types.\n     A player's purchases must have at most 2 non-zero entries. This is strictly enforced.\n  2. Pool constraint: p1_purchases[r] + p2_purchases[r] <= pool[r] for all r\n  3. Cash constraint: sum of (units * cost) <= budget for each player independently\n\nThink step by step:\n  1. First, note that each player can only buy 2 resource types \u2014 plan project runs around this limit.\n  2. Determine how many runs of each project each player should do.\n  3. Compute the total resources consumed: for each resource r, sum up runs(p) * p.required[r] across ALL projects.\n     The purchases for resource r must be >= total consumed. Do NOT assume each project's resources are independent.\n  4. Verify ALL constraints: resource type limit, pool, cash budget, and that purchases cover all project runs.\n  5. Output JSON.\n\nNOTE: Keep your reasoning concise to stay within your token budget.\n\nRespond ONLY with raw JSON (no markdown):\n{\n  \"reasoning\": \"step-by-step explanation of why this allocation maximises joint score\",\n  \"player1\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}},\n  \"player2\": {\"purchases\": {\"r1\": 0, \"r2\": 0, \"r3\": 0}, \"projects\": {\"project_a\": 0, \"project_b\": 0, \"project_c\": 0}}\n}\nInclude all resources and projects even if 0. The projects field maps project name to number of runs.",
+          "duration_s": 120.32,
+          "timestamp": "2026-03-30T02:45:53.541675+00:00"
+        }
+      ]
+    }
+  },
+  "validated_at": "2026-03-30T02:45:53.541736+00:00"
+}

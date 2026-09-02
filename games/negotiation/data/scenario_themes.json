@@ -1,0 +1,52 @@
+[
+  {
+    "name": "medieval",
+    "resource_names": {"r1": "wood", "r2": "stone", "r3": "gold"},
+    "project_names": ["Coffee Table", "Necklace", "Cathedral", "Longbow", "Stone Wall", "Golden Throne"]
+  },
+  {
+    "name": "space",
+    "resource_names": {"r1": "titanium", "r2": "crystal", "r3": "plasma"},
+    "project_names": ["Solar Panel", "Ion Drive", "Shield Array", "Hull Plating", "Star Map", "Warp Core"]
+  },
+  {
+    "name": "undersea",
+    "resource_names": {"r1": "coral", "r2": "pearl", "r3": "trident"},
+    "project_names": ["Reef Garden", "Pearl Crown", "Deep Temple", "Coral Bridge", "Pearl Vault", "Trident Spear"]
+  },
+  {
+    "name": "steampunk",
+    "resource_names": {"r1": "copper", "r2": "brass", "r3": "aether"},
+    "project_names": ["Gear Clock", "Aether Lamp", "Brass Engine", "Copper Pipe", "Brass Dome", "Aether Coil"]
+  },
+  {
+    "name": "jungle",
+    "resource_names": {"r1": "bamboo", "r2": "vine", "r3": "amber"},
+    "project_names": ["Tree House", "Amber Ring", "Vine Bridge", "Bamboo Raft", "Vine Basket", "Amber Totem"]
+  },
+  {
+    "name": "desert",
+    "resource_names": {"r1": "sandstone", "r2": "glass", "r3": "ruby"},
+    "project_names": ["Sand Castle", "Ruby Amulet", "Glass Dome", "Stone Obelisk", "Glass Mirror", "Ruby Scepter"]
+  },
+  {
+    "name": "arctic",
+    "resource_names": {"r1": "ice", "r2": "fur", "r3": "diamond"},
+    "project_names": ["Ice Palace", "Diamond Ring", "Fur Cloak", "Ice Bridge", "Fur Tent", "Diamond Lens"]
+  },
+  {
+    "name": "volcanic",
+    "resource_names": {"r1": "obsidian", "r2": "basalt", "r3": "magma"},
+    "project_names": ["Obsidian Blade", "Magma Forge", "Basalt Tower", "Obsidian Wall", "Basalt Arch", "Magma Crucible"]
+  },
+  {
+    "name": "cyberpunk",
+    "resource_names": {"r1": "silicon", "r2": "fiber", "r3": "quantum"},
+    "project_names": ["Neural Link", "Quantum Core", "Fiber Mesh", "Silicon Chip", "Fiber Cable", "Quantum Relay"]
+  },
+  {
+    "name": "fairy_tale",
+    "resource_names": {"r1": "pixie_dust", "r2": "moonstone", "r3": "starlight"},
+    "project_names": ["Wishing Well", "Star Wand", "Moon Mirror", "Pixie Lantern", "Moon Gate", "Starlight Crown"]
+  }
+]

@@ -1,0 +1,13 @@
+schema_version: 1
+name: calendar_typed_local_smoke
+description: Pinned Calendar environment, scripted agents, SQLite trace egress, and full local OTel capture.
+environment: ../environments/calendar_tiny_v1.yaml
+episodes:
+  - label: pinned-task
+    count: 1
+    seeds: [950002]
+storage:
+  backend: sqlite
+  path: ./results/calendar_typed_local_smoke.db
+observability:
+  capture_content: true

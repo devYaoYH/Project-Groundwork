@@ -1,0 +1,70 @@
+name: full_experimental_configuration
+description: Baseline matched factorial of (stable/shifting) x (collaborative/competitive) x (talk/no-talk)
+
+defaults:
+  game_name: negotiation
+  preset: default
+  agents:
+    - {type: llm, model: claude-sonnet-4-5}
+    - {type: llm, model: claude-sonnet-4-5}
+
+batches:
+  - label: stable_collaborative
+    count: 4
+    config:
+      preset: collaborative_values
+      mode: stable
+      goal: ""
+
+  - label: shifting_collaborative
+    count: 4
+    config:
+      preset: collaborative_values
+      mode: shifting
+      goal: ""
+
+  - label: stable_collaborative_no_talk
+    count: 2
+    config:
+      preset: collaborative_values
+      enable_cheap_talk: false
+      mode: stable
+      goal: ""
+
+  - label: shifting_collaborative_no_talk
+    count: 2
+    config:
+      preset: collaborative_values
+      enable_cheap_talk: false
+      mode: shifting
+      goal: ""
+
+  - label: stable_competitive
+    count: 4
+    config:
+      preset: competitive_values
+      mode: stable
+      goal: ""
+
+  - label: shifting_competitive
+    count: 4
+    config:
+      preset: competitive_values
+      mode: shifting
+      goal: ""
+
+  - label: stable_competitive_no_talk
+    count: 2
+    config:
+      preset: competitive_values
+      enable_cheap_talk: false
+      mode: stable
+      goal: ""
+
+  - label: shifting_competitive_no_talk
+    count: 2
+    config:
+      preset: competitive_values
+      enable_cheap_talk: false
+      mode: shifting
+      goal: ""

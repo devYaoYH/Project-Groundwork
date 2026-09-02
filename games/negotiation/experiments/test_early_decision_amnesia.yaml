@@ -1,0 +1,36 @@
+name: test_early_decision_amnesia
+description: >
+  Regression test for the early-decision amnesia bug where Agent B could not see
+  Agent A's last speech if A submitted a decision before cheap talk ended.
+  The fix ensures Agent B's prompt surfaces both A's last speech AND the system notice.
+
+  Conditions chosen to maximise the chance of an early decision:
+    - High mc_ratio (0.5, competitive) — agents have little incentive to wait
+    - Enough cheap_talk_turns (5) that early submission is possible well before the deadline
+    - share_projects: true — agents are explicitly told to share info, so A will likely
+      say something substantive before submitting
+    - thinking: true — gives agents a private reasoning channel so speech is non-trivial
+    - balance_turn_order: false — keep agent assignment fixed for reproducibility
+
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+
+batches:
+  - label: early_decision_amnesia_competitive
+    count: 2
+    config:
+      num_rounds: 2
+      cheap_talk_turns: 5
+      mode: stable
+      balance_turn_order: true
+      named_projects: true
+      rotate_projects: false
+      share_projects: false
+      think_about_opponent: false
+      mc_ratio: 0.8
+      agents:
+        - type: llm
+          model: qwen/qwen3.5-flash-02-23
+        - type: llm
+          model: gpt-5-mini

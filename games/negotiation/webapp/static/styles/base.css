@@ -1,0 +1,190 @@
+/* CSS variables, themes, resets, header, tabs, layout, spinner, theme toggle, lightbox */
+
+:root, [data-theme="light"] {
+    --bg: #f5f5f7;
+    --surface: #ffffff;
+    --surface-2: #eeeef2;
+    --border: #d4d4dc;
+    --border-focus: #a0a0b0;
+    --text: #1a1a2e;
+    --text-dim: #6b6b80;
+    --text-muted: #9090a5;
+    --accent-a: #d08030;
+    --accent-a-dim: rgba(208, 128, 48, 0.12);
+    --accent-b: #2080c0;
+    --accent-b-dim: rgba(32, 128, 192, 0.12);
+    --danger: #c83030;
+    --danger-dim: rgba(200, 48, 48, 0.08);
+    --success: #2a9050;
+    --success-dim: rgba(42, 144, 80, 0.08);
+    --radius: 6px;
+    --mono: 'DM Mono', monospace;
+    --serif: 'Newsreader', serif;
+}
+
+/* Must come after the :root/light block so it wins at equal specificity. */
+[data-theme="dark"] {
+    --bg: #0c0c0f;
+    --surface: #16161b;
+    --surface-2: #1e1e25;
+    --border: #2a2a35;
+    --border-focus: #4a4a60;
+    --text: #e0dfe6;
+    --text-dim: #8887a0;
+    --text-muted: #5c5b72;
+    --accent-a: #f0a050;
+    --accent-a-dim: rgba(240, 160, 80, 0.15);
+    --accent-b: #50b0f0;
+    --accent-b-dim: rgba(80, 176, 240, 0.15);
+    --danger: #e05050;
+    --danger-dim: rgba(224, 80, 80, 0.12);
+    --success: #50c878;
+    --success-dim: rgba(80, 200, 120, 0.12);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: var(--mono);
+    font-weight: 300;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 24px;
+}
+
+header {
+    margin-bottom: 48px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+}
+
+header h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 28px;
+    letter-spacing: -0.5px;
+    margin-bottom: 6px;
+}
+
+header p {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+}
+
+.tab {
+    padding: 10px 20px;
+    cursor: pointer;
+    color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.tab:hover { color: var(--text); }
+.tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent-a);
+}
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Spinner */
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent-a);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Theme toggle */
+.theme-toggle {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    transition: border-color 0.2s, background 0.2s;
+    flex-shrink: 0;
+    color: var(--accent-a);
+}
+
+.theme-toggle:hover {
+    border-color: var(--accent-a);
+    background: var(--accent-a-dim);
+}
+
+/* Lightbox */
+.lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.85);
+    cursor: zoom-out;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+}
+
+.lightbox.active {
+    display: flex;
+}
+
+.lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: var(--radius);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+}
+
+.empty-state p {
+    font-family: var(--serif);
+    font-size: 16px;
+    font-style: italic;
+}
+
+/* Dot indicators */
+.dot-a { background: var(--accent-a); }
+.dot-b { background: var(--accent-b); }

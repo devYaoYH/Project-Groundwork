@@ -1,0 +1,42 @@
+# Shared sink definitions.
+#
+# Any experiment file in this directory picks this up automatically (the loader
+# looks for a sibling storage.yaml), and files elsewhere can point at it with
+# `sinks_path:`. Reference one with:
+#
+#     storage:
+#       extends: local_db
+#
+# Values interpolate ${VAR} and ${VAR:-fallback} from the environment, so put
+# buckets, projects and credentials in .env rather than here. A bare ${VAR}
+# that is unset is a hard error; write ${VAR:-} to allow an empty value.
+
+sinks:
+  # The zero-setup default: one SQLite file, no cloud account required.
+  # This is what a new contributor should use.
+  local_db:
+    backend: sqlite
+    path: ${A2A_TRACE_DB:-./results/a2a_traces.db}
+
+  # Plain JSON on disk. Slower to query than SQLite, but every file is
+  # human-readable and diffable, which is handy when debugging a game.
+  local_json:
+    backend: local
+
+  # SQLite plus the JSON tree, for tooling that still globs results/.
+  local_db_mirrored:
+    extends: local_db
+    mirror_json: true
+
+  # Shared S3 bucket. Requires the AWS CLI and a configured profile.
+  lab_s3:
+    backend: s3
+    bucket: ${A2A_TRACE_BUCKET}
+    prefix: ${A2A_TRACE_PREFIX:-traces}
+    profile: ${AWS_PROFILE:-}
+
+  # Firestore, as used by the negotiation corpus.
+  lab_firestore:
+    backend: firestore
+    collection: ${A2A_FIRESTORE_COLLECTION:-game_traces}
+    project: ${GOOGLE_CLOUD_PROJECT:-}

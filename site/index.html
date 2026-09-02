@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>a2a-comm — agent-to-agent coordination benchmarks</title>
+  <style>
+    :root {
+      --bg: #ffffff; --fg: #16181d; --muted: #6b7280;
+      --border: #e5e7eb; --accent: #2563eb; --card: #fafafa;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115; --fg: #e8eaed; --muted: #9aa1ab;
+        --border: #262a31; --accent: #7aa2f7; --card: #161920;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    .wrap { max-width: 780px; margin: 0 auto; padding: 64px 24px 96px; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 28px; margin-bottom: 36px; }
+    h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+    .tagline { color: var(--muted); margin: 0; }
+    h2 {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); margin: 40px 0 14px; font-weight: 600;
+    }
+    .games { display: flex; flex-direction: column; gap: 14px; }
+    .game {
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 18px 20px; background: var(--card);
+    }
+    .game-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .game h3 { font-size: 17px; margin: 0; }
+    .badge {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); border: 1px solid var(--border);
+      border-radius: 999px; padding: 1px 8px;
+    }
+    .game p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+    .links { margin-top: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+    .links a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .links a:hover { text-decoration: underline; }
+    .links .disabled { color: var(--muted); opacity: 0.55; cursor: default; }
+    pre {
+      background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+      padding: 14px 16px; overflow-x: auto; font-size: 13px;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    footer {
+      margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border);
+      color: var(--muted); font-size: 13px;
+    }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>a2a-comm</h1>
+      <p class="tagline">
+        Benchmarks for agent-to-agent coordination: a shared engine, a shared
+        experiment runner, and a shared judge — one game per environment.
+      </p>
+    </header>
+
+    <h2>Environments</h2>
+    <div class="games" id="games">
+      <noscript>
+        Enable JavaScript to list the environments, or read
+        <code>site/games.json</code> directly.
+      </noscript>
+    </div>
+
+    <h2>Run an experiment</h2>
+<pre><code>uv pip install -e a2a-engine -e expt-runner -e games/negotiation
+cd games/negotiation
+uv run python run.py experiments/smoke_local.yaml --results-dir ./results</code></pre>
+    <p style="color: var(--muted); font-size: 14px;">
+      Every run writes a trace plus a <code>RunManifest</code> pinning the code,
+      config hash, dataset hash, and models — so a result can be traced back to
+      the exact conditions that produced it. See <code>docs/CONTRACTS.md</code>.
+    </p>
+
+    <footer>
+      Static page — deploys to GitHub Pages with no build step. Game viewers and
+      leaderboards are deployed separately by each game and linked above.
+    </footer>
+  </div>
+
+  <script>
+    // The page is a registry renderer: it owns no game-specific knowledge.
+    // Adding a game means adding an entry to games.json.
+    const LINKS = [
+      ["viewer_url", "Trace viewer"],
+      ["leaderboard_url", "Leaderboard"],
+      ["paper_url", "Paper"],
+    ];
+
+    function render(games) {
+      const root = document.getElementById("games");
+      root.innerHTML = "";
+      for (const game of games) {
+        const el = document.createElement("div");
+        el.className = "game";
+
+        const head = document.createElement("div");
+        head.className = "game-head";
+        const title = document.createElement("h3");
+        title.textContent = game.name;
+        head.appendChild(title);
+        if (game.status && game.status !== "active") {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = game.status;
+          head.appendChild(badge);
+        }
+        el.appendChild(head);
+
+        const blurb = document.createElement("p");
+        blurb.textContent = game.blurb || "";
+        el.appendChild(blurb);
+
+        const links = document.createElement("div");
+        links.className = "links";
+        for (const [key, label] of LINKS) {
+          if (!game[key]) continue;  // omit rather than render a dead link
+          const a = document.createElement("a");
+          a.href = game[key];
+          a.textContent = label;
+          links.appendChild(a);
+        }
+        if (game.repo) {
+          const a = document.createElement("a");
+          a.href = game.repo;
+          a.textContent = "Source";
+          links.appendChild(a);
+        }
+        el.appendChild(links);
+        root.appendChild(el);
+      }
+    }
+
+    fetch("games.json")
+      .then((r) => r.json())
+      .then((data) => render(data.games || []))
+      .catch(() => {
+        document.getElementById("games").textContent =
+          "Could not load games.json.";
+      });
+  </script>
+</body>
+</html>

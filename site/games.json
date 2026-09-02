@@ -1,0 +1,45 @@
+{
+  "$comment": "Registry powering the static landing page. Each entry links OUT to that game's own deployed site; nothing here is game-specific code.",
+  "games": [
+    {
+      "id": "calendar",
+      "name": "Calendar Scheduling",
+      "blurb": "Multi-agent meeting scheduling under private calendars, with privacy leakage and cost-regret scoring.",
+      "status": "active",
+      "repo": "games/calendar",
+      "viewer_url": "",
+      "leaderboard_url": "",
+      "paper_url": ""
+    },
+    {
+      "id": "negotiation",
+      "name": "Resource Negotiation",
+      "blurb": "Two agents negotiate over scarce resources with cheap talk, hidden value functions, and overdraw annulment.",
+      "status": "active",
+      "repo": "games/negotiation",
+      "viewer_url": "",
+      "leaderboard_url": "",
+      "paper_url": ""
+    },
+    {
+      "id": "buyer-seller",
+      "name": "Buyer-Seller Bargaining",
+      "blurb": "Sequential multi-item bargaining under asymmetric information, with discounting that makes every extra round of haggling costly.",
+      "status": "active",
+      "repo": "games/buyer-seller",
+      "viewer_url": "",
+      "leaderboard_url": "",
+      "paper_url": ""
+    },
+    {
+      "id": "word-guess",
+      "name": "Word Guess",
+      "blurb": "Minimal two-agent reference game. The worked example in the add-a-game guide.",
+      "status": "reference",
+      "repo": "games/word-guess",
+      "viewer_url": "",
+      "leaderboard_url": "",
+      "paper_url": ""
+    }
+  ]
+}

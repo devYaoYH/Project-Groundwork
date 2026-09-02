@@ -1,0 +1,30 @@
+name: projects_study_theory_of_mind_009
+description: 'V2 cross-play study: targeted model pair, theory of mind intervention.'
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: qwen-gpt5m_stable_fixed_tom_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    think_about_opponent: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+- label: qwen-gpt5m_stable_rotate_tom_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    think_about_opponent: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini

@@ -1,0 +1,22 @@
+name: word_guess_example
+description: Two batches, one per secret word, with default max_turns.
+defaults:
+  game_name: word_guess
+  num_agents: 2
+  max_turns: 10
+  agents:
+    - type: llm
+      model: gpt-4o-mini
+    - type: llm
+      model: claude-haiku-4-5-20251001
+batches:
+  - label: dog
+    count: 1
+    config:
+      secret_word: dog
+      seed: 1
+  - label: apple
+    count: 1
+    config:
+      secret_word: apple
+      seed: 2

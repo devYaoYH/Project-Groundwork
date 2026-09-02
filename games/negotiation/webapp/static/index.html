@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groundwork — Multi-Agent Resource Coordination</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles/base.css">
+    <link rel="stylesheet" href="styles/forms.css">
+    <link rel="stylesheet" href="styles/game.css">
+    <link rel="stylesheet" href="styles/dataset.css">
+</head>
+<body>
+<div class="app">
+    <!-- Consent Banner -->
+    <div class="consent-banner" id="consentBanner" style="display:none">
+        <div class="consent-text">
+            <strong>Data Collection for Research</strong>
+            <p>This study collects anonymized game traces (moves, chat, outcomes) to analyze negotiation strategies. No personal data is stored. Your API keys are used only in-memory for LLM calls and are <strong>never logged, stored, or transmitted</strong> to our servers. You can export your own games locally at any time.</p>
+        </div>
+        <div class="consent-actions">
+            <button class="primary" onclick="acceptConsent()">Accept</button>
+            <button class="consent-decline" onclick="declineConsent()">Decline</button>
+        </div>
+    </div>
+
+    <header>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+                <h1>Project: Groundwork</h1>
+                <p>Dynamic grounding in multi-agent negotiation · Project-based rewards · Cheap talk · Overdraw annulment</p>
+            </div>
+            <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+                <span class="theme-icon" id="themeIcon"></span>
+            </button>
+        </div>
+    </header>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="about">How It Works</div>
+        <div class="tab" data-tab="launch">Launch Game</div>
+        <div class="tab" data-tab="live">Live View</div>
+        <div class="tab" data-tab="history">History</div>
+        <div class="tab" data-tab="dataset">Dataset</div>
+    </div>
+
+    <!-- ABOUT TAB -->
+    <div class="tab-content active" id="tab-about">
+        <div class="about-hero">
+            <h2 class="about-headline">Building Common Ground</h2>
+            <p class="about-subtitle">A research platform for studying <em>dynamic grounding</em> in LLM negotiation dyads. Two agents share scarce resources and hold private projects &mdash; they must build shared understanding through interaction to coordinate, but talk is cheap and every promise is non-binding. Can they bridge the gap between individual planning with full information and joint coordination through communication under asymmetric information?</p>
+        </div>
+
+        <!-- Game Flow Diagram -->
+        <div class="about-flow">
+            <div class="about-flow-step">
+                <div class="about-flow-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+                </div>
+                <div class="about-flow-label">Assign Projects</div>
+                <div class="about-flow-desc">Each agent receives private projects that require specific resources. Projects have different payoffs &mdash; agents must decide which to pursue.</div>
+            </div>
+            <div class="about-flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+            <div class="about-flow-step">
+                <div class="about-flow-icon" style="color:var(--accent-a)">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                </div>
+                <div class="about-flow-label">Cheap Talk</div>
+                <div class="about-flow-desc">Agents exchange free-form messages &mdash; they can signal, bluff, or coordinate. Talk is non-binding: agents can say anything.</div>
+            </div>
+            <div class="about-flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+            <div class="about-flow-step">
+                <div class="about-flow-icon" style="color:var(--accent-b)">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                </div>
+                <div class="about-flow-label">Simultaneous Purchase</div>
+                <div class="about-flow-desc">Both agents submit resource orders at the same time. Decisions are hidden until both are locked in.</div>
+            </div>
+            <div class="about-flow-arrow"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+            <div class="about-flow-step">
+                <div class="about-flow-icon" style="color:var(--success)">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                </div>
+                <div class="about-flow-label">Resolution</div>
+                <div class="about-flow-desc">If total demand exceeds supply for any resource, the round is <em>overdrawn</em> &mdash; both agents score zero. Otherwise, project rewards are tallied.</div>
+            </div>
+        </div>
+
+        <!-- Compatibility Ratio Spectrum -->
+        <div class="about-mc-spectrum">
+            <div class="about-mc-header">
+                <h3 class="about-mc-title">Compatibility Ratio (M/C)</h3>
+                <p class="about-mc-intro">A single parameter controls the degree of goal conflict. The ratio compares the best <em>joint</em> outcome (M) to the sum of individual optima (C) &mdash; determining whether agents must compete, negotiate, or simply coordinate.</p>
+            </div>
+            <div class="about-mc-track-wrap">
+                <div class="about-mc-track">
+                    <div class="about-mc-fill"></div>
+                    <div class="about-mc-stop" style="left:0%">
+                        <div class="about-mc-dot competitive"></div>
+                        <div class="about-mc-val">0.5</div>
+                    </div>
+                    <div class="about-mc-stop" style="left:60%">
+                        <div class="about-mc-dot mixed"></div>
+                        <div class="about-mc-val">0.8</div>
+                    </div>
+                    <div class="about-mc-stop" style="left:100%">
+                        <div class="about-mc-dot collaborative"></div>
+                        <div class="about-mc-val">1.0</div>
+                    </div>
+                </div>
+                <div class="about-mc-labels">
+                    <div class="about-mc-label" style="left:0%">
+                        <span class="about-mc-label-tag competitive">Competitive</span>
+                        <span class="about-mc-label-text">Heavy resource overlap. Agents are competing for scarce resources, but can coordinate strategies for maximal gains.</span>
+                    </div>
+                    <div class="about-mc-label" style="left:60%">
+                        <span class="about-mc-label-tag mixed">Mixed-Motive</span>
+                        <span class="about-mc-label-text">Partial overlap &mdash; cooperation unlocks joint gains, but exploitation tempts. The classic negotiation dilemma.</span>
+                    </div>
+                    <div class="about-mc-label" style="left:100%">
+                        <span class="about-mc-label-tag collaborative">Collaborative</span>
+                        <span class="about-mc-label-text">Complementary projects. Both agents can reach maximum reward &mdash; if they coordinate successfully.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screenshots -->
+        <div class="about-section">
+            <div class="about-grid">
+                <div class="about-card">
+                    <div class="about-card-title">Cheap Talk Phase</div>
+                    <div class="about-card-body">Agents negotiate using natural language before committing to decisions. Private <em>thinking</em> traces reveal internal reasoning.</div>
+                    <img class="about-card-img clickable" src="img/cheap-talk-thinking.png" alt="Cheap talk negotiation between two agents" onclick="openLightbox(this)" />
+                </div>
+                <div class="about-card">
+                    <div class="about-card-title">Successful Coordination</div>
+                    <div class="about-card-body">When agents avoid overdrawing, both earn rewards based on completed projects.</div>
+                    <img class="about-card-img clickable" src="img/resolution-success.png" alt="Successful round with resource allocations" onclick="openLightbox(this)" />
+                </div>
+                <div class="about-card">
+                    <div class="about-card-title">Overdraw Failure</div>
+                    <div class="about-card-body">If combined demand exceeds supply for any resource, <em>both</em> agents score zero for the round &mdash; even if only one resource was contested.</div>
+                    <img class="about-card-img clickable" src="img/resolution-overdraw.png" alt="Overdrawn round where gold exceeded supply" onclick="openLightbox(this)" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Configurable -->
+        <details class="about-details">
+            <summary>Experimental conditions &amp; controls</summary>
+            <div class="about-details-content">
+                <ul>
+                    <li><strong>Compatibility ratio (M/C)</strong> &mdash; Controls goal conflict. M/C = 1.0 means fully compatible projects; M/C = 0.5 means heavily overlapping resource needs. Agents start with uncertainty and must use negotiation to discover alignment.</li>
+                    <li><strong>Partner stability</strong> &mdash; <em>Stable</em>: same partner across rounds, enabling shared history and convention formation. <em>Shifting</em>: one agent's context resets each round, testing whether grounding persists without shared memory.</li>
+                    <li><strong>Project rotation</strong> &mdash; <em>Fixed</em>: same scenario every round. <em>Rotating</em>: new projects each round at the same M/C ratio, testing transferable coordination strategies vs. memorized allocations.</li>
+                    <li><strong>Cheap talk toggle</strong> &mdash; Disable communication entirely as a no-talk baseline to measure the value of language in coordination.</li>
+                    <li><strong>Share projects</strong> &mdash; Instruct agents to reveal project details at the start of each round, an information-sharing intervention that tests whether transparency improves grounding.</li>
+                    <li><strong>Theory of mind</strong> &mdash; Prompt agents to reason about the opponent's goals and likely projects before deciding, a theory-of-mind elicitation intervention.</li>
+                    <li><strong>Cross-play</strong> &mdash; Pair different LLM models (e.g. Claude Sonnet &times; GPT-5 Mini) to study whether heterogeneous dyads outperform self-play through complementary negotiation styles.</li>
+                    <li><strong>Role swap</strong> &mdash; Each configuration is played twice with first-speaker roles swapped to control for order effects.</li>
+                </ul>
+                <div class="about-details-images">
+                    <img class="clickable" src="img/settings.png" alt="Environment settings panel" onclick="openLightbox(this)" />
+                    <img class="clickable" src="img/values.png" alt="Value function configuration" onclick="openLightbox(this)" />
+                </div>
+            </div>
+        </details>
+
+        <div class="about-privacy-note">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            <span><strong>Your API keys stay private.</strong> Keys are used only in-memory for LLM calls during your game session and are never logged, stored, or transmitted to our servers. Game traces (moves, chat, outcomes) may be collected for research if you consent.</span>
+        </div>
+
+        <div class="about-cta">
+            <button class="primary" onclick="switchToTab('launch')">Launch a game</button>
+            <p class="about-cta-note">Configure agents, generate a scenario, and watch them negotiate in real-time.</p>
+        </div>
+    </div>
+
+    <!-- LAUNCH TAB -->
+    <div class="tab-content" id="tab-launch">
+        <div class="quickstart" id="quickstart">
+            <h3>Play a negotiation game against an AI</h3>
+            <p class="quickstart-intro">
+                You and an AI share a small pool of resources. Chat for a few turns, then both of you
+                secretly buy resources to run your private projects &mdash; if your combined orders overdraw
+                any resource, the round is annulled and both of you score zero. Highest total across the rounds wins.
+                <a href="#" onclick="switchToTab('about');return false">How it works &rsaquo;</a>
+            </p>
+
+            <div class="field quickstart-field">
+                <label>Your opponent</label>
+                <select id="quickModel"></select>
+            </div>
+
+            <div class="quickstart-field">
+                <label>Condition</label>
+                <div class="quick-choice" role="radiogroup" aria-label="Condition">
+                    <input type="radio" name="quickCondition" id="quickCondStandard" value="standard" checked />
+                    <label for="quickCondStandard">
+                        <strong>Standard</strong>
+                        <span>Chat freely before deciding &mdash; talk is non-binding.</span>
+                    </label>
+                    <input type="radio" name="quickCondition" id="quickCondNoTalk" value="no_talk" />
+                    <label for="quickCondNoTalk">
+                        <strong>No talk</strong>
+                        <span>No chat; decide from your projects alone.</span>
+                    </label>
+                    <input type="radio" name="quickCondition" id="quickCondTransparency" value="transparency" />
+                    <label for="quickCondTransparency">
+                        <strong>Full transparency</strong>
+                        <span>Both sides see each other's projects.</span>
+                    </label>
+                    <input type="radio" name="quickCondition" id="quickCondJoint" value="joint" />
+                    <label for="quickCondJoint">
+                        <strong>Aligned goal</strong>
+                        <span>The AI is told to maximize your combined score.</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="quickstart-field">
+                <label>Game length</label>
+                <div class="quick-choice" role="radiogroup" aria-label="Game length">
+                    <input type="radio" name="quickLength" id="quickLengthStandard" value="standard" checked />
+                    <label for="quickLengthStandard">
+                        <strong>Standard</strong>
+                        <span>4 rounds &mdash; the full setup from our experiments.</span>
+                    </label>
+                    <input type="radio" name="quickLength" id="quickLengthLite" value="lite" />
+                    <label for="quickLengthLite">
+                        <strong>Lite</strong>
+                        <span>2 rounds &mdash; a quicker taste of the game.</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="field quickstart-field">
+                <label for="quickEmail">Your email</label>
+                <input type="email" id="quickEmail" placeholder="you@example.com" autocomplete="email" />
+                <p class="quickstart-email-note">We'll send you a report of your negotiation performance after the demo.</p>
+            </div>
+
+            <button class="primary quick-launch" id="quickLaunchBtn" onclick="launchQuickGame()">Play against the AI</button>
+            <p class="quickstart-note">
+                A scenario from the paper's validated pool is drawn at random &mdash; the same pool, budgets, and
+                round structure used in our experiments. Whether it is competitive, mixed, or collaborative is
+                also chosen at random and kept hidden: figuring that out is part of the negotiation. The AI's
+                private reasoning appears as collapsible traces in the Live View.
+            </p>
+        </div>
+
+        <details class="advanced-settings" id="advancedSettings">
+        <summary>Advanced settings &mdash; full research configuration</summary>
+        <div class="config-grid">
+            <div class="config-section">
+                <h3><span class="dot dot-a"></span> Agent A</h3>
+                <div class="field">
+                    <label>Type</label>
+                    <select id="agentAType">
+                        <option value="random">Random Baseline</option>
+                        <option value="llm">LLM Agent</option>
+                        <option value="human">Human Player</option>
+                    </select>
+                </div>
+                <div id="agentALLM" style="display:none">
+                    <div class="field">
+                        <label>Provider</label>
+                        <select id="agentAProvider" onchange="applyProvider('A')">
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic (Claude)</option>
+                            <option value="gemini">Google Gemini</option>
+                            <option value="ollama">Ollama (local)</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="custom">Custom Endpoint</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>API Base URL</label>
+                        <input id="agentABase" value="https://api.openai.com/v1" />
+                    </div>
+                    <div class="field">
+                        <label>API Key</label>
+                        <input id="agentAKey" type="password" placeholder="sk-..." />
+                    </div>
+                    <div class="field">
+                        <label>Model</label>
+                        <select id="agentAModelSelect" onchange="handleModelSelect('A')">
+                            <optgroup label="Anthropic">
+                                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                                <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
+                                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                                <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+                            </optgroup>
+                            <optgroup label="OpenAI">
+                                <option value="gpt-5.4">GPT-5.4</option>
+                                <option value="gpt-5-mini-2025-08-07">GPT-5 Mini</option>
+                                <option value="gpt-4o-2024-08-06">GPT-4o</option>
+                                <option value="gpt-4o-mini-2024-07-18" selected>GPT-4o Mini</option>
+                                <option value="o3-2025-04-16">o3</option>
+                            </optgroup>
+                            <optgroup label="OpenRouter">
+                                <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (OR)</option>
+                                <option value="openai/gpt-4o">GPT-4o (OR)</option>
+                                <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+                                <option value="google/gemini-pro-1.5">Gemini Pro 1.5 (OR)</option>
+                                <option value="mistralai/mistral-large">Mistral Large</option>
+                                <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
+                            </optgroup>
+                            <option value="custom">Custom...</option>
+                        </select>
+                        <input id="agentAModel" type="text" placeholder="Enter custom model name" style="display:none;margin-top:4px" />
+                    </div>
+                    <div class="field">
+                        <label>Temperature</label>
+                        <input id="agentATemp" type="number" step="0.1" value="0.7" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="swap-agents-col">
+                <button id="swapAgentsBtn" type="button" title="Swap Agent A ↔ B configs" onclick="window.swapAgentConfigs()">⇄</button>
+            </div>
+
+            <div class="config-section">
+                <h3><span class="dot dot-b"></span> Agent B</h3>
+                <div class="field">
+                    <label>Type</label>
+                    <select id="agentBType">
+                        <option value="random">Random Baseline</option>
+                        <option value="llm">LLM Agent</option>
+                        <option value="human">Human Player</option>
+                    </select>
+                </div>
+                <div id="agentBLLM" style="display:none">
+                    <div class="field">
+                        <label>Provider</label>
+                        <select id="agentBProvider" onchange="applyProvider('B')">
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic (Claude)</option>
+                            <option value="gemini">Google Gemini</option>
+                            <option value="ollama">Ollama (local)</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="custom">Custom Endpoint</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>API Base URL</label>
+                        <input id="agentBBase" value="https://api.openai.com/v1" />
+                    </div>
+                    <div class="field">
+                        <label>API Key</label>
+                        <input id="agentBKey" type="password" placeholder="sk-..." />
+                    </div>
+                    <div class="field">
+                        <label>Model</label>
+                        <select id="agentBModelSelect" onchange="handleModelSelect('B')">
+                            <optgroup label="Anthropic">
+                                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                                <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
+                                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                                <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+                            </optgroup>
+                            <optgroup label="OpenAI">
+                                <option value="gpt-5.4">GPT-5.4</option>
+                                <option value="gpt-5-mini-2025-08-07">GPT-5 Mini</option>
+                                <option value="gpt-4o-2024-08-06">GPT-4o</option>
+                                <option value="gpt-4o-mini-2024-07-18" selected>GPT-4o Mini</option>
+                                <option value="o3-2025-04-16">o3</option>
+                            </optgroup>
+                            <optgroup label="OpenRouter">
+                                <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (OR)</option>
+                                <option value="openai/gpt-4o">GPT-4o (OR)</option>
+                                <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+                                <option value="google/gemini-pro-1.5">Gemini Pro 1.5 (OR)</option>
+                                <option value="mistralai/mistral-large">Mistral Large</option>
+                                <option value="qwen/qwen3.5-flash-02-23">Qwen 3.5 Flash</option>
+                            </optgroup>
+                            <option value="custom">Custom...</option>
+                        </select>
+                        <input id="agentBModel" type="text" placeholder="Enter custom model name" style="display:none;margin-top:4px" />
+                    </div>
+                    <div class="field">
+                        <label>Temperature</label>
+                        <input id="agentBTemp" type="number" step="0.1" value="0.7" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="config-full">
+                <h3>Environment Settings</h3>
+                <div style="margin-top:16px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Agent Settings</label>
+                    <div class="inline-fields">
+                        <div class="field">
+                            <label>Mode</label>
+                            <select id="gameMode">
+                                <option value="stable">Stable</option>
+                                <option value="shifting">Shifting (Agent B changes)</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Goal</label>
+                            <select id="gameGoal">
+                                <option value="">Default (maximize own reward)</option>
+                            </select>
+                        </div>
+                        <div class="toggle-row">
+                            <label class="toggle-field" title="Private reasoning channel for agents">
+                                <span class="toggle-label">Thinking</span>
+                                <input type="checkbox" id="thinkingMode" checked />
+                                <span class="toggle-switch"></span>
+                            </label>
+                            <input type="hidden" id="visibleUtilities" value="true" />
+                            <input type="hidden" id="visibleOpponentReward" value="false" />
+                            <label class="toggle-field" title="Enable cheap talk phase (no-talk baseline when disabled)">
+                                <span class="toggle-label">Cheap Talk</span>
+                                <input type="checkbox" id="enableCheapTalk" checked />
+                                <span class="toggle-switch"></span>
+                            </label>
+                            <label class="toggle-field" title="Instruct agents to share their project details at the start of each round's cheap talk">
+                                <span class="toggle-label">Share Projects</span>
+                                <input type="checkbox" id="shareProjects" />
+                                <span class="toggle-switch"></span>
+                            </label>
+                            <label class="toggle-field" title="Prompt agents to reason about the other party's goals and which projects they might be running">
+                                <span class="toggle-label">Think About Opponent</span>
+                                <input type="checkbox" id="thinkAboutOpponent" />
+                                <span class="toggle-switch"></span>
+                            </label>
+                            <label class="toggle-field" title="Instruct agents to maximize the combined joint reward of both parties instead of their individual reward">
+                                <span class="toggle-label">Maximize Joint Reward</span>
+                                <input type="checkbox" id="maximizeJoint" />
+                                <span class="toggle-switch"></span>
+                            </label>
+                            <label class="toggle-field" title="Reveal both parties' full project details (names, requirements, rewards) in each agent's system prompt">
+                                <span class="toggle-label">Full Transparency</span>
+                                <input type="checkbox" id="fullTransparency" />
+                                <span class="toggle-switch"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:16px">
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Game Settings</label>
+                    <div class="inline-fields">
+                        <div class="field">
+                            <label>Rounds</label>
+                            <input id="numRounds" type="number" min="1" max="20" value="5" />
+                        </div>
+                        <div class="field">
+                            <label>Cheap Talk Turns <span class="tooltip-icon" title="Set to 0 for unlimited turns (agents continue chatting until both submit decisions)">ⓘ</span></label>
+                            <input id="cheapTalkTurns" type="number" min="0" max="100" value="3" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="config-full">
+                <h3>Projects</h3>
+                <div id="projectsSection" style="margin-top:12px">
+                    <div style="margin-bottom:16px">
+                        <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Resource Budget</label>
+                        <div class="inline-fields">
+                            <div class="field">
+                                <label>Agent Budget ($)</label>
+                                <input id="agentBudget" type="number" step="1" value="15" />
+                            </div>
+                            <div class="field">
+                                <label>Max Types/Turn</label>
+                                <input id="maxTypes" type="number" min="1" max="3" value="2" />
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:16px">
+                        <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Resource Supply / Costs</label>
+                        <div class="inline-fields">
+                            <div class="field"><label>Wood Supply</label><input id="supWood" type="number" value="10" /></div>
+                            <div class="field"><label>Stone Supply</label><input id="supStone" type="number" value="10" /></div>
+                            <div class="field"><label>Gold Supply</label><input id="supGold" type="number" value="6" /></div>
+                            <div class="field"><label>Wood Cost</label><input id="costWood" type="number" step="0.5" value="1.0" /></div>
+                            <div class="field"><label>Stone Cost</label><input id="costStone" type="number" step="0.5" value="1.5" /></div>
+                            <div class="field"><label>Gold Cost</label><input id="costGold" type="number" step="0.5" value="3.0" /></div>
+                        </div>
+                    </div>
+
+                    <div class="knob-wrap">
+                        <div class="knob-lbl">
+                            <span>M/C ratio target</span>
+                            <span class="delta-disp" id="mcDisplay">0.75</span>
+                        </div>
+                        <input type="range" id="mcRatio" min="50" max="150" value="75" step="5"
+                            oninput="document.getElementById('mcDisplay').textContent=(this.value/100).toFixed(2)">
+                        <div class="knob-ticks">
+                            <span>&#8592; interfering (0.5)</span>
+                            <span>non-interfering (1.0)</span>
+                            <span>superadditive (&gt;1) &#8594;</span>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;justify-content:flex-end;align-items:center;margin-top:8px;gap:8px">
+                        <label class="toggle-field" title="Generate creative project names using LLM" style="margin-right:auto">
+                            <span class="toggle-label">Name Projects</span>
+                            <input type="checkbox" id="nameProjects" checked />
+                            <span class="toggle-switch"></span>
+                        </label>
+                        <button class="secondary" id="saveScenarioBtn" onclick="window.saveScenario()" disabled>Save Scenario</button>
+                        <button class="secondary" id="importScenarioBtn" onclick="document.getElementById('importScenarioWrap').style.display = document.getElementById('importScenarioWrap').style.display === 'none' ? '' : 'none'">Import JSON</button>
+                        <button class="primary" id="generateScenarioBtn" onclick="window.generateScenario()">Generate Scenario</button>
+                    </div>
+
+                    <div id="importScenarioWrap" style="display:none;margin-top:8px">
+                        <textarea id="importScenarioText" rows="6" placeholder="Paste scenario JSON from test_oracle.py here..." style="width:100%;font-family:monospace;font-size:0.8em;resize:vertical;background:var(--bg-alt,#1e1e2e);color:var(--text,#cdd6f4);border:1px solid var(--border,#45475a);border-radius:6px;padding:8px"></textarea>
+                        <button class="primary" style="margin-top:4px" onclick="window.importScenarioJSON()">Load</button>
+                    </div>
+
+                    <div class="solver-progress"><div class="solver-bar" id="solverBar"></div></div>
+                    <div class="solver-status" id="scenarioStatus">Set M/C ratio and generate a scenario to start.</div>
+                    <div class="solver-stats" id="solverStats"></div>
+
+                    <div id="savedScenariosSection" class="saved-scenarios-section" style="margin-top:12px"></div>
+
+                    <div id="collabView" style="display:none">
+                        <div class="cbar" id="collabStats"></div>
+                        <div class="collab-res-wrap" id="collabResWrap">
+                            <div class="collab-res-label">Resource usage in optimal joint allocation</div>
+                            <div id="collabResBars"></div>
+                        </div>
+                    </div>
+
+                    <div id="projectsDisplay" style="display:none">
+                        <div class="projects-grid">
+                            <div><h4>Agent A</h4><div id="projectsA" class="projects-list"></div></div>
+                            <div><h4>Agent B</h4><div id="projectsB" class="projects-list"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="launch-actions">
+            <button class="primary" id="launchBtn" onclick="launchGame()" disabled>Launch Game</button>
+            <button class="primary" id="oracleSolveBtn" onclick="window.__oracleSolve()" disabled style="margin-left:auto">Solve with Oracle</button>
+        </div>
+        <div id="oracleResult" style="display:none;margin-top:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.7"></div>
+
+        <details class="batch-section">
+            <summary>Batch Launch</summary>
+            <div class="batch-config">
+                <div class="inline-fields">
+                    <div class="field">
+                        <label>Count</label>
+                        <input id="batchCount" type="number" min="1" max="100" value="10" />
+                    </div>
+                    <div class="field">
+                        <label>Experiment Label</label>
+                        <input id="batchLabel" type="text" placeholder="e.g. gpt4o-vs-claude-stable" />
+                    </div>
+                    <div class="field">
+                        <label>Batch Seed (optional)</label>
+                        <input id="batchSeed" type="number" placeholder="Random" />
+                    </div>
+                    <div class="field" style="display:flex;align-items:center;gap:8px;padding-top:20px">
+                        <input id="batchBalance" type="checkbox" checked />
+                        <label for="batchBalance" style="margin:0;text-transform:none;letter-spacing:0">Balance turn order</label>
+                    </div>
+                </div>
+                <div style="margin-top:16px">
+                    <button class="primary" id="batchLaunchBtn" onclick="launchBatch()">Launch Batch</button>
+                </div>
+            </div>
+            <div id="batchProgress" style="display:none">
+                <div class="batch-progress-header">
+                    <span id="batchProgressText">0 / 0 complete</span>
+                    <div class="batch-progress-bar"><div class="batch-progress-fill" id="batchProgressFill"></div></div>
+                </div>
+                <div id="batchGameList" class="batch-game-list"></div>
+            </div>
+        </details>
+        </details>
+    </div>
+
+    <!-- LIVE TAB -->
+    <div class="tab-content" id="tab-live">
+        <div id="liveEmpty" class="empty-state">
+            <p>No active game. Launch one from the first tab.</p>
+        </div>
+        <div id="liveView" style="display:none">
+            <div class="thinking-notice" id="thinkingNotice" style="display:none">
+                Dashed italic bubbles show each agent's private reasoning — this text is <strong>not</strong> visible to the other agent.
+            </div>
+            <div class="game-header">
+                <h2>Game <span id="liveGameId"></span></h2>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button class="stop-btn" id="stopBtn" onclick="stopGame()">Stop Game</button>
+                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download game events as JSONL">Export Log</button>
+                    <span class="mode-badge" id="liveMode"></span>
+                </div>
+            </div>
+            <div class="scoreboard">
+                <div class="score-card agent-a">
+                    <div class="label">Agent A — Cumulative Reward</div>
+                    <div class="value" id="liveScoreA">0</div>
+                    <div class="round-dots" id="liveDotsA"></div>
+                </div>
+                <div class="score-card agent-b">
+                    <div class="label">Agent B — Cumulative Reward</div>
+                    <div class="value" id="liveScoreB">0</div>
+                    <div class="round-dots" id="liveDotsB"></div>
+                </div>
+            </div>
+            <div id="liveStatus" style="margin-bottom:16px;font-size:12px;color:var(--text-dim)">
+                <span class="spinner"></span> Running...
+            </div>
+            <div id="humanSystemPrompt" style="display:none"></div>
+            <div id="liveRounds"></div>
+            <details class="event-log-details">
+                <summary class="event-log-toggle">
+                    <svg class="summary-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                    Event Log
+                </summary>
+                <div class="event-log" id="eventLog"></div>
+            </details>
+            <div class="human-input-bar" id="humanInputBar" style="display:none">
+                <div class="human-prompt" id="humanPrompt">Your turn</div>
+                <div class="human-project-brief" id="humanProjectBrief" style="display:none"></div>
+                <!-- Chat input (cheap talk) -->
+                <div class="human-chat-section" id="humanChatSection">
+                    <div class="human-input-row">
+                        <input type="text" id="humanInput" placeholder="Type your message..." autocomplete="off" />
+                        <button class="primary" id="humanSendBtn" onclick="sendHumanInput()">Send</button>
+                    </div>
+                </div>
+                <!-- Order panel (dynamically populated) -->
+                <div class="human-order-panel" id="humanOrderPanel" style="display:none">
+                    <div class="project-run-controls" id="projectRunControls"></div>
+                    <div class="order-sliders" id="orderSliders"></div>
+                    <div class="order-summary" id="orderSummary"></div>
+                    <div class="order-error" id="orderError" style="display:none"></div>
+                    <div class="order-actions">
+                        <button class="primary" id="orderSubmitBtn" onclick="submitOrder()">Submit Order</button>
+                    </div>
+                </div>
+                <!-- Toggle between chat and order during cheap talk -->
+                <div class="order-toggle-row" id="orderToggleRow" style="display:none">
+                    <button class="secondary order-toggle-btn" onclick="toggleOrderMode(true)">Make Early Decision</button>
+                </div>
+                <!-- Back to chat button (shown when order panel is open during cheap talk) -->
+                <div class="order-toggle-row" id="orderBackRow" style="display:none">
+                    <button class="secondary order-toggle-btn" onclick="toggleOrderMode(false)">Back to Chat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div class="tab-content" id="tab-history">
+        <div class="tab-header-desc" style="margin-bottom: 20px; padding: 20px; background: var(--bg-card); border-radius: 8px;">
+            <h3 style="margin-top:0">Local Sessions</h3>
+            <p style="margin-bottom:0; color:var(--text-meta);">Recent games from this browser and currently running server sessions. Use this for quick review and debugging.</p>
+        </div>
+        <div class="history-toolbar">
+            <input type="file" id="jsonlFileInput" accept=".jsonl" multiple style="display:none" onchange="handleJSONLImport(event)" />
+            <button class="export-btn" onclick="document.getElementById('jsonlFileInput').click()">Import JSONL</button>
+        </div>
+        <div id="historyList"></div>
+        <div id="historyEmpty" class="empty-state">
+            <p>No completed games yet.</p>
+        </div>
+        <div id="historyDetail" style="display:none"></div>
+    </div>
+
+    <!-- DATASET TAB -->
+    <div class="tab-content" id="tab-dataset">
+        <div class="dataset-header">
+            <div class="dataset-stats" id="datasetStats"></div>
+            <div class="dataset-controls">
+                <select id="datasetFilterMode">
+                    <option value="">All modes</option>
+                    <option value="stable">Stable</option>
+                    <option value="shifting">Shifting</option>
+                </select>
+                <select id="datasetFilterAgent">
+                    <option value="">All agent types</option>
+                    <option value="random">Random</option>
+                    <option value="llm">LLM</option>
+                    <option value="heuristic">Heuristic</option>
+                </select>
+                <input id="datasetFilterExperiment" type="text" placeholder="Search label or game ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:160px" />
+                <div style="display:flex;gap:4px;align-items:center">
+                    <input id="datasetJumpId" type="text" placeholder="Jump to full game ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:200px" />
+                    <button class="export-btn" id="datasetJumpBtn">Go</button>
+                </div>
+                <button class="export-btn" id="datasetExportBtn" onclick="exportDatasetJSONL()">Export JSONL</button>
+                <button class="delete-btn" id="datasetDeleteBtn">Delete Selected</button>
+            </div>
+        </div>
+        <div id="datasetUnavailable" class="empty-state" style="display:none">
+            <p>Firestore is not available. Dataset browsing requires a Firestore connection.</p>
+        </div>
+        <div id="datasetTable"></div>
+        <div id="datasetEmpty" class="empty-state" style="display:none">
+            <p>No traces found in Firestore.</p>
+        </div>
+        <div class="pagination-controls" id="datasetPagination" style="display:none"></div>
+        <div id="datasetDetail" style="display:none"></div>
+    </div>
+</div>
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+    <img id="lightboxImg" src="" alt="" />
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

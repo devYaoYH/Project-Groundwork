@@ -1,0 +1,31 @@
+name: sample_experiment
+description: Example experimental design
+
+defaults:
+  game_name: negotiation
+  preset: default
+  enable_cheap_talk: true
+
+batches:
+  - label: baseline
+    count: 1
+    config:
+      preset: competitive_values
+      balance_turn_order: false
+      agents:
+        - {type: llm, model: gpt-5-mini-2025-08-07}
+        - {type: llm, model: gpt-5-mini-2025-08-07}
+      mode: stable
+      goal: ""
+
+  - label: baseline_no_talk
+    count: 1
+    config:
+      preset: competitive_values
+      balance_turn_order: false
+      agents:
+        - {type: llm, model: gpt-5-mini-2025-08-07}
+        - {type: llm, model: gpt-5-mini-2025-08-07}
+      enable_cheap_talk: false
+      mode: stable
+      goal: ""

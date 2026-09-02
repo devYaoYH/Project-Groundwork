@@ -1,0 +1,64 @@
+# Shared agent pool.
+#
+# A logical name here binds to one concrete endpoint. Experiment configs name
+# participants positionally:
+#
+#     participants: [gpt-mini, gpt-mini, haiku]
+#
+# and the binding supplies the model, wire format and credential. That split
+# exists because the same logical agent reaches a different endpoint for
+# different people — Claude through the Anthropic API, through OpenRouter, or
+# through Vertex under ADC.
+#
+# To use your own routing, copy an entry into `agents.local.yaml` at the
+# repository root and change it. That file is gitignored and shadows these
+# defaults entry by entry, so shared configs stay portable.
+#
+# `credential` names the environment variable the binding needs, so a missing
+# key is reported by name before a run starts rather than as a 401 during it.
+# Put the values in .env; never here.
+
+agents:
+  gpt-mini:
+    description: OpenAI platform, small general-purpose model.
+    type: llm
+    model: gpt-5-mini
+    api_format: openai
+    credential: OPENAI_API_KEY
+
+  haiku:
+    description: Anthropic API, Claude Haiku 4.5.
+    type: llm
+    model: claude-haiku-4-5-20251001
+    api_format: anthropic
+    credential: ANTHROPIC_API_KEY
+
+  # --- OpenRouter -------------------------------------------------------
+  # One key reaches many vendors, which makes it the cheap way to explore a
+  # line-up before committing to a provider. Any OpenRouter model id works
+  # here; copy an entry and change `model`. Check the id against OpenRouter's
+  # catalogue first — a wrong id fails at the first call, not at load.
+  ds-flash:
+    description: DeepSeek V4 Flash via OpenRouter. Cheap; good default for playing around.
+    type: llm
+    model: deepseek/deepseek-v4-flash
+    api_format: openai
+    api_base: https://openrouter.ai/api/v1
+    credential: OPENROUTER_API_KEY
+
+  # The same logical Haiku as above, routed through OpenRouter instead of the
+  # Anthropic API. Useful for comparing routes, and an example of why the pool
+  # exists: `haiku` and `haiku-or` differ only in how they are reached.
+  haiku-or:
+    description: Claude Haiku 4.5 via OpenRouter.
+    type: llm
+    model: anthropic/claude-haiku-4.5
+    api_format: openai
+    api_base: https://openrouter.ai/api/v1
+    credential: OPENROUTER_API_KEY
+
+  # Calls no provider, so it needs no credential. Useful for holding a seat in
+  # a line-up while only some positions are model-backed.
+  heuristic:
+    description: Scripted opponent; no model, no spend.
+    type: heuristic

@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv venv
+      - run: >-
+          uv pip install -e a2a-engine -e a2a-judge -e expt-runner
+          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
+      - run: >-
+          uv run pytest a2a-engine/tests a2a-judge/tests expt-runner/tests
+          games/buyer-seller/tests games/calendar/calendar_game/tests games/negotiation/tests local_stack/tests
+        env:
+          PYTHONPATH: games/negotiation
+      - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
+      - name: Verify every reviewed game runtime release
+        run: |
+          for release in games/*/runtime/release.json; do
+            name="$(basename "$(dirname "$(dirname "$release")")")"
+            uv run python scripts/run_game_runtime.py --release "$release" \
+              --smoke-test --storage-path "/tmp/${name}-runtime.db"
+          done
+      - run: python scripts/release_check.py
+      - run: docker compose config
+      - run: |
+          for package in a2a-engine a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
+            uv build "$package" --out-dir dist
+          done
+
+  local-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the cloud-free viewer
+        run: docker compose up --build --detach --wait viewer
+      - name: Run all-game SQLite smoke job
+        run: docker compose run --rm runner
+      - name: Run typed Calendar episode and materialize its post-episode metric
+        run: |
+          docker compose run --rm runner \
+            a2a-run games/calendar/experiments/typed_local_smoke.yaml \
+            --smoke-test --max-parallelism 1 --results-dir /data \
+            --storage-path /data/a2a_traces.db
+          docker compose run --rm runner \
+            python scripts/materialize_metrics.py \
+            --database /data/a2a_traces.db --game calendar
+      - name: Verify trace, OTel, artifact, and leaderboard APIs
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+
+          base = "http://127.0.0.1:8080"
+          health = json.load(urlopen("http://127.0.0.1:8080/api/health"))
+          assert health["ok"] is True
+          assert health["trace_count"] >= 5
+          traces = json.load(urlopen(f"{base}/api/traces"))["traces"]
+          calendar = next(
+              trace for trace in traces
+              if trace["environment_id"] == "calendar.tiny-5a3p"
+          )
+          game_id = calendar["game_id"]
+          trace = json.load(urlopen(f"{base}/api/traces/{game_id}"))
+          assert trace["environment"]["content_sha256"]
+          assert trace["episode"]["id"]
+          artifacts = json.load(urlopen(f"{base}/api/traces/{game_id}/artifacts"))
+          assert any(
+              artifact["kind"] == "derived_metrics.calendar.score_margin"
+              for artifact in artifacts["artifacts"]
+          )
+          otel = json.load(urlopen(f"{base}/api/traces/{game_id}/observability"))
+          assert otel["span_count"] > 0
+          board = json.load(urlopen(f"{base}/api/leaderboards/calendar"))
+          assert board["metadata"]["source"] == "completed_trace_replay"
+          assert board["metadata"]["rating_event_count"] >= 1
+          assert board["leaderboard"]
+          redis_replay = json.load(urlopen(
+              f"{base}/api/streams/a2a%3Arollout%3Acompose-smoke%3Aepisode%3Aword_guess_example.dog.0"
+          ))
+          assert redis_replay["available"] is True
+          assert redis_replay["events"]
+          PY
+      - name: Tear down local stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans

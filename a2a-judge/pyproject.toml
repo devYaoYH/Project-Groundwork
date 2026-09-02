@@ -1,0 +1,19 @@
+[project]
+name = "a2a-judge"
+version = "0.1.0"
+description = "LLM-as-judge analysis layer for a2a-engine traces."
+requires-python = ">=3.11"
+dependencies = [
+    "a2a-engine",
+    "pydantic>=2.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["a2a_judge"]
+
+[tool.uv.sources]
+a2a-engine = { path = "../a2a-engine", editable = true }

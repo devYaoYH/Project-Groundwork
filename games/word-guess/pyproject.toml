@@ -1,0 +1,25 @@
+[project]
+name = "word-guess"
+version = "0.1.0"
+description = "Word-guessing example game for a2a-engine."
+requires-python = ">=3.11"
+dependencies = [
+    "a2a-engine",
+    "expt-runner",
+    "python-dotenv>=1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Lets `a2a-run` discover the game without the caller importing it first.
+[project.entry-points."a2a_engine.games"]
+word_guess = "word_guess"
+
+[tool.hatch.build.targets.wheel]
+packages = ["word_guess"]
+
+[tool.uv.sources]
+a2a-engine = { path = "../../a2a-engine", editable = true }
+expt-runner = { path = "../../expt-runner", editable = true }

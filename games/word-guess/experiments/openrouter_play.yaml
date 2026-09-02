@@ -1,0 +1,19 @@
+name: word_guess_openrouter_play
+description: >
+  Cheap self-play on OpenRouter for poking at the stack. One key, one small
+  model, two seats. Swap either seat by editing `participants` — try
+  [ds-flash, haiku-or] to put two vendors against each other.
+
+participants: [ds-flash, ds-flash]
+
+defaults:
+  game_name: word_guess
+  num_agents: 2
+  max_turns: 8
+
+batches:
+  - label: dog
+    count: 1
+    config:
+      secret_word: dog
+      seed: 1

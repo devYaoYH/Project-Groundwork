@@ -1,0 +1,1924 @@
+{
+  "scenarios": [
+    {
+      "candidate_id": "gen_012",
+      "mc_bucket": 0.5,
+      "oracle_stats": {
+        "v1": 27,
+        "v2": 27,
+        "combined": 54,
+        "collab_max": 29,
+        "mc_ratio": 0.5370370370370371,
+        "base_score_a": 2,
+        "base_score_b": 27,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x2, p1x3",
+        "res_used": {
+          "r1": 5,
+          "r2": 9,
+          "r3": 4
+        },
+        "asc1": 8,
+        "asc2": 19,
+        "best_p1_favor": 29,
+        "best_p2_favor": 29,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": true,
+          "best_score": 29
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 27
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 29
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": false,
+          "best_score": 31
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 3
+              },
+              "reward": 9
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 2,
+                "r2": 3
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 2,
+                "r1": 1
+              },
+              "reward": 1
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 1,
+                "r2": 3
+              },
+              "reward": 9
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 2
+              },
+              "reward": 4
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 27,
+          "v2": 27,
+          "combined": 54,
+          "collab_max": 29,
+          "mc_ratio": 0.5370370370370371,
+          "collab_detail": "p5x2, p1x3"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_053",
+      "mc_bucket": 0.5,
+      "oracle_stats": {
+        "v1": 12,
+        "v2": 12,
+        "combined": 24,
+        "collab_max": 12,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 12,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x2",
+        "res_used": {
+          "r1": 6,
+          "r2": 0,
+          "r3": 4
+        },
+        "asc1": 6,
+        "asc2": 5,
+        "best_p1_favor": 12,
+        "best_p2_favor": 12,
+        "swap_fairness": 1,
+        "optimal_paths": 3,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 12
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 12
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 12
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r2": 5
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 4,
+                "r3": 3
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 5
+              },
+              "reward": 6
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 3,
+                "r3": 4
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 2,
+                "r2": 5
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 3,
+                "r3": 2
+              },
+              "reward": 6
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 12,
+          "v2": 12,
+          "combined": 24,
+          "collab_max": 12,
+          "mc_ratio": 0.5,
+          "collab_detail": "p5x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_062",
+      "mc_bucket": 0.5,
+      "oracle_stats": {
+        "v1": 18,
+        "v2": 18,
+        "combined": 36,
+        "collab_max": 19,
+        "mc_ratio": 0.5277777777777778,
+        "base_score_a": 1,
+        "base_score_b": 18,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x1, p4x2",
+        "res_used": {
+          "r1": 2,
+          "r2": 10,
+          "r3": 5
+        },
+        "asc1": 6,
+        "asc2": 6,
+        "best_p1_favor": 19,
+        "best_p2_favor": 19,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 1,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.5
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 18
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 19
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 19
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 6
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 5
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 1,
+                "r1": 5
+              },
+              "reward": 9
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 1,
+                "r1": 4
+              },
+              "reward": 7
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 3,
+                "r1": 6
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 5,
+                "r1": 1
+              },
+              "reward": 9
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 18,
+          "v2": 18,
+          "combined": 36,
+          "collab_max": 19,
+          "mc_ratio": 0.5277777777777778,
+          "collab_detail": "p3x1, p4x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_104",
+      "mc_bucket": 0.5,
+      "oracle_stats": {
+        "v1": 20,
+        "v2": 20,
+        "combined": 40,
+        "collab_max": 21,
+        "mc_ratio": 0.525,
+        "base_score_a": 7,
+        "base_score_b": 14,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x1, p2x7",
+        "res_used": {
+          "r1": 10,
+          "r2": 0,
+          "r3": 3
+        },
+        "asc1": 12,
+        "asc2": 17,
+        "best_p1_favor": 21,
+        "best_p2_favor": 21,
+        "swap_fairness": 1,
+        "optimal_paths": 8,
+        "solo_overlap": 1,
+        "collab_divergence": 0.25,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 21
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 21
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 21
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 2
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 3,
+                "r1": 3
+              },
+              "reward": 7
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 6,
+                "r2": 6
+              },
+              "reward": 2
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 4,
+                "r3": 3
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 1
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 4,
+                "r1": 2
+              },
+              "reward": 5
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 20,
+          "v2": 20,
+          "combined": 40,
+          "collab_max": 21,
+          "mc_ratio": 0.525,
+          "collab_detail": "p3x1, p2x7"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_001",
+      "mc_bucket": 0.8,
+      "oracle_stats": {
+        "v1": 15,
+        "v2": 15,
+        "combined": 30,
+        "collab_max": 25,
+        "mc_ratio": 0.8333333333333334,
+        "base_score_a": 10,
+        "base_score_b": 15,
+        "synergy_bonus": 0,
+        "collab_detail": "p4x2, p3x1, p5x1",
+        "res_used": {
+          "r1": 6,
+          "r2": 4,
+          "r3": 6
+        },
+        "asc1": 6,
+        "asc2": 6,
+        "best_p1_favor": 25,
+        "best_p2_favor": 25,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.3333333333333333,
+        "collab_divergence": 0,
+        "negotiation_pressure": 0
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": true,
+          "best_score": 23
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 25
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 25
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": false,
+          "best_score": 25
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 2,
+                "r2": 6
+              },
+              "reward": 8
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 5,
+                "r1": 2
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 1,
+                "r2": 2
+              },
+              "reward": 5
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 2,
+                "r3": 2
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 4
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 6
+              },
+              "reward": 10
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 15,
+          "v2": 15,
+          "combined": 30,
+          "collab_max": 25,
+          "mc_ratio": 0.8333333333333334,
+          "collab_detail": "p4x2, p3x1, p5x1"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_006",
+      "mc_bucket": 0.8,
+      "oracle_stats": {
+        "v1": 30,
+        "v2": 30,
+        "combined": 60,
+        "collab_max": 48,
+        "mc_ratio": 0.8,
+        "base_score_a": 24,
+        "base_score_b": 24,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x4, p1x1, p3x3",
+        "res_used": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 0
+        },
+        "asc1": 16,
+        "asc2": 16,
+        "best_p1_favor": 48,
+        "best_p2_favor": 48,
+        "swap_fairness": 1,
+        "optimal_paths": 5,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0,
+        "negotiation_pressure": 0
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 60
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 1,
+                "r2": 2
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 5,
+                "r1": 3
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 2
+              },
+              "reward": 6
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 2,
+                "r1": 1
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 3
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 5,
+                "r1": 1
+              },
+              "reward": 1
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 30,
+          "v2": 30,
+          "combined": 60,
+          "collab_max": 48,
+          "mc_ratio": 0.8,
+          "collab_detail": "p5x4, p1x1, p3x3"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_017",
+      "mc_bucket": 0.8,
+      "oracle_stats": {
+        "v1": 9,
+        "v2": 9,
+        "combined": 18,
+        "collab_max": 15,
+        "mc_ratio": 0.8333333333333334,
+        "base_score_a": 6,
+        "base_score_b": 9,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x1, p1x3",
+        "res_used": {
+          "r1": 0,
+          "r2": 9,
+          "r3": 5
+        },
+        "asc1": 6,
+        "asc2": 7,
+        "best_p1_favor": 15,
+        "best_p2_favor": 15,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 15
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 15
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 15
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 1,
+                "r3": 3
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 1,
+                "r2": 3
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 5
+              },
+              "reward": 6
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 3
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 1,
+                "r3": 4
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 3,
+                "r1": 4
+              },
+              "reward": 6
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 9,
+          "v2": 9,
+          "combined": 18,
+          "collab_max": 15,
+          "mc_ratio": 0.8333333333333334,
+          "collab_detail": "p3x1, p1x3"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_021",
+      "mc_bucket": 0.8,
+      "oracle_stats": {
+        "v1": 18,
+        "v2": 18,
+        "combined": 36,
+        "collab_max": 30,
+        "mc_ratio": 0.8333333333333334,
+        "base_score_a": 12,
+        "base_score_b": 18,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x2, p2x3",
+        "res_used": {
+          "r1": 0,
+          "r2": 9,
+          "r3": 6
+        },
+        "asc1": 20,
+        "asc2": 9,
+        "best_p1_favor": 30,
+        "best_p2_favor": 30,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 30
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 30
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 30
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 2
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 1,
+                "r1": 3
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 3
+              },
+              "reward": 6
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r1": 3
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 3
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 2,
+                "r2": 4
+              },
+              "reward": 5
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 18,
+          "v2": 18,
+          "combined": 36,
+          "collab_max": 30,
+          "mc_ratio": 0.8333333333333334,
+          "collab_detail": "p5x2, p2x3"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_022",
+      "mc_bucket": 0.8,
+      "oracle_stats": {
+        "v1": 12,
+        "v2": 12,
+        "combined": 24,
+        "collab_max": 20,
+        "mc_ratio": 0.8333333333333334,
+        "base_score_a": 8,
+        "base_score_b": 12,
+        "synergy_bonus": 0,
+        "collab_detail": "p1x1, p5x2",
+        "res_used": {
+          "r1": 6,
+          "r2": 0,
+          "r3": 6
+        },
+        "asc1": 8,
+        "asc2": 7,
+        "best_p1_favor": 20,
+        "best_p2_favor": 20,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 6
+              },
+              "reward": 8
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 4
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 2,
+                "r3": 1
+              },
+              "reward": 4
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 2,
+                "r2": 6
+              },
+              "reward": 8
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 2,
+                "r3": 2
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 3
+              },
+              "reward": 6
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 12,
+          "v2": 12,
+          "combined": 24,
+          "collab_max": 20,
+          "mc_ratio": 0.8333333333333334,
+          "collab_detail": "p1x1, p5x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_000",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 6,
+        "v2": 6,
+        "combined": 12,
+        "collab_max": 12,
+        "mc_ratio": 1,
+        "base_score_a": 6,
+        "base_score_b": 6,
+        "synergy_bonus": 0,
+        "collab_detail": "p0x1, p1x1, p3x2",
+        "res_used": {
+          "r1": 6,
+          "r2": 8,
+          "r3": 6
+        },
+        "asc1": 6,
+        "asc2": 5,
+        "best_p1_favor": 12,
+        "best_p2_favor": 12,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 1,
+        "collab_divergence": 0.33333333333333337,
+        "negotiation_pressure": 0.33333333333333337
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 11
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 11
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 12
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 11
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r1": 1
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 1,
+                "r1": 5
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r2": 5,
+                "r3": 1
+              },
+              "reward": 1
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 4,
+                "r1": 4
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 4,
+                "r3": 1
+              },
+              "reward": 3
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 3,
+                "r3": 3
+              },
+              "reward": 6
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 6,
+          "v2": 6,
+          "combined": 12,
+          "collab_max": 12,
+          "mc_ratio": 1,
+          "collab_detail": "p0x1, p1x1, p3x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_001",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 24,
+        "v2": 24,
+        "combined": 48,
+        "collab_max": 48,
+        "mc_ratio": 1,
+        "base_score_a": 24,
+        "base_score_b": 24,
+        "synergy_bonus": 0,
+        "collab_detail": "p4x6, p2x1, p3x2",
+        "res_used": {
+          "r1": 0,
+          "r2": 10,
+          "r3": 6
+        },
+        "asc1": 14,
+        "asc2": 14,
+        "best_p1_favor": 48,
+        "best_p2_favor": 48,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0,
+        "collab_divergence": 0,
+        "negotiation_pressure": 0
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 48
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 46
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 5,
+                "r3": 3
+              },
+              "reward": 7
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 1,
+                "r3": 2
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 1
+              },
+              "reward": 4
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 2
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 4
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 1,
+                "r1": 5
+              },
+              "reward": 8
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 24,
+          "v2": 24,
+          "combined": 48,
+          "collab_max": 48,
+          "mc_ratio": 1,
+          "collab_detail": "p4x6, p2x1, p3x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_002",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 10,
+        "v2": 10,
+        "combined": 20,
+        "collab_max": 20,
+        "mc_ratio": 1,
+        "base_score_a": 10,
+        "base_score_b": 10,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x1, p0x1",
+        "res_used": {
+          "r1": 1,
+          "r2": 3,
+          "r3": 6
+        },
+        "asc1": 4,
+        "asc2": 5,
+        "best_p1_favor": 20,
+        "best_p2_favor": 20,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 1,
+        "collab_divergence": 0.33333333333333337,
+        "negotiation_pressure": 0.33333333333333337
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 35
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 20
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r2": 4
+              },
+              "reward": 1
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 1,
+                "r1": 6
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 1,
+                "r3": 3
+              },
+              "reward": 10
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r2": 3
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 2,
+                "r1": 3
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 6
+              },
+              "reward": 8
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 10,
+          "v2": 10,
+          "combined": 20,
+          "collab_max": 20,
+          "mc_ratio": 1,
+          "collab_detail": "p5x1, p0x1"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_006",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 20,
+        "v2": 20,
+        "combined": 40,
+        "collab_max": 40,
+        "mc_ratio": 1,
+        "base_score_a": 20,
+        "base_score_b": 20,
+        "synergy_bonus": 0,
+        "collab_detail": "p2x10, p0x5",
+        "res_used": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 0
+        },
+        "asc1": 32,
+        "asc2": 12,
+        "best_p1_favor": 40,
+        "best_p2_favor": 40,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 42
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 40
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 40
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 40
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 2
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 1
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 6,
+                "r2": 3
+              },
+              "reward": 9
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 2
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r2": 2,
+                "r3": 1
+              },
+              "reward": 2
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 1,
+                "r2": 3
+              },
+              "reward": 10
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 20,
+          "v2": 20,
+          "combined": 40,
+          "collab_max": 40,
+          "mc_ratio": 1,
+          "collab_detail": "p2x10, p0x5"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_010",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 8,
+        "v2": 8,
+        "combined": 16,
+        "collab_max": 16,
+        "mc_ratio": 1,
+        "base_score_a": 8,
+        "base_score_b": 8,
+        "synergy_bonus": 0,
+        "collab_detail": "p2x1, p3x2",
+        "res_used": {
+          "r1": 0,
+          "r2": 10,
+          "r3": 3
+        },
+        "asc1": 4,
+        "asc2": 7,
+        "best_p1_favor": 16,
+        "best_p2_favor": 16,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 24
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 16
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 16
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 16
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r1": 5,
+                "r2": 4
+              },
+              "reward": 8
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 4,
+                "r2": 2
+              },
+              "reward": 6
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 3,
+                "r2": 2
+              },
+              "reward": 8
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r2": 4
+              },
+              "reward": 4
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r3": 6
+              },
+              "reward": 8
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r1": 2,
+                "r2": 3
+              },
+              "reward": 2
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 8,
+          "v2": 8,
+          "combined": 16,
+          "collab_max": 16,
+          "mc_ratio": 1,
+          "collab_detail": "p2x1, p3x2"
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_014",
+      "mc_bucket": 1.0,
+      "oracle_stats": {
+        "v1": 30,
+        "v2": 30,
+        "combined": 60,
+        "collab_max": 60,
+        "mc_ratio": 1,
+        "base_score_a": 30,
+        "base_score_b": 30,
+        "synergy_bonus": 0,
+        "collab_detail": "p1x2, p2x1, p3x3",
+        "res_used": {
+          "r1": 7,
+          "r2": 6,
+          "r3": 6
+        },
+        "asc1": 8,
+        "asc2": 10,
+        "best_p1_favor": 60,
+        "best_p2_favor": 60,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 1,
+        "collab_divergence": 0.33333333333333337,
+        "negotiation_pressure": 0.33333333333333337
+      },
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "clean": false,
+          "best_score": 70
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "clean": true,
+          "best_score": 60
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "clean": true,
+          "best_score": 60
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "clean": true,
+          "best_score": 60
+        }
+      },
+      "game_config": {
+        "resource_types": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "resource_supply": {
+          "r1": 10,
+          "r2": 10,
+          "r3": 6
+        },
+        "resource_costs": {
+          "r1": 1.0,
+          "r2": 1.5,
+          "r3": 3.0
+        },
+        "agent_budget": 18.0,
+        "max_resource_types_per_turn": 2,
+        "agent_projects": [
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 3,
+                "r2": 1
+              },
+              "reward": 5
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 3
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 3,
+                "r1": 1
+              },
+              "reward": 10
+            }
+          ],
+          [
+            {
+              "name": "project_a",
+              "requirements": {
+                "r3": 1,
+                "r2": 2
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_b",
+              "requirements": {
+                "r1": 3,
+                "r3": 1
+              },
+              "reward": 10
+            },
+            {
+              "name": "project_c",
+              "requirements": {
+                "r3": 4
+              },
+              "reward": 6
+            }
+          ]
+        ],
+        "oracle_stats": {
+          "v1": 30,
+          "v2": 30,
+          "combined": 60,
+          "collab_max": 60,
+          "mc_ratio": 1,
+          "collab_detail": "p1x2, p2x1, p3x3"
+        }
+      }
+    }
+  ],
+  "count": 15
+}

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Negotiation stream replay</title>
+<base href="/game-assets/negotiation/webapp/static/">
+<link rel="stylesheet" href="styles/base.css">
+<link rel="stylesheet" href="styles/forms.css">
+<link rel="stylesheet" href="styles/game.css">
+<style>
+  .replay-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+                padding:12px 16px; border-bottom:1px solid rgba(128,128,128,.3); }
+  .replay-bar input { flex:1 1 380px; padding:7px 9px; font-family:ui-monospace,monospace; font-size:12px; }
+  .replay-bar button { padding:7px 13px; }
+  .replay-note { padding:8px 16px; font-size:13px; }
+  .replay-note.partial { color:#b45309; font-weight:600; }
+  main.replay { max-width:1100px; margin:0 auto; }
+  body.embedded main.replay { max-width:none; padding:0 12px; }
+  /* `hidden` alone loses to the display rules above, which is exactly how a
+     chrome-free embed silently keeps its chrome. */
+  body.embedded .replay-bar, body.embedded .replay-note { display:none; }
+</style>
+</head>
+<body data-game="negotiation">
+<main class="replay">
+  <div class="replay-bar" id="replayBar">
+    <a href="/control.html">&larr; Control plane</a>
+    <input id="stream" placeholder="a2a:rollout:&hellip;:episode:&hellip;">
+    <button id="load">Load</button>
+    <button id="step">Step</button>
+    <button id="play">Play</button>
+    <button id="reset">Reset</button>
+  </div>
+  <p id="status" class="replay-note"></p>
+<div id="liveView" style="display:block">
+            <div class="thinking-notice" id="thinkingNotice" style="display:none">
+                Dashed italic bubbles show each agent's private reasoning — this text is <strong>not</strong> visible to the other agent.
+            </div>
+            <div class="game-header">
+                <h2>Game <span id="liveGameId"></span></h2>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button class="stop-btn" id="stopBtn" hidden>Stop Game</button>
+                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download game events as JSONL">Export Log</button>
+                    <span class="mode-badge" id="liveMode"></span>
+                </div>
+            </div>
+            <div class="scoreboard">
+                <div class="score-card agent-a">
+                    <div class="label">Agent A — Cumulative Reward</div>
+                    <div class="value" id="liveScoreA">0</div>
+                    <div class="round-dots" id="liveDotsA"></div>
+                </div>
+                <div class="score-card agent-b">
+                    <div class="label">Agent B — Cumulative Reward</div>
+                    <div class="value" id="liveScoreB">0</div>
+                    <div class="round-dots" id="liveDotsB"></div>
+                </div>
+            </div>
+            <div id="liveStatus" style="margin-bottom:16px;font-size:12px;color:var(--text-dim)">
+                <span class="spinner"></span> Running...
+            </div>
+            <div id="humanSystemPrompt" style="display:none"></div>
+            <div id="liveRounds"></div>
+            <details class="event-log-details">
+                <summary class="event-log-toggle">
+                    <svg class="summary-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                    Event Log
+                </summary>
+                <div class="event-log" id="eventLog"></div>
+            </details>
+            <div class="human-input-bar" id="humanInputBar" style="display:none">
+                <div class="human-prompt" id="humanPrompt">Your turn</div>
+                <div class="human-project-brief" id="humanProjectBrief" style="display:none"></div>
+                <!-- Chat input (cheap talk) -->
+                <div class="human-chat-section" id="humanChatSection">
+                    <div class="human-input-row">
+                        <input type="text" id="humanInput" placeholder="Type your message..." autocomplete="off" />
+                        <button class="primary" id="humanSendBtn" onclick="sendHumanInput()">Send</button>
+                    </div>
+                </div>
+                <!-- Order panel (dynamically populated) -->
+                <div class="human-order-panel" id="humanOrderPanel" style="display:none">
+                    <div class="project-run-controls" id="projectRunControls"></div>
+                    <div class="order-sliders" id="orderSliders"></div>
+                    <div class="order-summary" id="orderSummary"></div>
+                    <div class="order-error" id="orderError" style="display:none"></div>
+                    <div class="order-actions">
+                        <button class="primary" id="orderSubmitBtn" onclick="submitOrder()">Submit Order</button>
+                    </div>
+                </div>
+                <!-- Toggle between chat and order during cheap talk -->
+                <div class="order-toggle-row" id="orderToggleRow" style="display:none">
+                    <button class="secondary order-toggle-btn" onclick="toggleOrderMode(true)">Make Early Decision</button>
+                </div>
+                <!-- Back to chat button (shown when order panel is open during cheap talk) -->
+                <div class="order-toggle-row" id="orderBackRow" style="display:none">
+                    <button class="secondary order-toggle-btn" onclick="toggleOrderMode(false)">Back to Chat</button>
+                </div>
+            </div>
+        </div>
+</main>
+<script type="module">
+// Negotiation's own live renderer, driven from a recorded Redis stream rather
+// than the polling loop it was written for. Reusing `handleEvent` verbatim is
+// the point: replay shows the same visualisation the game shows while running.
+import { handleEvent } from "./js/live.js";
+
+const $ = id => document.getElementById(id);
+let events = [];
+let cursor = 0;
+let timer = null;
+
+function setStatus(text, partial = false) {
+  const el = $("status");
+  el.textContent = text;
+  el.classList.toggle("partial", partial);
+}
+
+function resetView() {
+  cursor = 0;
+  $("liveRounds").innerHTML = "";
+  $("eventLog").innerHTML = "";
+  $("liveScoreA").textContent = "0";
+  $("liveScoreB").textContent = "0";
+  $("liveDotsA").innerHTML = "";
+  $("liveDotsB").innerHTML = "";
+}
+
+function step() {
+  if (cursor >= events.length) { stop(); return false; }
+  handleEvent(events[cursor++]);
+  $("liveStatus").textContent = `${cursor}/${events.length} events`;
+  return true;
+}
+
+function stop() { clearInterval(timer); timer = null; $("play").textContent = "Play"; }
+
+function play() {
+  if (timer) { stop(); return; }
+  $("play").textContent = "Pause";
+  timer = setInterval(() => { if (!step()) stop(); }, 220);
+}
+
+async function load(stream) {
+  if (!stream) { setStatus("Enter a stream id."); return; }
+  stop();
+  try {
+    const response = await fetch(`/api/streams/${encodeURIComponent(stream)}/trace`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    events = payload.events || [];
+    resetView();
+    $("liveGameId").textContent = payload.game_id || stream;
+    $("liveMode").textContent = payload.config?.mode || "";
+    const { partial, event_count } = payload.projection;
+    setStatus(
+      partial
+        ? `Episode still running — ${event_count} events so far. Replaying what exists.`
+        : `Episode complete — ${event_count} events.`,
+      partial,
+    );
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+$("load").addEventListener("click", () => load($("stream").value.trim()));
+$("step").addEventListener("click", step);
+$("play").addEventListener("click", play);
+$("reset").addEventListener("click", () => { stop(); resetView(); });
+
+const params = new URLSearchParams(location.search);
+
+// Inside the shared replay shell the surrounding controls and status line are
+// already provided, so the page contributes only the game's own rendering.
+if (params.get("embed") === "1") {
+  document.body.classList.add("embedded");
+  $("replayBar").hidden = true;
+  $("status").hidden = true;
+}
+
+const initial = params.get("stream");
+if (initial) { $("stream").value = initial; load(initial).then(() => { if (params.get("embed") === "1") play(); }); }
+</script>
+</body>
+</html>

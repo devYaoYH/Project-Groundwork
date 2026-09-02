@@ -1,0 +1,68 @@
+name: projects_study_maximize_joint_009
+description: >
+  Directional 2x2 check: maximize_joint goal-prompt (always on) × full_transparency
+  (on/off), on the two lowest opt-100% cells from the transparency study —
+  stable/fixed/mc=0.5 (12.5% optimal) and stable/rotate/mc=0.8 (40.0% optimal).
+  N=6 per cell for a quick signal on whether the bottleneck is incentive framing,
+  information access, or true coordination overhead.
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+# ── stable / fixed / mc=0.5 ─────────────────────────────────────────────────
+- label: qwen-gpt5m_stable_fixed_joint_mc05
+  count: 6
+  config:
+    mode: stable
+    rotate_projects: false
+    maximize_joint: true
+    full_transparency: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_stable_fixed_joint_transp_mc05
+  count: 6
+  config:
+    mode: stable
+    rotate_projects: false
+    maximize_joint: true
+    full_transparency: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+# ── stable / rotate / mc=0.8 ────────────────────────────────────────────────
+- label: qwen-gpt5m_stable_rotate_joint_mc08
+  count: 6
+  config:
+    mode: stable
+    rotate_projects: true
+    maximize_joint: true
+    full_transparency: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_stable_rotate_joint_transp_mc08
+  count: 6
+  config:
+    mode: stable
+    rotate_projects: true
+    maximize_joint: true
+    full_transparency: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini

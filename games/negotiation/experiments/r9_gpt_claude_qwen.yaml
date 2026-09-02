@@ -1,0 +1,403 @@
+name: projects_study_with_run_009
+description: 'V2 multi-model negotiation study: 3 models × 4 paradigms × 3 MC ratios
+  × 2 speaker swap = 72 games'
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: sonnet_stable_fixed_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_stable_fixed_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_stable_fixed_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_stable_rotate_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_stable_rotate_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_stable_rotate_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_fixed_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_fixed_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_fixed_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_rotate_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_rotate_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_shifting_rotate_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: gpt5m_stable_fixed_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_stable_fixed_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_stable_fixed_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_stable_rotate_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_stable_rotate_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_stable_rotate_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_fixed_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_fixed_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_fixed_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_rotate_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_rotate_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_shifting_rotate_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: qwen35f_stable_fixed_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_stable_fixed_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_stable_fixed_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_stable_rotate_mc05
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_stable_rotate_mc08
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_stable_rotate_mc10
+  count: 8
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_fixed_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_fixed_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_fixed_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_rotate_mc05
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_rotate_mc08
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_shifting_rotate_mc10
+  count: 8
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23

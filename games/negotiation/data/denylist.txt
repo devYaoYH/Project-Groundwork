@@ -1,0 +1,35 @@
+# Game IDs excluded from analysis.
+# One game_id prefix per line. Lines starting with # are comments.
+# Format: <game_id_prefix> <reason>
+#
+# To invalidate a game, add its ID (or prefix) here and re-run analysis.
+
+# GPT-5 Mini shifting_fixed_mc05 — massive heuristic fallback rates (11-24 per game)
+ff13f5c9 heuristic_fallback:24/4rounds
+45790742 heuristic_fallback:23/4rounds
+532a9a03 heuristic_fallback:15/4rounds
+67966baf heuristic_fallback:11/4rounds
+d24af0ee heuristic_fallback:3/4rounds
+
+# Qwen jointgoal run bc22a498 — OpenRouter/Alibaba 429 retry exhausted,
+# causing heuristic fallback contamination.
+2c0aaedb bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+3341954f bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+44e29120 bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+5ae89895 bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+6b2de40e bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+876d5256 bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+87f5e376 bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+b28eb728 bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+ec3e3c5a bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+ecfdc92d bc22a498 qwen35f_jointgoal_stable_fixed_mc05 api_failure_retry_exhausted
+2f0d3fa9 bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+4aa0ef19 bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+650ab469 bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+77fb47fb bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+909da01d bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+9361c63a bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+a5272fe1 bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+a8e1c49e bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+ae9c767c bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted
+f154575f bc22a498 qwen35f_jointgoal_stable_fixed_mc08 api_failure_retry_exhausted

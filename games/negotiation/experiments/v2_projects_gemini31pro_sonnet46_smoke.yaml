@@ -1,0 +1,33 @@
+name: v2_projects_gemini31pro_sonnet45_smoke
+description: 'Tiny smoke test for v2 projects using Gemini 3.1 Pro vs Claude Sonnet 4.5 through Vertex AI ADC.'
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: gemini31pro-sonnet45_stable_rotate_share_named_tom_mc08_smoke
+  count: 1
+  config:
+    num_rounds: 2
+    cheap_talk_turns: 5
+    mode: stable
+    balance_turn_order: false
+    consent: true
+    rotate_projects: true
+    enable_cheap_talk: true
+    share_projects: false
+    named_projects: true
+    think_about_opponent: false
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: publishers/google/models/gemini-3.1-pro-preview
+      api_format: vertexai
+      vertex_adc_file: ${A2A_VERTEX_GEMINI_ADC_FILE}
+      gcp_project: ${A2A_VERTEX_GEMINI_PROJECT}
+      gcp_location: global
+    - type: llm
+      model: claude-sonnet-4-5
+      api_format: vertexai_anthropic
+      vertex_adc_file: ${A2A_VERTEX_ANTHROPIC_ADC_FILE}
+      gcp_project: ${A2A_VERTEX_ANTHROPIC_PROJECT}
+      gcp_location: global

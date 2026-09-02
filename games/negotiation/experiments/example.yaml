@@ -1,0 +1,25 @@
+name: sample_experiment
+description: Example experimental design
+
+defaults:
+  game_name: negotiation
+  preset: default
+  enable_cheap_talk: true
+
+batches:
+  - label: baseline
+    count: 1
+    config:
+      preset: competitive_values
+      balance_turn_order: false
+      mode: stable
+      goal: ""
+
+  - label: baseline_no_talk
+    count: 1
+    config:
+      preset: competitive_values
+      balance_turn_order: false
+      enable_cheap_talk: false
+      mode: stable
+      goal: ""

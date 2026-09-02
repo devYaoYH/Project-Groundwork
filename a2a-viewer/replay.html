@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Episode replay</title>
+<link rel="stylesheet" href="css/styles.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--border); flex: none;
+  }
+  .topbar a { font-size: 13px; white-space: nowrap; }
+  .topbar .game {
+    font: 600 11px/1 ui-sans-serif, system-ui; letter-spacing: .08em;
+    text-transform: uppercase; color: #fff; background: var(--accent);
+    padding: 4px 8px; border-radius: 3px;
+  }
+  .topbar input {
+    flex: 1 1 320px; min-width: 0; padding: 6px 8px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
+  }
+  .topbar button { font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--panel); }
+  .topbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .split { flex: 1; display: flex; min-height: 0; }
+
+  .side {
+    width: 380px; flex: none; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); background: var(--panel); min-width: 0;
+  }
+  .split.collapsed .side { width: 0; border-right: 0; overflow: hidden; }
+
+  .handle {
+    flex: none; width: 18px; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); border-right: 1px solid var(--border);
+    cursor: pointer; user-select: none; color: var(--muted); font-size: 11px;
+  }
+  .handle:hover { color: var(--fg); background: var(--border); }
+
+  .side-head {
+    padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .side-head h2 {
+    margin: 0; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--muted);
+  }
+  .stat { font-size: 13px; }
+  .stat.partial { color: #b45309; font-weight: 600; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .controls label { display: flex; align-items: center; gap: 5px; }
+
+  .log { flex: 1; overflow: auto; padding: 6px 0; min-height: 0; }
+  .row {
+    display: grid; grid-template-columns: 34px 1fr; gap: 8px;
+    padding: 5px 14px; border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row .n { color: var(--muted); text-align: right; }
+  .row .t { color: var(--accent); font-weight: 600; }
+  .row .d { color: var(--muted); overflow-wrap: anywhere; }
+  .row.fresh { background: #eef6ff; }
+
+  .stage { flex: 1; min-width: 0; background: var(--bg); position: relative; }
+  .stage iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .stage .empty {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--muted); font-size: 14px; padding: 24px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="control.html">← Control plane</a>
+  <span class="game" id="game">—</span>
+  <input id="stream" placeholder="a2a:rollout:…:episode:…" spellcheck="false">
+  <button class="primary" id="load">Load</button>
+</div>
+
+<div class="split" id="split">
+  <aside class="side">
+    <div class="side-head">
+      <h2>Episode</h2>
+      <p class="stat" id="stat">No stream loaded.</p>
+      <div class="controls">
+        <label><input type="checkbox" id="follow"> Follow live</label>
+        <button id="refresh">Refresh</button>
+      </div>
+    </div>
+    <div class="log" id="log"></div>
+  </aside>
+
+  <div class="handle" id="handle" role="button" tabindex="0"
+       aria-label="Collapse event panel" title="Collapse event panel">‹</div>
+
+  <div class="stage" id="stage">
+    <div class="empty" id="empty">Load a stream to replay it in this game's viewer.</div>
+  </div>
+</div>
+
+<script type="module" src="js/replay.js"></script>
+</body>
+</html>

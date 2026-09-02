@@ -1,0 +1,906 @@
+{
+  "metadata": {
+    "generated_at": "2026-03-30T03:31:00.979577+00:00",
+    "oracle_models": [
+      "claude-sonnet-4-5",
+      "gpt-5-mini",
+      "qwen/qwen3.5-flash-02-23"
+    ],
+    "resource_costs": {
+      "r1": 1.0,
+      "r2": 1.5,
+      "r3": 3.0
+    },
+    "resource_supply": {
+      "r1": 10,
+      "r2": 10,
+      "r3": 6
+    },
+    "resource_types": [
+      "r1",
+      "r2",
+      "r3"
+    ],
+    "agent_budget": 18.0,
+    "pass_threshold": 0.9,
+    "k": 1,
+    "max_resource_types": 2,
+    "mc_buckets": [
+      0.5
+    ],
+    "candidates_per_bucket": 50
+  },
+  "scenarios": [
+    {
+      "candidate_id": "gen_012",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 3
+            },
+            "reward": 9
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r3": 2,
+              "r2": 3
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 2,
+              "r1": 1
+            },
+            "reward": 1
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r3": 3
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 1,
+              "r2": 3
+            },
+            "reward": 9
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r2": 2
+            },
+            "reward": 4
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 27,
+        "v2": 27,
+        "combined": 54,
+        "collab_max": 29,
+        "mc_ratio": 0.5370370370370371,
+        "base_score_a": 2,
+        "base_score_b": 27,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x2, p1x3",
+        "res_used": {
+          "r1": 5,
+          "r2": 9,
+          "r3": 4
+        },
+        "asc1": 8,
+        "asc2": 19,
+        "best_p1_favor": 29,
+        "best_p2_favor": 29,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_log_file": "oracle_logs/gen_012.json",
+      "oracle_summary": {
+        "claude-haiku-4-5-20251001": {
+          "passed": true,
+          "best_score": 29
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 27
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 29
+        },
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 31
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_051",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 5,
+              "r1": 4
+            },
+            "reward": 6
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 4,
+              "r3": 1
+            },
+            "reward": 6
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r2": 3,
+              "r1": 5
+            },
+            "reward": 3
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 4,
+              "r1": 6
+            },
+            "reward": 6
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r3": 6
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 4,
+              "r2": 1
+            },
+            "reward": 6
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 12,
+        "v2": 12,
+        "combined": 24,
+        "collab_max": 12,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 12,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x2",
+        "res_used": {
+          "r1": 8,
+          "r2": 2,
+          "r3": 0
+        },
+        "asc1": 5,
+        "asc2": 6,
+        "best_p1_favor": 12,
+        "best_p2_favor": 12,
+        "swap_fairness": 1,
+        "optimal_paths": 7,
+        "solo_overlap": 0.3333333333333333,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.16666666666666666
+      },
+      "oracle_log_file": "oracle_logs/gen_051.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 18
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 12
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 12
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_052",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r1": 5,
+              "r3": 3
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 2,
+              "r3": 3
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 4,
+              "r2": 4
+            },
+            "reward": 3
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r3": 5,
+              "r1": 2
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 6,
+              "r2": 3
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 4
+            },
+            "reward": 3
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 4,
+        "v2": 4,
+        "combined": 8,
+        "collab_max": 4,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 4,
+        "synergy_bonus": 0,
+        "collab_detail": "p0x1",
+        "res_used": {
+          "r1": 2,
+          "r2": 0,
+          "r3": 5
+        },
+        "asc1": 4,
+        "asc2": 4,
+        "best_p1_favor": 4,
+        "best_p2_favor": 4,
+        "swap_fairness": 1,
+        "optimal_paths": 4,
+        "solo_overlap": 1,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.5
+      },
+      "oracle_log_file": "oracle_logs/gen_052.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 8
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 4
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 4
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_053",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r3": 3,
+              "r2": 5
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 4,
+              "r3": 3
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 5
+            },
+            "reward": 6
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r1": 3,
+              "r3": 4
+            },
+            "reward": 2
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 2,
+              "r2": 5
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 3,
+              "r3": 2
+            },
+            "reward": 6
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 12,
+        "v2": 12,
+        "combined": 24,
+        "collab_max": 12,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 12,
+        "synergy_bonus": 0,
+        "collab_detail": "p5x2",
+        "res_used": {
+          "r1": 6,
+          "r2": 0,
+          "r3": 4
+        },
+        "asc1": 6,
+        "asc2": 5,
+        "best_p1_favor": 12,
+        "best_p2_favor": 12,
+        "swap_fairness": 1,
+        "optimal_paths": 3,
+        "solo_overlap": 0.5,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_log_file": "oracle_logs/gen_053.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 12
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 12
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 12
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_058",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 5
+            },
+            "reward": 6
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 6,
+              "r3": 1
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 5
+            },
+            "reward": 6
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r3": 2,
+              "r1": 6
+            },
+            "reward": 5
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r2": 2,
+              "r1": 3
+            },
+            "reward": 6
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 5,
+              "r3": 1
+            },
+            "reward": 1
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 18,
+        "v2": 18,
+        "combined": 36,
+        "collab_max": 18,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 18,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x3",
+        "res_used": {
+          "r1": 9,
+          "r2": 6,
+          "r3": 0
+        },
+        "asc1": 8,
+        "asc2": 7,
+        "best_p1_favor": 18,
+        "best_p2_favor": 18,
+        "swap_fairness": 1,
+        "optimal_paths": 4,
+        "solo_overlap": 1,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.5
+      },
+      "oracle_log_file": "oracle_logs/gen_058.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 19
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 18
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 18
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_062",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 6
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r3": 5
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r2": 1,
+              "r1": 5
+            },
+            "reward": 9
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r3": 1,
+              "r1": 4
+            },
+            "reward": 7
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r2": 3,
+              "r1": 6
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r2": 5,
+              "r1": 1
+            },
+            "reward": 9
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 18,
+        "v2": 18,
+        "combined": 36,
+        "collab_max": 19,
+        "mc_ratio": 0.5277777777777778,
+        "base_score_a": 1,
+        "base_score_b": 18,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x1, p4x2",
+        "res_used": {
+          "r1": 2,
+          "r2": 10,
+          "r3": 5
+        },
+        "asc1": 6,
+        "asc2": 6,
+        "best_p1_favor": 19,
+        "best_p2_favor": 19,
+        "swap_fairness": 1,
+        "optimal_paths": 2,
+        "solo_overlap": 1,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.5
+      },
+      "oracle_log_file": "oracle_logs/gen_062.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 18
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 19
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 19
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_075",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 2,
+              "r1": 1
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r3": 3,
+              "r1": 5
+            },
+            "reward": 9
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 4,
+              "r2": 1
+            },
+            "reward": 8
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r1": 2,
+              "r3": 1
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 4
+            },
+            "reward": 8
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 1,
+              "r2": 4
+            },
+            "reward": 1
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 17,
+        "v2": 17,
+        "combined": 34,
+        "collab_max": 18,
+        "mc_ratio": 0.5294117647058824,
+        "base_score_a": 16,
+        "base_score_b": 2,
+        "synergy_bonus": 0,
+        "collab_detail": "p4x2, p5x2",
+        "res_used": {
+          "r1": 8,
+          "r2": 10,
+          "r3": 2
+        },
+        "asc1": 12,
+        "asc2": 11,
+        "best_p1_favor": 18,
+        "best_p2_favor": 18,
+        "swap_fairness": 1,
+        "optimal_paths": 4,
+        "solo_overlap": 0.3333333333333333,
+        "collab_divergence": 0.33333333333333337,
+        "negotiation_pressure": 0.11111111111111112
+      },
+      "oracle_log_file": "oracle_logs/gen_075.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 17
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 18
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 18
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_090",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r1": 4,
+              "r3": 2
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 4
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r2": 5,
+              "r1": 5
+            },
+            "reward": 8
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 6,
+              "r1": 1
+            },
+            "reward": 5
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 3
+            },
+            "reward": 3
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 2,
+              "r1": 5
+            },
+            "reward": 3
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 11,
+        "v2": 11,
+        "combined": 22,
+        "collab_max": 11,
+        "mc_ratio": 0.5,
+        "base_score_a": 0,
+        "base_score_b": 11,
+        "synergy_bonus": 0,
+        "collab_detail": "p2x1, p3x2",
+        "res_used": {
+          "r1": 7,
+          "r2": 6,
+          "r3": 0
+        },
+        "asc1": 7,
+        "asc2": 9,
+        "best_p1_favor": 11,
+        "best_p2_favor": 11,
+        "swap_fairness": 1,
+        "optimal_paths": 6,
+        "solo_overlap": 1,
+        "collab_divergence": 0.5,
+        "negotiation_pressure": 0.5
+      },
+      "oracle_log_file": "oracle_logs/gen_090.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 16
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 11
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 11
+        }
+      }
+    },
+    {
+      "candidate_id": "gen_104",
+      "agent_projects": [
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r1": 2
+            },
+            "reward": 4
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r3": 3,
+              "r1": 3
+            },
+            "reward": 7
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r1": 6,
+              "r2": 6
+            },
+            "reward": 2
+          }
+        ],
+        [
+          {
+            "name": "project_a",
+            "requirements": {
+              "r2": 4,
+              "r3": 3
+            },
+            "reward": 1
+          },
+          {
+            "name": "project_b",
+            "requirements": {
+              "r1": 1
+            },
+            "reward": 2
+          },
+          {
+            "name": "project_c",
+            "requirements": {
+              "r3": 4,
+              "r1": 2
+            },
+            "reward": 5
+          }
+        ]
+      ],
+      "scenario_synergy": null,
+      "oracle_stats": {
+        "v1": 20,
+        "v2": 20,
+        "combined": 40,
+        "collab_max": 21,
+        "mc_ratio": 0.525,
+        "base_score_a": 7,
+        "base_score_b": 14,
+        "synergy_bonus": 0,
+        "collab_detail": "p3x1, p2x7",
+        "res_used": {
+          "r1": 10,
+          "r2": 0,
+          "r3": 3
+        },
+        "asc1": 12,
+        "asc2": 17,
+        "best_p1_favor": 21,
+        "best_p2_favor": 21,
+        "swap_fairness": 1,
+        "optimal_paths": 8,
+        "solo_overlap": 1,
+        "collab_divergence": 0.25,
+        "negotiation_pressure": 0.25
+      },
+      "oracle_log_file": "oracle_logs/gen_104.json",
+      "oracle_summary": {
+        "claude-sonnet-4-5": {
+          "passed": true,
+          "best_score": 21
+        },
+        "gpt-5-mini": {
+          "passed": true,
+          "best_score": 21
+        },
+        "qwen/qwen3.5-flash-02-23": {
+          "passed": true,
+          "best_score": 21
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+results/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+
+# SQLite trace sinks. Traces are experiment output, not source — share them
+# through a configured remote sink rather than through git.
+*.db
+*.db-wal
+*.db-shm
+
+# Local demo screenshots, not part of the release.
+.demo-shots/
+
+# A researcher's own agent-pool bindings (provider routing, endpoints).
+agents.local.yaml
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+

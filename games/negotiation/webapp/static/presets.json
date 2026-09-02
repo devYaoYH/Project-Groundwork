@@ -1,0 +1,100 @@
+[
+  {
+    "id": "competitive",
+    "name": "Competitive",
+    "tooltip": "Both agents value wood highly (9/unit), creating direct competition for limited supply. Joint optimal = 100, fair = 50, individual max = 90.",
+    "config": {
+      "mode": "stable",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.5, "gold": 1.5 },
+      "agent_a_values": { "wood": 9.0, "stone": 1.0, "gold": 0.5 },
+      "agent_b_values": { "wood": 9.0, "stone": 0.5, "gold": 1.0 }
+    }
+  },
+  {
+    "id": "collaborative",
+    "name": "Collaborative",
+    "tooltip": "Each agent values a different resource most — A wants wood (5/unit), B wants gold (10/unit). Optimal joint policy has no resource conflict (hidden profile task). Joint optimal = 100.",
+    "config": {
+      "mode": "stable",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.0, "gold": 3.0 },
+      "agent_a_values": { "wood": 5.0, "stone": 1.0, "gold": 1.0 },
+      "agent_b_values": { "wood": 1.0, "stone": 1.0, "gold": 10.0 }
+    }
+  },
+  {
+    "id": "shifting_collaborative",
+    "name": "Shifting Collaborative",
+    "tooltip": "Shifting mode — Agent B's context resets each round, simulating negotiation with a new partner every time. An optimal strategy exists without conflict.",
+    "config": {
+      "mode": "shifting",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.0, "gold": 3.0 },
+      "agent_a_values": { "wood": 5.0, "stone": 1.0, "gold": 1.0 },
+      "agent_b_values": { "wood": 1.0, "stone": 1.0, "gold": 10.0 }
+    }
+  },
+  {
+    "id": "shifting_competitive",
+    "name": "Shifting Competitive",
+    "tooltip": "Shifting mode — Agent B's context resets each round. Best resource (wood) is contested. Joint optimal = 100, fair = 50.",
+    "config": {
+      "mode": "shifting",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.5, "gold": 1.5 },
+      "agent_a_values": { "wood": 9.0, "stone": 1.0, "gold": 0.5 },
+      "agent_b_values": { "wood": 9.0, "stone": 0.5, "gold": 1.0 }
+    }
+  },
+  {
+    "id": "beat_opponent_collaborative",
+    "name": "Beat Opponent - Collaborative",
+    "tooltip": "Agents are instructed to score higher than their opponent. Complementary values (A wants wood, B wants gold). Joint optimal = 100.",
+    "config": {
+      "mode": "stable",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.0, "gold": 3.0 },
+      "agent_a_values": { "wood": 5.0, "stone": 1.0, "gold": 1.0 },
+      "agent_b_values": { "wood": 1.0, "stone": 1.0, "gold": 10.0 },
+      "goal": "beat_opponent"
+    }
+  },
+  {
+    "id": "beat_opponent_competitive",
+    "name": "Beat Opponent - Competitive",
+    "tooltip": "Agents are instructed to score higher than their opponent. Both value wood highly (9/unit), creating direct competition. Joint optimal = 100, fair = 50.",
+    "config": {
+      "mode": "stable",
+      "num_rounds": 5,
+      "cheap_talk_turns": 5,
+      "agent_budget": 15,
+      "max_resource_types_per_turn": 2,
+      "resource_supply": { "wood": 10, "stone": 10, "gold": 6 },
+      "resource_costs": { "wood": 1.5, "stone": 1.5, "gold": 1.5 },
+      "agent_a_values": { "wood": 9.0, "stone": 1.0, "gold": 0.5 },
+      "agent_b_values": { "wood": 9.0, "stone": 0.5, "gold": 1.0 },
+      "goal": "beat_opponent"
+    }
+  }
+]

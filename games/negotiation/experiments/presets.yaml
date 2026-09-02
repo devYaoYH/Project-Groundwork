@@ -1,0 +1,43 @@
+presets:
+  default:
+    num_rounds: 5
+    cheap_talk_turns: 5
+    enable_cheap_talk: true
+    resource_types: [wood, stone, gold]
+    resource_supply: {wood: 10, stone: 10, gold: 6}
+    resource_costs: {wood: 1.0, stone: 1.0, gold: 1.0}
+    agent_budget: 15.0
+    max_resource_types_per_turn: 2
+    agents:
+      - {type: llm, model: claude-3-haiku-20240307}
+      - {type: llm, model: claude-3-haiku-20240307}
+    thinking: true
+    visible_utilities: true
+    visible_opponent_reward: false
+    consent: true
+    balance_turn_order: true
+
+  competitive_values:
+    extends: default
+    resource_costs: {wood: 1.5, stone: 1.5, gold: 1.5}
+    agent_values:
+      - {wood: 9.0, stone: 1.0, gold: 0.5}
+      - {wood: 9.0, stone: 0.5, gold: 1.0}
+
+  collaborative_values:
+    extends: default
+    resource_costs: {wood: 1.5, stone: 1.0, gold: 3.0}
+    agent_values:
+      - {wood: 5.0, stone: 1.0, gold: 1.0}
+      - {wood: 1.0, stone: 1.0, gold: 10.0}
+
+  v2_projects:
+    num_rounds: 4
+    cheap_talk_turns: 5
+    enable_cheap_talk: true
+    thinking: true
+    visible_utilities: true
+    visible_opponent_reward: false
+    consent: true
+    balance_turn_order: true
+    scenario_pool_path: data/scenario_pools/run_009/filtered.json

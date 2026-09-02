@@ -1,0 +1,477 @@
+name: projects_study_collaborative_goal_self_play_010
+description: >
+  R10 collaborative-goal self-play intervention: 3 models x 4 paradigms x
+  3 MC ratios x 10 games = 360 self-play games. Cheap talk remains enabled;
+  agents are prompted to maximize joint combined reward via maximize_joint=true.
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: sonnet_jointgoal_stable_fixed_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_stable_fixed_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_stable_fixed_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_stable_rotate_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_stable_rotate_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_stable_rotate_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_fixed_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_fixed_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_fixed_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_rotate_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_rotate_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: sonnet_jointgoal_shifting_rotate_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: claude-sonnet-4-5
+    - type: llm
+      model: claude-sonnet-4-5
+- label: gpt5m_jointgoal_stable_fixed_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_stable_fixed_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_stable_fixed_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_stable_rotate_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_stable_rotate_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_stable_rotate_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_fixed_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_fixed_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_fixed_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_rotate_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_rotate_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: gpt5m_jointgoal_shifting_rotate_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: gpt-5-mini
+    - type: llm
+      model: gpt-5-mini
+- label: qwen35f_jointgoal_stable_fixed_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_stable_fixed_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_stable_fixed_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_stable_rotate_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_stable_rotate_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_stable_rotate_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_fixed_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_fixed_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_fixed_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_rotate_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.5
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_rotate_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 0.8
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen35f_jointgoal_shifting_rotate_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    mc_ratio: 1.0
+    maximize_joint: true
+    enable_cheap_talk: true
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23

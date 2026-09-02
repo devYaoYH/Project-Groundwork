@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-03-30T03:31:00.979577+00:00",
+  "oracle_models": [
+    "claude-sonnet-4-5",
+    "gpt-5-mini",
+    "qwen/qwen3.5-flash-02-23"
+  ],
+  "resource_costs": {
+    "r1": 1.0,
+    "r2": 1.5,
+    "r3": 3.0
+  },
+  "resource_supply": {
+    "r1": 10,
+    "r2": 10,
+    "r3": 6
+  },
+  "resource_types": [
+    "r1",
+    "r2",
+    "r3"
+  ],
+  "agent_budget": 18.0,
+  "pass_threshold": 0.9,
+  "k": 1,
+  "max_resource_types": 2,
+  "mc_buckets": [
+    0.5
+  ],
+  "candidates_per_bucket": 50
+}

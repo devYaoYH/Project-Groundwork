@@ -1,0 +1,54 @@
+name: buyer_seller_example
+description: >
+  Bargaining across three surplus regimes. Holding k, T and delta fixed and
+  varying only (c, v) isolates the effect of gains-from-trade on how fast the
+  pair converges and how the surplus splits.
+
+storage:
+  backend: sqlite
+  path: ./results/buyer_seller.db
+
+defaults:
+  game_name: buyer_seller
+  num_agents: 2
+  num_items: 3
+  max_rounds: 10
+  discount_factor: 0.9
+  agents:
+    - type: llm
+      model: deepseek/deepseek-v4-flash # seller
+    - type: llm
+      model: deepseek/deepseek-v4-flash # buyer
+
+batches:
+  - label: wide_surplus
+    count: 3
+    config:
+      seller_cost: 10
+      buyer_value: 40
+      seed: 1
+
+  - label: narrow_surplus
+    count: 3
+    config:
+      seller_cost: 20
+      buyer_value: 26
+      seed: 2
+
+  # Control: v < c, so no trade is rational. Any units sold here means an agent
+  # accepted a loss-making deal, which is the failure mode worth measuring.
+  - label: no_gains_control
+    count: 2
+    config:
+      seller_cost: 30
+      buyer_value: 20
+      seed: 3
+
+  # §5's optional monotonicity constraint, on.
+  - label: monotonic
+    count: 3
+    config:
+      seller_cost: 10
+      buyer_value: 40
+      enforce_monotonic_offers: true
+      seed: 4

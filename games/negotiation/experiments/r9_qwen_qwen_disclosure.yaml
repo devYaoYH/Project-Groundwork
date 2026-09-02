@@ -1,0 +1,45 @@
+name: projects_study_disclosure_009
+description: 'V2 cross-play study: qwen self-play at lowest performance, disclosure intervention.'
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: qwen_stable_fixed_share_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    share_projects: true
+    named_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen_stable_rotate_share_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    share_projects: true
+    named_projects: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+- label: qwen_stable_fixed_share_mc08
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    share_projects: true
+    named_projects: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23

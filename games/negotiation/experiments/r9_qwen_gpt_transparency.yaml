@@ -1,0 +1,138 @@
+name: projects_study_transparency_009_mc05_mc10_shifting
+description: >
+  Full-transparency intervention: qwen3.5-flash × gpt-5-mini completing the full
+  condition matrix — stable at mc=0.5/1.0 (fixed/rotate) and shifting at mc=0.5/0.8/1.0
+  (fixed/rotate), alongside the existing stable mc=0.8 results.
+defaults:
+  game_name: negotiation
+  preset: v2_projects
+batches:
+- label: qwen-gpt5m_stable_fixed_transparency_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    full_transparency: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_stable_rotate_transparency_mc05
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    full_transparency: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_stable_fixed_transparency_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: false
+    full_transparency: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_stable_rotate_transparency_mc10
+  count: 10
+  config:
+    mode: stable
+    rotate_projects: true
+    full_transparency: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_fixed_transparency_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    full_transparency: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_rotate_transparency_mc08
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    full_transparency: true
+    mc_ratio: 0.8
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_fixed_transparency_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    full_transparency: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_rotate_transparency_mc05
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    full_transparency: true
+    mc_ratio: 0.5
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_fixed_transparency_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: false
+    full_transparency: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini
+
+- label: qwen-gpt5m_shifting_rotate_transparency_mc10
+  count: 10
+  config:
+    mode: shifting
+    rotate_projects: true
+    full_transparency: true
+    mc_ratio: 1.0
+    agents:
+    - type: llm
+      model: qwen/qwen3.5-flash-02-23
+    - type: llm
+      model: gpt-5-mini

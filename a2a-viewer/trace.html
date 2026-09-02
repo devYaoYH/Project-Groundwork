@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A2A Trace</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <style>
+    .page { max-width: 1000px; margin: 32px auto; padding: 0 24px; }
+    .toolbar { display: flex; gap: 16px; align-items: center; margin-bottom: 20px; }
+    #status.error { color: #b91c1c; } #status { color: var(--muted); font-size: 14px; }
+    input[type=file] { display: none; } label { color: var(--accent); cursor: pointer; }
+  </style>
+</head>
+<body>
+<main class="page">
+  <div class="toolbar"><a href="/">← All traces</a><label for="file-input">Open trace JSON</label><input id="file-input" type="file" accept=".json,.jsonl" /><span id="status"></span></div>
+  <section id="header-panel"></section>
+  <section id="derived-panel" class="panel"></section>
+  <section id="observability-panel" class="panel"></section>
+  <section id="timeline"></section>
+</main>
+<div id="dropzone" class="hidden"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
