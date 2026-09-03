@@ -9,6 +9,7 @@ import { usePathname } from "next/navigation";
 // instead of deriving one from its own href.
 const navigation = [
   { href: "/environments/", label: "Environments", owns: ["/environments"] },
+  { href: "/agents/", label: "Agents", owns: ["/agents"] },
   { href: "/episodes/", label: "Episodes", owns: ["/episodes", "/episode"] },
   { href: "/experiments/", label: "Experiments", owns: ["/experiments", "/experiment", "/design"] },
 ];

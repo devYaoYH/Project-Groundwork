@@ -114,7 +114,8 @@ type, and that every item parameter names a column the pinned bank carries.
 A design is a document and **the document is the record**: stored verbatim as
 text alongside its `design_sha256`, parsed by a real YAML parser into a strict
 model. Locking it is the preregistration; a launch refuses if the text no longer
-hashes the same, and editing a locked design forks rather than amends.
+hashes the same. A locked design is read-only: explicitly fork it to make a new
+editable draft, rather than having a save silently create a different study.
 
 ```yaml
 release: negotiation@v1

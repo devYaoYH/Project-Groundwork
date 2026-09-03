@@ -179,6 +179,22 @@ export type Experiment = {
   forked_from: string | null;
 };
 
+export type AgentBinding = {
+  name: string;
+  description: string;
+  type: string;
+  model: string | null;
+  api_format: string | null;
+  api_base: string | null;
+  credential: string | null;
+  credential_present: boolean | null;
+};
+
+export type AgentPool = {
+  agents: AgentBinding[];
+  sources: string[];
+};
+
 export type CompiledPlan = {
   cells: { cell_id: string; levels: Record<string, unknown>; episodes_planned: number }[];
   episodes_planned: number;
@@ -312,6 +328,10 @@ export async function listExperiments(): Promise<Experiment[]> {
   return (await request<{ experiments: Experiment[] }>("/api/experiments")).experiments;
 }
 
+export function getAgentPool(): Promise<AgentPool> {
+  return request<AgentPool>("/api/agent-pool");
+}
+
 export function getExperiment(id: string): Promise<ExperimentDetail> {
   return request<ExperimentDetail>(`/api/experiments/${encodeURIComponent(id)}`);
 }
@@ -338,6 +358,13 @@ export function saveDesign(id: string, designText: string): Promise<Experiment> 
   return request<Experiment>(`/api/experiments/${encodeURIComponent(id)}/design`, {
     method: "POST",
     body: JSON.stringify({ design_text: designText }),
+  });
+}
+
+export function forkDesign(id: string): Promise<Experiment> {
+  return request<Experiment>(`/api/experiments/${encodeURIComponent(id)}/fork`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

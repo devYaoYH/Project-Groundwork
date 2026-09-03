@@ -67,17 +67,28 @@ def test_design_create_validate_lock_and_smoke_launch_through_http(tmp_path):
         assert status == 200
         assert locked["locked_at"]
 
-        status, fork = _request(base, f"/api/experiments/{experiment['id']}/design", {
-            "design_text": DESIGN,
+        status, rejected = _request(base, f"/api/experiments/{experiment['id']}/design", {
+            "design_text": DESIGN.replace("root: 41", "root: 42"),
         })
+        assert status == 400
+        assert "fork it before editing" in rejected["error"]
+
+        status, fork = _request(base, f"/api/experiments/{experiment['id']}/fork", {})
         assert status == 201
         assert fork["forked_from"] == experiment["id"]
+        assert fork["locked_at"] is None
 
         status, fork_locked = _request(base, f"/api/experiments/{fork['id']}/lock", {
             "design_sha256": fork["design_sha256"],
         })
         assert status == 200
         assert fork_locked["locked_at"]
+
+        _, parent_detail = _request(base, f"/api/experiments/{experiment['id']}")
+        _, fork_detail = _request(base, f"/api/experiments/{fork['id']}")
+        assert {
+            cell["cell_id"] for cell in parent_detail["cells"]
+        }.isdisjoint(cell["cell_id"] for cell in fork_detail["cells"])
 
         status, launch = _request(base, "/api/launches", {
             "experiment_id": experiment["id"], "mode": "smoke",
