@@ -76,6 +76,7 @@ class NegotiationConfig(EpisodeConfigBase):
     scenario_synergy: dict | None = None
     agent_shifting: list[bool] = Field(default_factory=lambda: [False, False])
     scenario_pool_path: str | None = None
+    mc_ratio: float | None = None
     target_mc_ratio: float | None = None
     rotate_projects: bool = False
     named_projects: bool = False

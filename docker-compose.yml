@@ -92,7 +92,7 @@ services:
     ports:
       - "8080:8080"
     command:
-      ["python", "local_stack/server.py", "--database", "/data/a2a_traces.db", "--control-database", "/data/a2a_control.db", "--workspace", "/workspace", "--static-dir", "/workspace/a2a-viewer", "--host", "0.0.0.0", "--port", "8080"]
+      ["python", "local_stack/server.py", "--database", "/data/a2a_traces.db", "--control-database", "/data/a2a_control.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       redis:
         condition: service_healthy

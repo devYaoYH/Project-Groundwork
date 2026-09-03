@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from a2a_engine.manifest import EpisodeManifest
@@ -14,6 +19,124 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_stack.server import LocalStackHandler, sse_frame
 from local_stack.control_plane import ControlPlane
+
+
+def _request(server: ThreadingHTTPServer, method: str, path: str) -> tuple[int, dict[str, str], bytes]:
+    connection = HTTPConnection("127.0.0.1", server.server_address[1])
+    try:
+        connection.request(method, path)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        connection.close()
+
+
+def test_local_stack_accepts_head_for_static_and_api_routes(tmp_path):
+    static_dir = tmp_path / "static"
+    environment_dir = static_dir / "environments"
+    environment_dir.mkdir(parents=True)
+    page = b"<!doctype html><title>Environment catalog</title>"
+    (environment_dir / "index.html").write_bytes(page)
+
+    class TestHandler(LocalStackHandler):
+        pass
+
+    TestHandler.database = tmp_path / "episodes.db"
+    TestHandler.static_dir = static_dir
+    TestHandler.control_database = tmp_path / "control.db"
+    TestHandler.workspace = tmp_path
+    TestHandler._control_plane = None
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        status, headers, body = _request(server, "HEAD", "/environments/")
+        assert status == 200
+        assert headers["Content-Type"] == "text/html"
+        assert headers["Content-Length"] == str(len(page))
+        assert body == b""
+
+        status, headers, body = _request(server, "HEAD", "/api/health")
+        assert status == 200
+        assert headers["Content-Type"] == "application/json; charset=utf-8"
+        assert int(headers["Content-Length"]) > 0
+        assert body == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_environment_catalog_migrates_a_legacy_control_database(tmp_path):
+    workspace = Path(__file__).resolve().parents[2]
+    database = tmp_path / "control.db"
+    with sqlite3.connect(database) as db:
+        db.executescript("""
+            CREATE TABLE releases (
+                id TEXT PRIMARY KEY, environment_id TEXT NOT NULL UNIQUE,
+                package TEXT, source_ref TEXT NOT NULL, metadata TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE experiments (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                release_id TEXT NOT NULL REFERENCES releases(id),
+                yaml_path TEXT NOT NULL, config_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        """)
+        db.execute(
+            "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?)",
+            ("local-calendar", "calendar", "calendar_environment", "local-workspace", "{}", "now"),
+        )
+        db.execute(
+            "INSERT INTO experiments VALUES (?, ?, ?, ?, ?, ?)",
+            ("legacy-calendar", "legacy", "local-calendar", "calendar.yaml", "digest", "now"),
+        )
+
+    class TestHandler(LocalStackHandler):
+        pass
+
+    TestHandler.database = tmp_path / "episodes.db"
+    TestHandler.static_dir = tmp_path / "static"
+    TestHandler.control_database = database
+    TestHandler.workspace = workspace
+    TestHandler._control_plane = None
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        ready = threading.Barrier(3)
+
+        def request(path: str) -> tuple[int, dict[str, str], bytes]:
+            ready.wait()
+            return _request(server, "GET", path)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            catalog_future = executor.submit(request, "/api/environments")
+            concurrent_catalog_future = executor.submit(request, "/api/environments")
+            ready.wait()
+            status, _headers, body = catalog_future.result()
+            concurrent_status, _concurrent_headers, concurrent_body = concurrent_catalog_future.result()
+
+        assert status == 200
+        catalog = json.loads(body)
+        calendar = next(
+            environment for environment in catalog["environments"]
+            if environment["environment_id"] == "calendar"
+        )
+        assert calendar["experiment_count"] == 1
+        assert concurrent_status == 200
+        assert json.loads(concurrent_body)["environments"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    with sqlite3.connect(database) as db:
+        environment_id = db.execute(
+            "SELECT environment_id FROM experiments WHERE id = ?", ("legacy-calendar",)
+        ).fetchone()[0]
+    assert environment_id == "calendar"
 
 
 def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_path):
@@ -327,6 +450,31 @@ def test_every_release_offers_configs_it_can_actually_run(tmp_path):
             release_id=release.id, yaml_path=paths[0], name=f"cold-start-{release.environment_id}",
         )
         assert experiment.environment_id == release.environment_id
+
+
+def test_environment_surface_exposes_declarations_items_and_oracle_results(tmp_path):
+    workspace = Path(__file__).resolve().parents[2]
+    control = ControlPlane(
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
+    )
+
+    environments = control.environment_summaries()
+    assert {environment["environment_id"] for environment in environments} == {
+        "buyer_seller", "calendar", "negotiation", "word_guess",
+    }
+
+    detail = control.environment_detail("calendar")
+    assert detail["parameters"]
+    assert detail["measures"]
+    assert "item_policy:" in detail["declaration_yaml"]
+
+    items = control.environment_items("calendar", limit=1)
+    assert len(items["items"]) == 1
+    assert items["item_bank_sha256"] == detail["release"]["item_bank_sha256"]
+
+    result = control.run_oracle("calendar", items["items"][0]["item_id"])
+    assert result["oracle_version"] == "cp-sat-v1"
+    assert result["result"] == items["items"][0]["oracle_result"]
 
 
 def test_worked_examples_are_offered_before_research_configs(tmp_path):

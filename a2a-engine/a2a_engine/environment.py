@@ -26,6 +26,77 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ParameterConfig(_StrictModel):
+    """One environment setting the design layer may describe.
+
+    ``source`` says where the value comes from.  A ``design`` parameter is one
+    the researcher sets and the runner writes into the episode config.  An
+    ``item`` parameter is frozen in the item bank alongside the oracle result,
+    so a design *selects* on it — factoring on it restricts the bank to the
+    matching rows rather than overwriting a config key the loaded item would
+    ignore.
+
+    An item parameter therefore must not hand-write a ``domain``: its levels
+    are whatever the pinned bank actually contains, projected at read time by
+    :func:`a2a_engine.items.derive_item_domain`.  Hand-writing them is how the
+    declaration and the bank drift apart.
+
+    The declaration does not say whether a parameter *ought* to be an
+    experimental axis.  That is a judgement about a particular comparison and
+    belongs to whoever writes the design, which states a disposition —
+    factor, pin, or randomize — per parameter.  ``fixed`` is the one
+    release-side veto and it is absolute: a design that sets a fixed parameter
+    is rejected.
+    """
+
+    name: str
+    type: Literal["continuous", "integer", "categorical", "boolean"]
+    domain: list[Any] | tuple[float, float] | None = None
+    fixed: bool = False
+    source: Literal["design", "item"] = "design"
+    item_key: str | None = None          # bank column, when it is not ``name``
+
+    @model_validator(mode="after")
+    def _domain_matches_type(self) -> "ParameterConfig":
+        if not self.name:
+            raise ValueError("parameter name must not be empty")
+        if self.type in {"continuous", "integer"} and self.domain is not None:
+            if not isinstance(self.domain, tuple) or len(self.domain) != 2:
+                raise ValueError("numeric parameter domains must be a (minimum, maximum) pair")
+            if self.domain[0] > self.domain[1]:
+                raise ValueError("numeric parameter domain minimum must not exceed maximum")
+        if self.type == "categorical" and self.domain is not None:
+            if not isinstance(self.domain, list) or not self.domain:
+                raise ValueError("categorical parameter domains must be a non-empty list")
+        return self
+
+    @model_validator(mode="after")
+    def _item_parameters_defer_to_the_bank(self) -> "ParameterConfig":
+        if self.source == "item":
+            if self.domain is not None:
+                raise ValueError(
+                    f"parameter {self.name!r} is item-sourced, so its levels are derived from the "
+                    "item bank; remove the hand-written domain rather than restating the bank"
+                )
+            if self.fixed:
+                raise ValueError(
+                    f"parameter {self.name!r} is item-sourced, so no design sets it and "
+                    "release-fixed does not apply"
+                )
+        elif self.item_key is not None:
+            raise ValueError(
+                f"parameter {self.name!r} names an item_key but is design-sourced; "
+                "item_key only applies when source='item'"
+            )
+        return self
+
+    @property
+    def bank_key(self) -> str:
+        """The item-bank column this parameter reads, for item-sourced parameters."""
+
+        return self.item_key or self.name
+
+
 class InputConfig(_StrictModel):
     """A portable, local input reference pinned by content digest."""
 
@@ -67,7 +138,19 @@ class EngineConfig(_StrictModel):
 class RoleConfig(_StrictModel):
     id: str
     count: int = Field(default=1, ge=1)
+    accepts: list[Literal["llm", "scripted", "human"]] = Field(
+        default_factory=lambda: ["llm"]
+    )
     description: str = ""
+
+    @field_validator("accepts")
+    @classmethod
+    def _accepts_at_least_one_kind(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("a role must accept at least one participant kind")
+        if len(value) != len(set(value)):
+            raise ValueError("accepted participant kinds must be unique")
+        return value
 
 
 class ResourceConfig(_StrictModel):
@@ -81,8 +164,10 @@ class MeasureConfig(_StrictModel):
 
     name: str
     producer: Literal["environment", "derived"]
+    grain: Literal["episode", "sequence"] = "episode"
+    index_label: str | None = None
     scope: Literal["episode", "participant"] = "episode"
-    unit: str = ""
+    unit: Literal["joint", "participant"] = "joint"
     direction: Literal["maximize", "minimize", "neutral"] = "neutral"
     extractor: str | None = None
 
@@ -92,6 +177,10 @@ class MeasureConfig(_StrictModel):
             raise ValueError("a derived metric requires an extractor identifier")
         if self.producer == "environment" and self.extractor is not None:
             raise ValueError("a environment-produced metric must not name an extractor")
+        if self.grain == "sequence" and not self.index_label:
+            raise ValueError("a sequence measure requires an index_label")
+        if self.grain == "episode" and self.index_label is not None:
+            raise ValueError("an episode measure must not name an index_label")
         return self
 
 
@@ -103,31 +192,88 @@ class AdapterBindingsConfig(_StrictModel):
     resources: dict[str, str] = Field(default_factory=dict)
 
 
+class ItemPolicy(_StrictModel):
+    """A frozen item bank and the release-owned policy for selecting from it."""
+
+    mode: Literal["enumerate", "sample"]
+    bank_path: str
+    item_bank_sha256: str
+
+    @field_validator("bank_path")
+    @classmethod
+    def _local_relative_bank_path(cls, value: str) -> str:
+        path = Path(value)
+        if not value or path.is_absolute() or "://" in value:
+            raise ValueError("item banks must use a local relative path, not an absolute path or URI")
+        return value
+
+    @field_validator("item_bank_sha256")
+    @classmethod
+    def _item_bank_sha256(cls, value: str) -> str:
+        value = value.lower()
+        if not _SHA256.fullmatch(value):
+            raise ValueError("item_bank_sha256 must be a 64-character hexadecimal digest")
+        return value
+
+
 class ReleaseDeclaration(_StrictModel):
-    """Versioned, declarative coordination release."""
+    """Versioned, declarative environment release.
+
+    ``id``/``release``/``engine`` remain while the typed YAML format is in use.
+    The Phase 2 fields make the release inspectable by the researcher-facing
+    control plane without making a second declaration format.
+    """
 
     schema_version: Literal[1] = 1
-    id: str
-    release: str
+    id: str | None = None
+    release: str | None = None
     description: str = ""
-    engine: EngineConfig
+    engine: EngineConfig | None = None
     inputs: list[InputConfig] = Field(default_factory=list)
     roles: list[RoleConfig] = Field(default_factory=list)
     resources: list[ResourceConfig] = Field(default_factory=list)
     metrics: list[MeasureConfig] = Field(default_factory=list)
+    measures: list[MeasureConfig] = Field(default_factory=list)
     adapter_bindings: AdapterBindingsConfig = Field(default_factory=AdapterBindingsConfig)
+    environment_id: str | None = None
+    version: str | None = None
+    blurb: str = ""
+    source_url: str = ""
+    parameters: list[ParameterConfig] = Field(default_factory=list)
+    item_policy: ItemPolicy | None = None
+    oracle_version: str | None = None
 
     @field_validator("id")
     @classmethod
-    def _environment_id(cls, value: str) -> str:
+    def _release_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if not _ID.fullmatch(value):
             raise ValueError("release id must start with a lowercase letter and contain only [a-z0-9_.-]")
         return value
 
     @model_validator(mode="after")
     def _unique_declarations(self) -> "ReleaseDeclaration":
+        inferred_environment_id = self.environment_id or (
+            self.engine.environment_id if self.engine is not None else None
+        )
+        if inferred_environment_id is None:
+            raise ValueError("a release declaration must name an environment_id")
+        if not _ID.fullmatch(inferred_environment_id):
+            raise ValueError("environment_id must start with a lowercase letter and contain only [a-z0-9_.-]")
+        self.environment_id = inferred_environment_id
+        self.id = self.id or inferred_environment_id
+        self.version = self.version or self.release or "v1"
+        self.release = self.release or self.version
+        self.blurb = self.blurb or self.description
+        self.description = self.description or self.blurb
+        if self.metrics and self.measures and self.metrics != self.measures:
+            raise ValueError("metrics and measures must agree when both are declared")
+        self.measures = self.measures or list(self.metrics)
+        self.metrics = self.metrics or list(self.measures)
         for name, values in (("input", self.inputs), ("role", self.roles),
-                             ("resource", self.resources), ("metric", self.metrics)):
+                             ("resource", self.resources), ("metric", self.metrics),
+                             ("parameter", self.parameters)):
             ids = [item.id if hasattr(item, "id") else item.name for item in values]
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{name} identifiers must be unique")
@@ -249,6 +395,16 @@ def load_release_declaration(path: str | Path) -> ReleaseDeclaration:
             raise ValueError(
                 f"release input {input_config.id!r} digest mismatch: "
                 f"expected {input_config.sha256}, got {actual}"
+            )
+    if config.item_policy is not None:
+        bank_path = (path.parent / config.item_policy.bank_path).resolve()
+        if not bank_path.is_file():
+            raise FileNotFoundError(f"release item bank does not exist: {bank_path}")
+        actual = _sha256_file(bank_path)
+        if actual != config.item_policy.item_bank_sha256:
+            raise ValueError(
+                "release item bank digest mismatch: "
+                f"expected {config.item_policy.item_bank_sha256}, got {actual}"
             )
     return config
 

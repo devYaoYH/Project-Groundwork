@@ -7,11 +7,13 @@ its local-first default trace store.
 from a2a_engine import register_environment
 
 from negotiation_game.game import NegotiationConfig, NegotiationGame
+from negotiation_game.declaration import DECLARATION
 from negotiation_game.resolve import resolve_config
 
 register_environment(
     "negotiation",
     NegotiationGame,
+    declaration=DECLARATION,
     resolve_config=resolve_config,
     # A single-environment experiment must work with no account or cloud SDK. Firestore
     # remains an explicit optional sink for importing or mirroring legacy data.

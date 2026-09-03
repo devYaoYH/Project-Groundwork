@@ -12,6 +12,7 @@ import argparse
 import json
 import mimetypes
 import os
+import threading
 import time
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -24,9 +25,9 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
-    from local_stack.control_plane import ControlPlane
+    from local_stack.control_plane import ControlPlane, OracleUnavailable
 except ModuleNotFoundError:  # pragma: no cover - exercised by the Compose entrypoint
-    from control_plane import ControlPlane
+    from control_plane import ControlPlane, OracleUnavailable
 
 
 def sse_frame(event: dict) -> str:
@@ -48,6 +49,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     control_database = Path("/data/a2a_control.db")
     workspace = Path.cwd()
     _control_plane: ControlPlane | None = None
+    _control_lock = threading.Lock()
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
@@ -60,6 +62,27 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 {**release.__dict__, "experiments": by_game.get(release.environment_id, [])}
                 for release in control.releases()
             ]})
+        if parsed.path == "/api/environments":
+            return self._json({"environments": self._control().environment_summaries()})
+        if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/items"):
+            environment_id = unquote(
+                parsed.path.removeprefix("/api/environments/").removesuffix("/items").rstrip("/")
+            )
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["50"])[0])
+                cursor = query.get("cursor", [None])[0]
+                return self._json(
+                    self._control().environment_items(environment_id, limit=limit, cursor=cursor)
+                )
+            except (KeyError, ValueError) as exc:
+                return self._json({"error": str(exc)}, 404)
+        if parsed.path.startswith("/api/environments/"):
+            environment_id = unquote(parsed.path.removeprefix("/api/environments/").rstrip("/"))
+            try:
+                return self._json(self._control().environment_detail(environment_id))
+            except (KeyError, ValueError) as exc:
+                return self._json({"error": str(exc)}, 404)
         if parsed.path == "/api/agent-pool":
             return self._json(self._control().agent_pool())
         if parsed.path == "/api/experiment-config":
@@ -118,10 +141,20 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             return self._json(self._calendar_leaderboard())
         self._static(parsed.path)
 
+    def do_HEAD(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        self.do_GET()
+
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         parsed = urlparse(self.path)
         try:
             body = self._request_json()
+            if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/oracle"):
+                environment_id = unquote(
+                    parsed.path.removeprefix("/api/environments/").removesuffix("/oracle").rstrip("/")
+                )
+                return self._json(
+                    self._control().run_oracle(environment_id, str(body.get("item_id") or ""))
+                )
             if parsed.path == "/api/experiments":
                 experiment = self._control().create_experiment(
                     yaml_path=str(body.get("yaml_path") or ""),
@@ -139,6 +172,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/cancel"):
                 launch_id = unquote(parsed.path.removeprefix("/api/launches/").removesuffix("/cancel").rstrip("/"))
                 return self._json(self._control().cancel_launch(launch_id).__dict__)
+        except OracleUnavailable as exc:
+            return self._json({"error": str(exc)}, 409)
         except (KeyError, ValueError) as exc:
             return self._json({"error": str(exc)}, 400)
         return self._json({"error": "not found"}, 404)
@@ -155,9 +190,13 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     @classmethod
     def _control(cls) -> ControlPlane:
         if cls._control_plane is None or cls._control_plane.path != cls.control_database:
-            cls._control_plane = ControlPlane(
-                cls.control_database, workspace=cls.workspace, trace_database=cls.database,
-            )
+            with cls._control_lock:
+                if cls._control_plane is None or cls._control_plane.path != cls.control_database:
+                    control = ControlPlane(
+                        cls.control_database, workspace=cls.workspace, trace_database=cls.database,
+                    )
+                    control.seed_installed_releases()
+                    cls._control_plane = control
         return cls._control_plane
 
     @classmethod
@@ -295,6 +334,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+        if self.command == "HEAD":
+            return
         cursor = 0
         # Browsers reconnect automatically after this short bounded request;
         # SSE therefore needs no server-side client registry for local runs.
@@ -327,7 +368,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     # Directory names differ from environment names (``word_guess`` -> ``word-guess``),
     # so the served set is declared rather than derived.
@@ -364,15 +406,21 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         if root not in path.parents and path != root:
             self.send_error(HTTPStatus.FORBIDDEN)
             return
+        if path.is_dir():
+            path = (path / "index.html").resolve()
+            if root not in path.parents and path != root:
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
         if not path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        body = path.read_bytes()
+        body = None if self.command == "HEAD" else path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(path.stat().st_size if body is None else len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if body is not None:
+            self.wfile.write(body)
 
 
 def main() -> int:

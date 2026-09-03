@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from a2a_engine.experiment import expand_cells, load_experiment
+from a2a_engine.items import ItemBank, derive_item_domain
 from a2a_engine.registry import get_environment_spec, installed_environments
+import yaml
 
 
 _LIVE_RESULT = re.compile(r"INFO expt_runner: ok\s+(?P<episode>\S+)\s+->\s+(?P<uri>\S+)")
@@ -102,6 +104,10 @@ class Attempt:
     error: str | None = None
     started_at: str | None = None
     ended_at: str | None = None
+
+
+class OracleUnavailable(ValueError):
+    """Raised when a release ships an item bank without an oracle."""
 
 
 class Launcher(Protocol):
@@ -236,6 +242,20 @@ class ControlPlane:
                     kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
                 );
             """)
+            columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(experiments)").fetchall()
+            }
+            if "environment_id" not in columns:
+                db.execute("ALTER TABLE experiments ADD COLUMN environment_id TEXT")
+            db.execute("""
+                UPDATE experiments
+                SET environment_id = (
+                    SELECT releases.environment_id
+                    FROM releases
+                    WHERE releases.id = experiments.release_id
+                )
+                WHERE environment_id IS NULL
+            """)
 
     def seed_installed_releases(self) -> list[Release]:
         created: list[Release] = []
@@ -245,15 +265,33 @@ class ControlPlane:
             # release would present a release with nothing to run.
             for environment_id in installed_environments():
                 spec = get_environment_spec(environment_id)
+                declaration = spec.declaration
+                if declaration is None:
+                    continue
+                metadata = {
+                    "launcher": "local",
+                    "entrypoint": environment_id,
+                    "version": declaration.version,
+                    "declaration_sha256": declaration.content_sha256(),
+                    "item_bank_sha256": declaration.item_policy.item_bank_sha256
+                    if declaration.item_policy is not None else None,
+                    "oracle_version": declaration.oracle_version,
+                    "source_url": declaration.source_url,
+                    "blurb": declaration.blurb,
+                }
                 row = db.execute(
                     "SELECT id FROM releases WHERE environment_id = ?", (environment_id,)
                 ).fetchone()
                 if row:
+                    db.execute(
+                        "UPDATE releases SET package = ?, source_ref = ?, metadata = ? WHERE id = ?",
+                        (spec.package, "local-workspace", _json(metadata), row["id"]),
+                    )
                     continue
                 release = Release(
                     id=f"local-{environment_id}", environment_id=environment_id,
                     package=spec.package, source_ref="local-workspace",
-                    metadata={"launcher": "local", "entrypoint": environment_id}, created_at=_now(),
+                    metadata=metadata, created_at=_now(),
                 )
                 db.execute(
                     "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?)",
@@ -268,6 +306,107 @@ class ControlPlane:
         with self._connect() as db:
             rows = db.execute("SELECT * FROM releases ORDER BY environment_id").fetchall()
         return [self._release(row) for row in rows]
+
+    def environment_summaries(self) -> list[dict[str, Any]]:
+        """Return the registered, researcher-visible release catalog."""
+        releases = {release.environment_id: release for release in self.releases()}
+        with self._connect() as db:
+            counts = {
+                row["environment_id"]: row["experiment_count"]
+                for row in db.execute(
+                    "SELECT environment_id, COUNT(*) AS experiment_count "
+                    "FROM experiments GROUP BY environment_id"
+                ).fetchall()
+            }
+        environments: list[dict[str, Any]] = []
+        for environment_id in installed_environments():
+            declaration = self._declaration(environment_id)
+            release = releases.get(environment_id)
+            if release is None:
+                continue
+            environments.append({
+                "environment_id": environment_id,
+                "blurb": declaration.blurb,
+                "version": declaration.version,
+                "release_id": release.id,
+                "source_url": declaration.source_url,
+                "experiment_count": counts.get(environment_id, 0),
+            })
+        return environments
+
+    def environment_detail(self, environment_id: str) -> dict[str, Any]:
+        declaration = self._declaration(environment_id)
+        release = self._release_for(environment_id, None)
+        if declaration.item_policy is None:
+            raise ValueError(f"environment {environment_id!r} has no item policy")
+        bank = self._item_bank(environment_id)
+        return {
+            "environment_id": environment_id,
+            "release": {
+                "release_id": release.id,
+                "version": declaration.version,
+                "declaration_sha256": declaration.content_sha256(),
+                "item_bank_sha256": declaration.item_policy.item_bank_sha256,
+                "oracle_version": declaration.oracle_version,
+            },
+            "parameters": [
+                self._parameter_view(parameter, bank) for parameter in declaration.parameters
+            ],
+            "roles": [role.model_dump(mode="json") for role in declaration.roles],
+            "measures": [measure.model_dump(mode="json") for measure in declaration.measures],
+            "item_policy": {
+                **declaration.item_policy.model_dump(mode="json"),
+                "item_count": len(bank.items),
+            },
+            "declaration_yaml": yaml.safe_dump(
+                declaration.model_dump(mode="json"), sort_keys=False, allow_unicode=False,
+            ),
+        }
+
+    @staticmethod
+    def _parameter_view(parameter, bank: ItemBank) -> dict[str, Any]:
+        """One parameter as the design layer sees it, with item levels projected.
+
+        The declaration itself is left alone — ``declaration_yaml`` and
+        ``declaration_sha256`` stay a function of the checked-in source, not of
+        whichever bank happens to be on disk.  Derived levels ride alongside.
+        """
+
+        view = parameter.model_dump(mode="json")
+        if parameter.source != "item":
+            view["levels"] = None
+            view["identity_grained"] = False
+            return view
+        domain, levels = derive_item_domain(parameter, bank)
+        view["domain"] = list(domain) if isinstance(domain, tuple) else domain
+        view["levels"] = [{"value": value, "count": count} for value, count in levels]
+        # One distinct value per row means the column is the item's identity
+        # restated; there are no strata to choose between.
+        view["identity_grained"] = len(levels) == len(bank.items) > 1
+        return view
+
+    def environment_items(self, environment_id: str, *, limit: int = 50,
+                          cursor: str | None = None) -> dict[str, Any]:
+        bank = self._item_bank(environment_id)
+        if not 1 <= limit <= 100:
+            raise ValueError("item limit must be between 1 and 100")
+        items, next_cursor = bank.page(limit=limit, cursor=cursor)
+        return {
+            "items": [item.summary() for item in items],
+            "next_cursor": next_cursor,
+            "item_bank_sha256": bank.item_bank_sha256,
+        }
+
+    def run_oracle(self, environment_id: str, item_id: str) -> dict[str, Any]:
+        declaration = self._declaration(environment_id)
+        if declaration.oracle_version is None:
+            raise OracleUnavailable(f"environment {environment_id!r} does not ship an oracle")
+        item = self._item_bank(environment_id).get(item_id)
+        return {
+            "item_id": item.item_id,
+            "oracle_version": declaration.oracle_version,
+            "result": item.oracle_result,
+        }
 
     def available_experiments(self) -> dict[str, list[str]]:
         """Checked-in experiment YAMLs, grouped by the environment each one declares.
@@ -538,6 +677,27 @@ class ControlPlane:
         if self.workspace not in candidate.parents and candidate != self.workspace:
             raise ValueError("yaml_path must stay within the workspace")
         return candidate
+
+    def _declaration(self, environment_id: str):
+        spec = get_environment_spec(environment_id)
+        declaration = spec.declaration
+        if declaration is None:
+            raise KeyError(f"environment {environment_id!r} does not publish a release declaration")
+        if declaration.environment_id != environment_id:
+            raise ValueError(
+                f"environment {environment_id!r} registered a declaration for "
+                f"{declaration.environment_id!r}"
+            )
+        return declaration
+
+    def _item_bank(self, environment_id: str) -> ItemBank:
+        declaration = self._declaration(environment_id)
+        if declaration.item_policy is None:
+            raise ValueError(f"environment {environment_id!r} has no item policy")
+        return ItemBank.load(
+            self._workspace_path(declaration.item_policy.bank_path),
+            expected_sha256=declaration.item_policy.item_bank_sha256,
+        )
 
     def _release_for(self, environment_id: str, release_id: str | None) -> Release:
         self.seed_installed_releases()

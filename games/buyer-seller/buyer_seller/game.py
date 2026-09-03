@@ -42,6 +42,7 @@ from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
 
 from buyer_seller.agents import BuyerAgent, SellerAgent
+from buyer_seller.declaration import DECLARATION
 
 # Terminal reasons recorded in final_state.
 SOLD_OUT = "inventory_exhausted"
@@ -379,6 +380,7 @@ class BuyerSellerGame:
 register_environment(
     "buyer_seller",
     BuyerSellerGame,
+    declaration=DECLARATION,
     package="buyer-seller",
     # Dry runs and smoke tests use the scripted agents above, so no keys needed.
     dry_run_checks_keys=False,

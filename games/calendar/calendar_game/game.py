@@ -36,6 +36,7 @@ from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeti
 from calendar_game.observability import InstrumentedCalendarClient
 from calendar_game.ratings import CalendarRatingAdapter
 from calendar_game.trace_contract import build_calendar_rating_context
+from calendar_game.declaration import DECLARATION
 from calendar_game.calendar import Calendar, apply_cell, validate_cell
 from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible, find_fallback_slot
 from calendar_game.scenario import generate_scenario
@@ -2176,6 +2177,7 @@ class CalendarGame:
 register_environment(
     "calendar",
     CalendarGame,
+    declaration=DECLARATION,
     storage={"backend": "sqlite"},
     package="calendar-environment",
     rating_adapter=CalendarRatingAdapter(),

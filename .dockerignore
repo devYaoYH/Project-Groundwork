@@ -8,4 +8,7 @@ results
 *.db
 *.db-wal
 *.db-shm
-
+dist
+web/node_modules
+web/.next
+web/out

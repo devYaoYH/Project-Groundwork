@@ -26,7 +26,8 @@ jobs:
           -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
       - run: >-
           uv run pytest a2a-engine/tests a2a-judge/tests expt-runner/tests
-          games/buyer-seller/tests games/calendar/calendar_game/tests games/negotiation/tests local_stack/tests
+          games/buyer-seller/tests games/calendar/calendar_game/tests games/calendar/tests
+          games/negotiation/tests games/word-guess/tests local_stack/tests
         env:
           PYTHONPATH: games/negotiation
       - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
@@ -65,12 +66,53 @@ jobs:
         run: |
           python - <<'PY'
           import json
-          from urllib.request import urlopen
+          from urllib.request import Request, urlopen
 
           base = "http://127.0.0.1:8080"
           health = json.load(urlopen("http://127.0.0.1:8080/api/health"))
           assert health["ok"] is True
           assert health["episode_count"] >= 5
+          environments = json.load(urlopen(f"{base}/api/environments"))["environments"]
+          assert {environment["environment_id"] for environment in environments} == {
+              "buyer_seller", "calendar", "negotiation", "word_guess"
+          }
+          calendar_environment = json.load(urlopen(f"{base}/api/environments/calendar"))
+          assert calendar_environment["parameters"]
+          assert calendar_environment["measures"]
+          parameters = {
+              parameter["name"]: parameter
+              for parameter in calendar_environment["parameters"]
+          }
+          # Item-sourced levels are projected from the pinned bank; design-sourced
+          # ones keep the domain the declaration wrote.
+          density = parameters["density"]
+          assert density["source"] == "item"
+          assert density["levels"] and all(
+              level["count"] >= 1 for level in density["levels"]
+          )
+          assert parameters["communication_protocol"]["source"] == "design"
+          assert parameters["communication_protocol"]["levels"] is None
+          negotiation_environment = json.load(urlopen(f"{base}/api/environments/negotiation"))
+          mc_ratio = next(
+              parameter for parameter in negotiation_environment["parameters"]
+              if parameter["name"] == "mc_ratio"
+          )
+          assert mc_ratio["item_key"] == "mc_bucket"
+          assert [level["value"] for level in mc_ratio["levels"]] == [0.5, 0.8, 1.0]
+          static_head = urlopen(Request(f"{base}/environments/", method="HEAD"))
+          assert static_head.status == 200
+          assert static_head.headers["Content-Type"] == "text/html"
+          assert static_head.read() == b""
+          api_head = urlopen(Request(f"{base}/api/health", method="HEAD"))
+          assert api_head.status == 200
+          assert api_head.headers["Content-Type"] == "application/json; charset=utf-8"
+          assert api_head.read() == b""
+          calendar_items = json.load(urlopen(f"{base}/api/environments/calendar/items"))
+          assert calendar_items["items"]
+          assert (
+              calendar_items["item_bank_sha256"]
+              == calendar_environment["release"]["item_bank_sha256"]
+          )
           episodes = json.load(urlopen(f"{base}/api/episodes"))["episodes"]
           calendar = next(
               trace for trace in episodes

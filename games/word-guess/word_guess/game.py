@@ -19,6 +19,7 @@ from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
 
 from word_guess.agents import GuesserAgent, HostAgent
+from word_guess.declaration import DECLARATION
 
 DEFAULT_POOL = ["dog", "apple", "car", "piano", "river", "book"]
 
@@ -195,6 +196,7 @@ class WordGuessGame:
 register_environment(
     "word_guess",
     WordGuessGame,
+    declaration=DECLARATION,
     package="word-guess",
     # Dry runs use the scripted agents above, so no API keys are involved.
     dry_run_checks_keys=False,

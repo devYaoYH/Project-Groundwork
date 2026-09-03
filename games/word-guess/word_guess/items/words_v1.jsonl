@@ -1,0 +1,4 @@
+{"item_id":"word_guess.dog","params":{"secret_word":"dog"},"oracle_result":{"answer":"dog"}}
+{"item_id":"word_guess.apple","params":{"secret_word":"apple"},"oracle_result":{"answer":"apple"}}
+{"item_id":"word_guess.river","params":{"secret_word":"river"},"oracle_result":{"answer":"river"}}
+{"item_id":"word_guess.piano","params":{"secret_word":"piano"},"oracle_result":{"answer":"piano"}}

@@ -37,7 +37,10 @@ import logging
 from collections.abc import Callable
 from importlib import import_module
 from importlib.metadata import entry_points
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    from a2a_engine.environment import ReleaseDeclaration
 
 log = logging.getLogger("a2a_engine.registry")
 
@@ -56,6 +59,7 @@ class EnvironmentSpec(NamedTuple):
     """What the runner needs to know about a registered environment."""
 
     cls: Callable[..., Any]
+    declaration: "ReleaseDeclaration | None" = None
     resolve_config: Callable[[dict], dict] | None = None
     storage: dict[str, Any] | None = None
     package: str | None = None
@@ -77,6 +81,7 @@ def register_environment(
     name: str,
     cls: Callable[..., Any],
     *,
+    declaration: "ReleaseDeclaration | None" = None,
     resolve_config: Callable[[dict], dict] | None = None,
     storage: dict[str, Any] | None = None,
     package: str | None = None,
@@ -86,6 +91,7 @@ def register_environment(
     """Register a environment class under a name. Replaces any existing entry."""
     spec = EnvironmentSpec(
         cls=cls,
+        declaration=declaration,
         resolve_config=resolve_config,
         storage=storage,
         package=package,

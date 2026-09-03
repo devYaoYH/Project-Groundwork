@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 
 from a2a_engine.experiment import load_experiment
+from a2a_engine.registry import get_environment_spec
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from expt_runner.run_experiment import main as run_experiment
 
 
@@ -42,7 +44,37 @@ def main(argv: list[str] | None = None) -> int:
         runner_args.append("--smoke-test")
     if args.dry_run:
         runner_args.append("--dry-run")
-    return run_experiment(runner_args)
+    result = run_experiment(runner_args)
+    if result != 0:
+        return result
+
+    declaration = get_environment_spec(environment_id).declaration
+    if declaration is None:
+        raise ValueError(f"environment {environment_id!r} does not publish a release declaration")
+    declared = {
+        measure.name
+        for measure in declaration.measures
+        if measure.producer == "environment"
+    }
+    if not declared:
+        return result
+    emitted = [
+        episode.metrics
+        for episode in SQLiteEpisodeStore(path=args.storage_path).iter_episodes()
+        if episode.config.environment_id == environment_id
+    ]
+    if not emitted:
+        raise AssertionError(f"runtime release for {environment_id!r} emitted no episodes")
+    missing = {
+        name
+        for name in declared
+        if any(name not in metrics for metrics in emitted)
+    }
+    if missing:
+        raise AssertionError(
+            f"release declaration names environment measures absent from emitted metrics: {sorted(missing)}"
+        )
+    return result
 
 
 if __name__ == "__main__":
