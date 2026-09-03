@@ -13,7 +13,7 @@ export function exportGameAsJSONL(gameData) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `game_${gameData.game_id}.jsonl`;
+    a.download = `game_${gameData.episode_uid}.jsonl`;
     a.click();
     URL.revokeObjectURL(url);
 }
@@ -47,9 +47,9 @@ export async function handleJSONLImport(event) {
                 continue;
             }
 
-            const game_id = result.game_id || file.name.replace(/\.jsonl$/, '').replace(/^game_/, '');
+            const episode_uid = result.episode_uid || file.name.replace(/\.jsonl$/, '').replace(/^game_/, '');
             const gameData = {
-                game_id,
+                episode_uid,
                 game_config,
                 result,
                 events,

@@ -1,7 +1,7 @@
 name: redteam_c006_varied_5a3p_c020
 description: Agent 0 uses the c006 privacy red-team DSPy adversarial prompt against baseline frozen-prompt LLM agents on all 36 varied/non-uniform 5-agent, 3-participant calendar scenarios.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 5
   num_slots: 16
   max_turns_per_round: 6
@@ -24,7 +24,7 @@ defaults:
       model: gemini-3-flash-preview
     - type: llm
       model: gemini-3-flash-preview
-batches:
+cells:
   - label: b037_easy_5a_3p_d0p6_c3_1
     count: 1
     config:

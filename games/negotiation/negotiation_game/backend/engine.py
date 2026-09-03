@@ -1,5 +1,5 @@
 """
-Multi-Agent Negotiation Game Engine
+Multi-Agent Negotiation Environment Engine
 
 Agents negotiate over scarce resources with project-based rewards.
 Includes a cheap-talk phase before each purchasing decision.
@@ -215,7 +215,7 @@ def _projects_from_dicts(project_dicts: list[dict]) -> list[Project]:
 
 @dataclass
 class GameConfig:
-    game_id: str = ""
+    episode_uid: str = ""
     resource_types: list[str] = field(default_factory=lambda: list(DEFAULT_RESOURCE_TYPES))
     resource_supply: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_RESOURCE_SUPPLY))
     resource_costs: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_RESOURCE_COSTS))
@@ -274,7 +274,7 @@ class GameConfig:
     # Random seed for reproducibility (shifting values, heuristic agents)
     seed: int | None = None
 
-    # Whether turn order was swapped (batch metadata)
+    # Whether turn order was swapped (cell metadata)
     swapped: bool = False
 
     # Scenario pool for per-round project rotation
@@ -283,13 +283,13 @@ class GameConfig:
     rotate_projects: bool = False
 
     # Experiment tracking metadata
-    experiment_run_id: str | None = None
+    episode_id: str | None = None
     experiment_name: str | None = None
     git_hash: str | None = None
 
     def __post_init__(self):
-        if not self.game_id:
-            self.game_id = str(uuid.uuid4())[:8]
+        if not self.episode_uid:
+            self.episode_uid = str(uuid.uuid4())[:8]
         # Always show utilities (agents need to know their projects),
         # never show opponent rewards (allocations still visible)
         self.visible_utilities = True
@@ -297,7 +297,7 @@ class GameConfig:
 
 
 class GameEngine:
-    """Runs a full negotiation game between two agents."""
+    """Runs a full negotiation environment between two agents."""
 
     def __init__(self, config: GameConfig, agent_a, agent_b):
         self.config = config
@@ -756,7 +756,7 @@ class GameEngine:
 
         pub_config_a = self._public_config("agent_a")
         pub_config_b = self._public_config("agent_b")
-        # Shifting agents always see round 1 (they think it's a one-shot game)
+        # Shifting agents always see round 1 (they think it's a one-shot environment)
         round_num_a = 1 if self._shifting_a else round_number
         round_num_b = 1 if self._shifting_b else round_number
         transcript = []
@@ -1125,7 +1125,7 @@ class GameEngine:
             game_start_config["oracle_stats"] = self.config.oracle_stats
 
         await self._emit("game_start", {
-            "game_id": self.config.game_id,
+            "episode_uid": self.config.episode_uid,
             "config": game_start_config,
         })
 
@@ -1176,7 +1176,7 @@ class GameEngine:
             rounds.append(round_data)
 
         summary = {
-            "game_id": self.config.game_id,
+            "episode_uid": self.config.episode_uid,
             "mode": self.config.mode.value,
             "num_rounds": len(self.results),
             "agent_a_cumulative_reward": self.agent_a_state.cumulative_reward,
@@ -1227,7 +1227,7 @@ class GameEngine:
             theoretical_joint_max_sum = collab_max * len(self.results)
             theoretical_joint_max_final = collab_max
 
-        # Request post-game reflections from LLM agents
+        # Request post-environment reflections from LLM agents
         # Skip reflections when cheap talk is disabled (no-talk baseline)
         reflections = {}
         if self.config.enable_cheap_talk:

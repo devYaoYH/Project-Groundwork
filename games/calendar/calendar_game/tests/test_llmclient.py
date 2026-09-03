@@ -401,7 +401,7 @@ def test_turn_returns_empty_on_invalid_json():
 
 
 def test_turn_filters_non_object_actions():
-    """Malformed list entries from the model are ignored before the game loop sees them."""
+    """Malformed list entries from the model are ignored before the environment loop sees them."""
     text = '{"thinking": "mixed output", "actions": [null, "oops", {"type": "dm", "to": 1, "content": "hi"}]}'
     client, mock = make_llm_client(text=text)
     config = make_game_config(agent_id=0)
@@ -526,7 +526,7 @@ def test_context_checkpoint_D():
     assert "inbox" not in content.lower()
 
 
-def test_reflection_uses_batched_logprob_call_without_mutating_history():
+def test_reflection_uses_celled_logprob_call_without_mutating_history():
     mock = LogprobMockLLM()
     client = LLMClient(mock)
     client.register(0, make_game_config(agent_id=0))

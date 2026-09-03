@@ -1,4 +1,4 @@
-"""Host and Guesser LLM agents for the word-guess game."""
+"""Host and Guesser LLM agents for the word-guess environment."""
 
 from collections.abc import Callable
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 from a2a_engine import LLMAgent
 
 HOST_SYSTEM = (
-    "You are the Host of a yes/no word-guessing game. The secret word is "
+    "You are the Host of a yes/no word-guessing environment. The secret word is "
     "{secret_word!r}. The Guesser will ask yes/no questions or make a guess. "
     "Reply with exactly one short line:\n"
     "- 'yes' or 'no' to a yes/no question (truthfully).\n"
@@ -72,7 +72,7 @@ class GuesserAgent(LLMAgent):
     def build_prompt(self, observation: dict[str, Any]) -> str:
         history = observation.get("history", [])
         if not history:
-            return "Start the game. Ask your first yes/no question."
+            return "Start the environment. Ask your first yes/no question."
         lines = [f"{turn['speaker']}: {turn['text']}" for turn in history]
         lines.append(
             f"Turns remaining: {observation['turns_remaining']}. "

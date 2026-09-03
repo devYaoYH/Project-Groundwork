@@ -1,11 +1,11 @@
 """Taxonomy labeling: classify each round against a fixed rubric.
 
-For each round in every extracted game (filtered to the judged set from
+For each round in every extracted environment (filtered to the judged set from
 judgments.csv), send the full transcript to Gemini (Vertex AI / ADC) and get
 back a binary yes/no for each of the 10 taxonomy_v2 labels.
 
 Output: judge/output/taxonomy_labels.csv
-  Columns: game_id, round_number, <10 label ids as 0/1 columns>
+  Columns: episode_uid, round_number, <10 label ids as 0/1 columns>
 
 Usage:
     uv run python -m judge.run_taxonomy_labeling [--concurrency 8] [--output PATH]
@@ -229,7 +229,7 @@ async def label_round(
     semaphore: asyncio.Semaphore,
     loop: asyncio.AbstractEventLoop,
     executor,
-    game_id: str,
+    episode_uid: str,
     rnd: dict,
     system_prompt: str,
     label_ids: list[str],
@@ -251,13 +251,13 @@ async def label_round(
                 executor,
                 lambda: call_with_retry(api_format, api_base, api_key, messages, label_ids),
             )
-            log.debug("Labeled %s round %d", game_id, rnd["round_number"])
+            log.debug("Labeled %s round %d", episode_uid, rnd["round_number"])
         except Exception as e:
-            log.error("FAILED %s round %d: %s", game_id, rnd["round_number"], e)
+            log.error("FAILED %s round %d: %s", episode_uid, rnd["round_number"], e)
             labels = {lid: False for lid in label_ids}
 
     row = {
-        "game_id": game_id,
+        "episode_uid": episode_uid,
         "round_number": rnd["round_number"],
         "round_outcome": rnd.get("round_outcome", ""),
         "joint_efficiency": rnd.get("joint_efficiency", ""),
@@ -284,9 +284,9 @@ async def run_all(
     # Build task list, skipping already-labeled rounds
     tasks = []
     skipped = 0
-    for game in games:
-        gid = game["game_id"]
-        for rnd in game["rounds"]:
+    for environment in games:
+        gid = environment["episode_uid"]
+        for rnd in environment["rounds"]:
             key = (gid, rnd["round_number"])
             if key in already_done:
                 skipped += 1
@@ -306,7 +306,7 @@ async def run_all(
          open(thinking_log_path, "a") as thinkfile:
         writer = csv.DictWriter(
             csvfile,
-            fieldnames=["game_id", "round_number", "round_outcome", "joint_efficiency"] + label_ids,
+            fieldnames=["episode_uid", "round_number", "round_outcome", "joint_efficiency"] + label_ids,
         )
 
         async def do_task(gid, rnd):
@@ -319,7 +319,7 @@ async def run_all(
             csvfile.flush()
             if thinking:
                 thinkfile.write(json.dumps({
-                    "game_id": gid,
+                    "episode_uid": gid,
                     "round_number": rnd["round_number"],
                     "thinking": thinking,
                 }) + "\n")
@@ -340,10 +340,10 @@ def _load_sample_rounds(sample_path: Path) -> list[dict]:
         sample = json.load(f)
     games: dict[str, dict] = {}
     for item in sample.get("rounds", []):
-        gid = item["game_id"]
+        gid = item["episode_uid"]
         if gid not in games:
             games[gid] = {
-                "game_id": gid,
+                "episode_uid": gid,
                 "model_a": item.get("model_a"),
                 "model_b": item.get("model_b"),
                 "mode": item.get("mode"),
@@ -358,8 +358,8 @@ def _load_judged_games(judgments_csv: Path, extracted_dir: Path) -> list[dict]:
     judged_ids: set[str] = set()
     with open(judgments_csv) as f:
         for row in csv.DictReader(f):
-            judged_ids.add(row["game_id"])
-    log.info("Judged game set: %d games", len(judged_ids))
+            judged_ids.add(row["episode_uid"])
+    log.info("Judged environment set: %d games", len(judged_ids))
 
     games: list[dict] = []
     for path in sorted(extracted_dir.glob("*.json")):
@@ -406,13 +406,13 @@ def main() -> None:
     total_rounds = sum(len(g["rounds"]) for g in games)
     log.info("Games loaded: %d, total rounds: %d", len(games), total_rounds)
 
-    # Resume: load already-labeled (game_id, round_number) pairs
+    # Resume: load already-labeled (episode_uid, round_number) pairs
     already_done: set[tuple] = set()
-    fieldnames = ["game_id", "round_number", "round_outcome", "joint_efficiency"] + label_ids
+    fieldnames = ["episode_uid", "round_number", "round_outcome", "joint_efficiency"] + label_ids
     if args.output.exists():
         with open(args.output) as f:
             for row in csv.DictReader(f):
-                already_done.add((row["game_id"], int(row["round_number"])))
+                already_done.add((row["episode_uid"], int(row["round_number"])))
         log.info("Resuming: %d rounds already labeled", len(already_done))
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)

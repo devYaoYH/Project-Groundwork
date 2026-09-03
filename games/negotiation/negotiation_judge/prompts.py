@@ -5,7 +5,7 @@ from negotiation_judge.schema import CheapTalkTurn, JudgeGameContext, RoundData,
 
 # The complete text is derived from `_golden_context`; retaining its digest
 # keeps the check compact while still pinning every byte of both messages.
-_GOLDEN_RENDER_SHA256 = "96dbb8e686bbd68ac08fe77fd2b762cdf294c3bcca882fe2aa9478a3b8a542af"
+_GOLDEN_RENDER_SHA256 = "85c887f1f2284c39c646cf49d80b9b4abb1b40ca23c81ebab52454a7f32b1729"
 
 
 def _golden_context() -> JudgeGameContext:
@@ -13,10 +13,10 @@ def _golden_context() -> JudgeGameContext:
 
     A golden prompt must be buildable offline. Depending on a live-LLM trace
     made judge startup impossible in a clean checkout, so this fixture is a
-    typed synthetic game rather than an external corpus artifact.
+    typed synthetic environment rather than an external corpus artifact.
     """
     return JudgeGameContext(
-        game_id="golden-game",
+        episode_uid="golden-environment",
         model_a="model-a",
         model_b="model-b",
         mode="shifting",
@@ -71,18 +71,18 @@ def get_prompt_version() -> str:
         )
     return digest[:12]
 
-# --- Phase 1: Whole-game pattern discovery (one call per game, output per round) ---
+# --- Phase 1: Whole-environment pattern discovery (one call per environment, output per round) ---
 
 JUDGE_SYSTEM_PROMPT = """\
 You are an expert analyst of multi-agent negotiation dialogues.
-You will analyze ALL rounds of a single resource negotiation game and
+You will analyze ALL rounds of a single resource negotiation environment and
 identify the small number of key coordination patterns — generalizable
 behavioral classes — that best explain why each round succeeded or failed.
 
-## Game Conditions
+## Environment Conditions
 
-Every game runs in one of two partner-stability conditions (see the `mode`
-field in the game context):
+Every environment runs in one of two partner-stability conditions (see the `mode`
+field in the environment context):
 
 - **stable** — Both agents keep their full conversation history across all
   rounds. Look for cumulative trust-building, path dependence, and
@@ -126,7 +126,7 @@ bias or failure.
 ## Pattern Naming Rules (CRITICAL)
 
 Your patterns must be **generalizable behavioral classes**, not narrations of
-specific game events. Ask yourself: "Would this same class of behavior appear
+specific environment events. Ask yourself: "Would this same class of behavior appear
 in a completely different multi-agent coordination setting (collaborative
 coding, scheduling, planning) with different objects?" If no, it is too
 instance-specific — abstract it up.
@@ -172,7 +172,7 @@ supply, and Agent B does the same thing in Round 3, call it
 `supply_concentration`. Consistent naming is what makes the taxonomy useful.
 
 Only introduce a new name if the mechanism is genuinely different from anything
-you have already named in an earlier round of this game.
+you have already named in an earlier round of this environment.
 
 ## Assessment Per Pattern
 
@@ -197,14 +197,14 @@ Pattern `description` explains how the class manifested **in this round**
 (1–2 sentences, grounded in evidence).
 
 {
-  "game_id": "string",
+  "episode_uid": "string",
   "model_a": "string",
   "model_b": "string",
   "mode": "stable | shifting",
   "mc_ratio": float | null,
   "rounds": [
     {
-      "game_id": "string",
+      "episode_uid": "string",
       "round_number": int,
       "model_a": "string",
       "model_b": "string",
@@ -229,7 +229,7 @@ Pattern `description` explains how the class manifested **in this round**
       "prior_round_influence": "optional — did prior rounds shape this round? e.g., 'repaired overdraw from R1', 'learned from R2 failure', 'regressed despite R1 success'"
     }
   ],
-  "game_attribution": "2-3 sentence narrative of the whole game: arc, key turning points, overall coordination quality"
+  "game_attribution": "2-3 sentence narrative of the whole environment: arc, key turning points, overall coordination quality"
 }
 """
 
@@ -303,12 +303,12 @@ def _shifting_agent_note(ctx: JudgeGameContext) -> str:
 
 
 def build_judge_user_prompt(ctx: JudgeGameContext) -> str:
-    """Build the user prompt for a whole-game judgment."""
+    """Build the user prompt for a whole-environment judgment."""
     rounds_text = "\n\n---\n\n".join(_format_round_block(r) for r in ctx.rounds)
 
     return f"""\
-## Game Context
-- Game ID: {ctx.game_id}
+## Environment Context
+- Environment ID: {ctx.episode_uid}
 - Models: Agent A = {ctx.model_a}, Agent B = {ctx.model_b}
 - Partner mode: {ctx.mode}{_shifting_agent_note(ctx)}
 - Goal compatibility (M/C ratio): {ctx.mc_ratio}
@@ -320,16 +320,16 @@ def build_judge_user_prompt(ctx: JudgeGameContext) -> str:
 
 ## Your Task
 Analyze ALL {len(ctx.rounds)} rounds above. For each round, identify the 2–4
-most important generalizable behavioral patterns (not game-specific narrations)
+most important generalizable behavioral patterns (not environment-specific narrations)
 that explain the outcome — aim for 1–2 per round, maximum 2. Use short snake_case names for patterns. Note any
 cross-round influence (repair, learning, regression) in `prior_round_influence`.
-Provide a round-level attribution sentence, then a game-level narrative.
+Provide a round-level attribution sentence, then a environment-level narrative.
 Return JSON matching the schema.
 """
 
 
 def build_judge_messages(ctx: JudgeGameContext) -> list[dict]:
-    """Build the full message list for a whole-game judge LLM call."""
+    """Build the full message list for a whole-environment judge LLM call."""
     return [
         {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
         {"role": "user", "content": build_judge_user_prompt(ctx)},

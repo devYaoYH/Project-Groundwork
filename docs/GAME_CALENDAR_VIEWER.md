@@ -1,22 +1,22 @@
-# Calendar Game Trace Viewer
+# Calendar Environment Trace Viewer
 
-A single-page frontend for replaying and inspecting calendar scheduling game traces. Supports time-travel scrubbing through events, per-agent context window inspection, calendar state visualization, and tool call inspection.
+A single-page frontend for replaying and inspecting calendar scheduling environment episodes. Supports time-travel scrubbing through events, per-agent context window inspection, calendar state visualization, and tool call inspection.
 
 ---
 
 ## Data Model
 
-The viewer consumes a `GameTraceBase` JSON file produced by the game engine. Key fields:
+The viewer consumes a `EpisodeTrace` JSON file produced by the environment engine. Key fields:
 
 ```
-trace.events        — ordered list of GameEvent objects (`type`, `timestamp`, `data`)
+trace.events        — ordered list of Event objects (`type`, `timestamp`, `data`)
 trace.final_state   — {calendars, per_agent_cost, round_outcomes}
 trace.metrics       — {coordination_rate, efficiency, fairness, ...}
 trace.config        — CalendarGameConfig fields
 ```
 
 Event types the viewer must handle:
-`game_start`, `round_start`, `turn_start`, `turn_end`, `dm_sent`, `dm_rejected`, `decide_start`, `decide_end`, `batch_applied`, `batch_rejected`, `decision_failed`, `resolution`, `game_end`
+`game_start`, `round_start`, `turn_start`, `turn_end`, `dm_sent`, `dm_rejected`, `decide_start`, `decide_end`, `cell_applied`, `cell_rejected`, `decision_failed`, `resolution`, `game_end`
 
 ---
 
@@ -24,7 +24,7 @@ Event types the viewer must handle:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  HEADER: game id · seed · num_agents · num_slots · metrics bar  │
+│  HEADER: environment id · seed · num_agents · num_slots · metrics bar  │
 ├──────────────────────┬──────────────────────────────────────────┤
 │                      │                                          │
 │   TIMELINE PANEL     │         MAIN DETAIL PANEL                │
@@ -44,7 +44,7 @@ Event types the viewer must handle:
 ## Panels
 
 ### Header Bar
-- Game ID, seed, `num_agents × num_slots` config summary
+- Environment ID, seed, `num_agents × num_slots` config summary
 - Summary metric pills: `coordination_rate`, `efficiency`, `fairness`, `meetings_scheduled`
 - File loader button (drag-and-drop or file picker for `.json` trace)
 
@@ -65,7 +65,7 @@ The primary navigation surface. Displays all events as a scrollable list grouped
   │   └─ ...
   ├─ DECISION
   │   ├─ agent_0 · decide_start
-  │   ├─ agent_0 · batch_applied
+  │   ├─ agent_0 · cell_applied
   │   └─ ...
   └─ RESOLUTION  ✓ coordinated / ✗ mismatch
 ▼ Round 1  ...
@@ -89,7 +89,7 @@ The primary navigation surface. Displays all events as a scrollable list grouped
 
 #### Tab 1: CALENDARS
 
-Shows each agent's calendar reconstructed at the currently selected event. Calendar state is derived by replaying all `batch_applied` events up to and including the current event index.
+Shows each agent's calendar reconstructed at the currently selected event. Calendar state is derived by replaying all `cell_applied` events up to and including the current event index.
 
 **Per-agent calendar grid:**
 ```
@@ -112,7 +112,7 @@ If the current event is a `turn_start`, highlight the calendar as it was when th
 
 If the current event is a `decide_start`, show the frozen snapshot (`decide_start.data.calendar_snapshot_render`).
 
-Otherwise reconstruct from replaying `batch_applied` events.
+Otherwise reconstruct from replaying `cell_applied` events.
 
 **Stats row below each calendar:**
 - Displacement cost so far
@@ -131,11 +131,11 @@ Shows exactly what the selected agent saw as input at the current event. Source 
 | `turn_end` | `data.text` (raw model output) + `data.tool_calls` (parsed) + `data.thinking` (if present) |
 | `decide_start` | `data.calendar_snapshot_render` + DECISION phase prompt |
 | `decide_end` | `data.text` + `data.tool_calls` + `data.thinking` + `data.retry_count` |
-| `batch_rejected` | `data.conflict_description` + `data.actions` submitted |
+| `cell_rejected` | `data.conflict_description` + `data.actions` submitted |
 | other | "No context window for this event type" |
 
 Sub-sections:
-- **System prompt** — collapsible, shown once per agent (derived from game config, static)
+- **System prompt** — collapsible, shown once per agent (derived from environment config, static)
 - **Inbox messages** — numbered list from `inbox_drained`, each showing sender and content
 - **Model output** — raw `text` field in a monospace block
 - **Thinking trace** — collapsible, shown only if `thinking` is non-null
@@ -184,14 +184,14 @@ Always visible. Shows details of the currently selected event:
 
 The viewer maintains a **virtual clock** driven by the selected event index. At any index:
 
-- **Calendar state** for agent `i` = initial calendar from `game_start` scenario data, then replay all `batch_applied` events with `data.agent_id == i` at or before the selected index
+- **Calendar state** for agent `i` = initial calendar from `game_start` scenario data, then replay all `cell_applied` events with `data.agent_id == i` at or before the selected index
 - **Inbox state** = not reconstructed (use logged `inbox_drained` from `turn_start` events directly)
 - **Phase** = `data.phase` of current event
 - **Round** = `data.round` of current event
 
-This means the viewer is purely a log reader — it never reruns game logic.
+This means the viewer is purely a log reader — it never reruns environment logic.
 
-`GameEvent` does not yet persist a cross-game sequence field; the current Calendar
+`Event` does not yet persist a cross-environment sequence field; the current Calendar
 viewer assigns the array index on load. The forthcoming typed event envelope will
 persist a monotonic `seq` so external viewers can retain a stable cursor after
 filtering or re-exporting a trace.
@@ -218,7 +218,7 @@ Accessible via a button in the header. Shows:
 2. Or: `?trace=path/to/trace.json` URL param for local dev server use
 3. Or: inline the trace as a JS variable for embedding
 
-**Performance:** traces are small (hundreds of events). No virtualization needed. Load entire event list into memory on open.
+**Performance:** episodes are small (hundreds of events). No virtualization needed. Load entire event list into memory on open.
 
 **Keyboard shortcuts:**
 - `←` / `→` — step one event

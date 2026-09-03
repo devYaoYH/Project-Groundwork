@@ -24,18 +24,18 @@
 
     .games-section { margin-top: 32px; }
     .games-section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
-    .game-list { display: flex; flex-direction: column; gap: 8px; }
-    .game-card {
+    .environment-list { display: flex; flex-direction: column; gap: 8px; }
+    .environment-card {
       display: flex; align-items: center; justify-content: space-between;
       padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px;
       background: var(--panel); font-size: 14px;
     }
-    .game-card .name { font-weight: 500; font-family: ui-monospace, monospace; }
-    .game-card a {
+    .environment-card .name { font-weight: 500; font-family: ui-monospace, monospace; }
+    .environment-card a {
       font-size: 12px; color: var(--accent); text-decoration: none;
       padding: 4px 10px; border: 1px solid var(--accent); border-radius: 6px;
     }
-    .game-card a:hover { background: var(--accent); color: #fff; }
+    .environment-card a:hover { background: var(--accent); color: #fff; }
 
     #status-msg { margin-top: 16px; font-size: 13px; min-height: 20px; }
     #status-msg.error { color: #b91c1c; }
@@ -50,7 +50,7 @@
 <body>
 <div class="hub">
   <h1>a2a Viewer</h1>
-  <p>Drop a trace JSON to open it in the right game viewer automatically.</p>
+  <p>Drop a trace JSON to open it in the right environment viewer automatically.</p>
   <p><a href="control.html">Open the local experiment control plane →</a></p>
 
   <div class="drop-zone" id="drop-zone">
@@ -63,15 +63,15 @@
   <div id="status-msg"></div>
 
   <div class="games-section">
-    <h2>Local SQLite traces</h2>
+    <h2>Local SQLite episodes</h2>
     <p id="trace-status">Available when served by the local Compose stack.</p>
-    <div class="game-list" id="trace-list"></div>
+    <div class="environment-list" id="trace-list"></div>
     <p><a href="leaderboard.html">Open local Calendar leaderboard →</a></p>
   </div>
 
   <div class="games-section">
     <h2>Registered games</h2>
-    <div class="game-list" id="game-list">
+    <div class="environment-list" id="environment-list">
       <div style="color:var(--muted);font-size:13px">Loading registry…</div>
     </div>
   </div>
@@ -92,7 +92,7 @@ async function loadRegistry() {
 }
 
 function renderGameList() {
-  const list = document.getElementById('game-list');
+  const list = document.getElementById('environment-list');
   const entries = Object.entries(registry);
   if (!entries.length) {
     list.innerHTML = '<div style="color:var(--muted);font-size:13px">No games registered yet.</div>';
@@ -102,7 +102,7 @@ function renderGameList() {
     const path = gameDefaultPath(config);
     const label = gameDefaultLabel(config);
     return `
-    <div class="game-card">
+    <div class="environment-card">
       <span class="name">${esc(name)}</span>
       <a href="${esc(path)}" target="_blank">${esc(label)} ↗</a>
     </div>
@@ -136,12 +136,12 @@ async function handleFile(file) {
     try { data = JSON.parse(text); }
     catch { data = JSON.parse(text.trim().split('\n')[0]); }
 
-    const gameName = data?.config?.game_name;
-    if (!gameName) { setStatus('No config.game_name found in trace — cannot route.', 'error'); return; }
+    const gameName = data?.config?.environment_id;
+    if (!gameName) { setStatus('No config.environment_id found in trace — cannot route.', 'error'); return; }
 
     const viewerPath = gameViewerPath(registry[gameName]);
     if (!viewerPath) {
-      setStatus(`No viewer registered for game "${gameName}". Add it to games.json.`, 'error');
+      setStatus(`No viewer registered for environment "${gameName}". Add it to games.json.`, 'error');
       return;
     }
 
@@ -214,15 +214,15 @@ async function loadLocalTraces() {
   const status = document.getElementById('trace-status');
   const list = document.getElementById('trace-list');
   try {
-    const response = await fetch('/api/traces');
+    const response = await fetch('/api/episodes');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const {traces = []} = await response.json();
-    status.textContent = traces.length ? `${traces.length} trace${traces.length === 1 ? '' : 's'} in the shared local database.` : 'No persisted traces yet. Run the Compose runner or submit a job.';
-    list.innerHTML = traces.map(trace => `
-      <div class="trace-row"><span><strong>${esc(trace.game_name || 'unknown')}</strong> · ${esc(trace.experiment_name || 'unlabelled')}<br><code>${esc(trace.game_id)}</code></span><a href="trace.html?trace=${encodeURIComponent(trace.game_id)}">Open →</a></div>
+    const {episodes = []} = await response.json();
+    status.textContent = episodes.length ? `${episodes.length} trace${episodes.length === 1 ? '' : 's'} in the shared local database.` : 'No persisted episodes yet. Run the Compose runner or submit a job.';
+    list.innerHTML = episodes.map(trace => `
+      <div class="trace-row"><span><strong>${esc(trace.environment_id || 'unknown')}</strong> · ${esc(trace.experiment_name || 'unlabelled')}<br><code>${esc(trace.episode_uid)}</code></span><a href="trace.html?trace=${encodeURIComponent(trace.episode_uid)}">Open →</a></div>
     `).join('');
   } catch (_) {
-    status.textContent = 'Start the local stack to browse persisted traces here.';
+    status.textContent = 'Start the local stack to browse persisted episodes here.';
   }
 }
 

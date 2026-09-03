@@ -88,7 +88,7 @@ def _compute_turn_taking(games: list) -> pd.DataFrame:
     agent flips (A>B then B>A or vice versa).
     turn_taking_4: fraction of 4-round windows with full alternation (ABAB or BABA).
 
-    Accepts either NegotiationGame objects or legacy raw game dicts.
+    Accepts either NegotiationGame objects or legacy raw environment dicts.
     """
     records = []
     for g in games:
@@ -96,7 +96,7 @@ def _compute_turn_taking(games: list) -> pd.DataFrame:
             # NegotiationGame object
             if g.is_rotating:
                 continue
-            game_id = g.game_id
+            episode_uid = g.episode_uid
             rounds = sorted(g.rounds, key=lambda r: r.round_number)
             if len(rounds) < 2:
                 continue
@@ -106,7 +106,7 @@ def _compute_turn_taking(games: list) -> pd.DataFrame:
             per_round = g.get("per_round_scenarios")
             if per_round is not None and len(per_round) > 1:
                 continue
-            game_id = g["game_id"]
+            episode_uid = g["episode_uid"]
             rounds = sorted(g["rounds"], key=lambda x: x["round_number"])
             if len(rounds) < 2:
                 continue
@@ -126,7 +126,7 @@ def _compute_turn_taking(games: list) -> pd.DataFrame:
                 flips_4 += 1
 
         records.append({
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "turn_taking_rate_2": flips_2 / pairs_2 if pairs_2 > 0 else np.nan,
             "turn_taking_rate_4": flips_4 / windows_4 if windows_4 > 0 else np.nan,
             "n_rounds": len(rounds),
@@ -136,7 +136,7 @@ def _compute_turn_taking(games: list) -> pd.DataFrame:
 
 
 def _compute_win_stay_lose_shift(anch_df: pd.DataFrame) -> pd.DataFrame:
-    """From anchoring data, compute win-stay and lose-shift rates per game.
+    """From anchoring data, compute win-stay and lose-shift rates per environment.
 
     Win (stay) = previous round was not overdrawn (aligns with anchoring analysis).
     Lose (shift) = previous round was not optimal (overdrawn OR suboptimal).
@@ -144,10 +144,10 @@ def _compute_win_stay_lose_shift(anch_df: pd.DataFrame) -> pd.DataFrame:
     Shift = different joint allocation from previous round.
     """
     if anch_df.empty:
-        return pd.DataFrame(columns=["game_id", "win_stay_rate", "lose_shift_rate"])
+        return pd.DataFrame(columns=["episode_uid", "win_stay_rate", "lose_shift_rate"])
 
     records = []
-    for game_id, gdf in anch_df.groupby("game_id"):
+    for episode_uid, gdf in anch_df.groupby("episode_uid"):
         prev_overdrawn = gdf["prev_overdrawn"].fillna(True).astype(bool)
         prev_optimal = gdf["prev_joint_optimal"].fillna(False).astype(bool)
         win_rows = gdf[~prev_overdrawn]
@@ -157,7 +157,7 @@ def _compute_win_stay_lose_shift(anch_df: pd.DataFrame) -> pd.DataFrame:
         lose_shift = 1.0 - lose_rows["alloc_same_as_prev"].mean() if len(lose_rows) > 0 else np.nan
 
         records.append({
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "win_stay_rate": win_stay,
             "lose_shift_rate": lose_shift,
         })
@@ -170,7 +170,7 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
 
     Returns dict with:
         - round_df: per-round taxonomy flags (fairness, threat)
-        - game_df: per-game aggregated strategy rates
+        - game_df: per-environment aggregated strategy rates
         - summary: overall means
     """
     if dataset is None:
@@ -190,7 +190,7 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
             ct = r.cheap_talk_transcript
             props = extract_all_proposals(ct, resource_types)
             sharing_records.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "round_number": r.round_number,
                 "a_has_numeric_proposal": props["agent_a"]["has_numeric_proposal"],
                 "b_has_numeric_proposal": props["agent_b"]["has_numeric_proposal"],
@@ -203,7 +203,7 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
 
     if not sharing_round_df.empty:
         sharing_by_game = (
-            sharing_round_df.groupby("game_id")["either_has_numeric_proposal"]
+            sharing_round_df.groupby("episode_uid")["either_has_numeric_proposal"]
             .mean()
             .rename("sharing_rate")
         )
@@ -213,10 +213,10 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
     # --- 2: Other-proposal rate from rq12 (uses all rounds as denominator) ---
     fpd_results = analyze_first_proposal_deference(v5_dataset)
     fpd_df = fpd_results.get("round_df", pd.DataFrame())
-    total_rounds_by_game = {g.game_id: g.num_rounds for g in v5_games}
+    total_rounds_by_game = {g.episode_uid: g.num_rounds for g in v5_games}
 
     if not fpd_df.empty:
-        other_counts = fpd_df.groupby("game_id")["has_other_proposal"].sum()
+        other_counts = fpd_df.groupby("episode_uid")["has_other_proposal"].sum()
         proposal_by_game = (other_counts / other_counts.index.map(total_rounds_by_game)).rename("proposal_rate")
     else:
         proposal_by_game = pd.Series(dtype=float, name="proposal_rate")
@@ -226,14 +226,14 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
     for g in v5_games:
         scan = _scan_transcript(g.rounds)
         for rec in scan:
-            rec["game_id"] = g.game_id
+            rec["episode_uid"] = g.episode_uid
         round_records.extend(scan)
 
     round_df = pd.DataFrame(round_records)
 
     if not round_df.empty:
-        fairness_by_game = round_df.groupby("game_id")["has_fairness_appeal"].mean().rename("fairness_appeal_rate")
-        threat_by_game = round_df.groupby("game_id")["has_threat"].mean().rename("threat_rate")
+        fairness_by_game = round_df.groupby("episode_uid")["has_fairness_appeal"].mean().rename("fairness_appeal_rate")
+        threat_by_game = round_df.groupby("episode_uid")["has_threat"].mean().rename("threat_rate")
     else:
         fairness_by_game = pd.Series(dtype=float, name="fairness_appeal_rate")
         threat_by_game = pd.Series(dtype=float, name="threat_rate")
@@ -246,20 +246,20 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
     wsls_df = _compute_win_stay_lose_shift(anch_df)
 
     # --- Assemble game_df ---
-    game_ids = [g.game_id for g in v5_games]
-    game_df = pd.DataFrame({"game_id": game_ids})
+    episode_uids = [g.episode_uid for g in v5_games]
+    game_df = pd.DataFrame({"episode_uid": episode_uids})
 
     for series in [sharing_by_game, proposal_by_game, fairness_by_game, threat_by_game]:
-        game_df = game_df.merge(series, on="game_id", how="left")
+        game_df = game_df.merge(series, on="episode_uid", how="left")
 
     if not tt_df.empty:
-        game_df = game_df.merge(tt_df[["game_id", "turn_taking_rate_2", "turn_taking_rate_4"]], on="game_id", how="left")
+        game_df = game_df.merge(tt_df[["episode_uid", "turn_taking_rate_2", "turn_taking_rate_4"]], on="episode_uid", how="left")
     else:
         game_df["turn_taking_rate_2"] = np.nan
         game_df["turn_taking_rate_4"] = np.nan
 
     if not wsls_df.empty:
-        game_df = game_df.merge(wsls_df, on="game_id", how="left")
+        game_df = game_df.merge(wsls_df, on="episode_uid", how="left")
     else:
         game_df["win_stay_rate"] = np.nan
         game_df["lose_shift_rate"] = np.nan
@@ -286,7 +286,7 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
             props = extract_all_proposals(ct, resource_types)
             for agent, model in [("agent_a", g.model_a), ("agent_b", g.model_b)]:
                 agent_records.append({
-                    "game_id": g.game_id,
+                    "episode_uid": g.episode_uid,
                     "round_number": r.round_number,
                     "model": model,
                     "mc_bucket": g.metadata["mc_bucket"],
@@ -299,11 +299,11 @@ def analyze_strategy_taxonomy(dataset: NegotiationDataset | None = None) -> dict
     # Add per-agent other-proposal from rq12 (attributed to first_proposer)
     if not fpd_df.empty and "first_proposer_model" in fpd_df.columns:
         other_agent = fpd_df[fpd_df["has_other_proposal"]][
-            ["game_id", "round_number", "first_proposer_model"]
+            ["episode_uid", "round_number", "first_proposer_model"]
         ].rename(columns={"first_proposer_model": "model"})
         other_agent["has_other_proposal"] = True
         agent_df = agent_df.merge(
-            other_agent, on=["game_id", "round_number", "model"], how="left",
+            other_agent, on=["episode_uid", "round_number", "model"], how="left",
         )
         agent_df["has_other_proposal"] = agent_df["has_other_proposal"].fillna(False)
     else:

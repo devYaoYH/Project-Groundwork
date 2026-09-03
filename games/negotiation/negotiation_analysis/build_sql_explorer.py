@@ -1,4 +1,4 @@
-"""Builds a standalone HTML SQL explorer for Negotiation Game traces.
+"""Builds a standalone HTML SQL explorer for Negotiation Environment episodes.
 
 Loads data using the modernized NegotiationDataset and embeds it into an 
 interactive HTML page powered by DuckDB-WASM.

@@ -1,5 +1,5 @@
 """
-Default configuration constants for the Negotiation Game.
+Default configuration constants for the Negotiation Environment.
 """
 
 import os
@@ -106,7 +106,7 @@ LLM_PROVIDERS = {
     },
 }
 
-# --- Game Defaults ---
+# --- Environment Defaults ---
 DEFAULT_RESOURCE_TYPES = ["wood", "stone", "gold"]
 DEFAULT_RESOURCE_SUPPLY = {"wood": 10, "stone": 10, "gold": 6}
 DEFAULT_RESOURCE_COSTS = {"wood": 1.0, "stone": 1.5, "gold": 3.0}
@@ -145,6 +145,6 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "gam
 # --- Cloud Run / Firestore ---
 IS_CLOUD_RUN = os.environ.get("K_SERVICE") is not None
 FIRESTORE_COLLECTION = "game_traces_v2"
-# Demo visitor signups (email + game outcome), separate from research traces.
+# Demo visitor signups (email + environment outcome), separate from research episodes.
 VISITOR_COLLECTION = "demo_visitors"
 FIRESTORE_PROJECT = os.environ.get("FIRESTORE_PROJECT", "")

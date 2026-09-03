@@ -4,13 +4,13 @@ description: >
   3 MC ratios x 10 games x 2 goal framings = 240 self-play games.
   Includes both original self-play and joint-goal intervention conditions.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
   vertex_adc_file: ${A2A_VERTEX_MAAS_ADC_FILE}
   gcp_project: ${A2A_VERTEX_MAAS_PROJECT}
   gcp_location: us-central1
 
-batches:
+cells:
 - label: gptoss120b_selfplay_stable_fixed_mc05
   count: 10
   config: &stable_fixed_mc05

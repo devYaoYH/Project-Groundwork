@@ -59,7 +59,7 @@ def analyze_sycophancy(turn_df: pd.DataFrame, round_df: pd.DataFrame) -> dict:
 
     # Per-round aggregation
     syc_by_round = (
-        turn_df.groupby(["game_id", "round_number", "condition", "goal_type", "mode"])
+        turn_df.groupby(["episode_uid", "round_number", "condition", "goal_type", "mode"])
         .agg(
             sycophancy_rate=pd.NamedAgg(column="is_sycophantic", aggfunc="mean"),
             n_sycophantic=pd.NamedAgg(column="is_sycophantic", aggfunc="sum"),
@@ -74,8 +74,8 @@ def analyze_sycophancy(turn_df: pd.DataFrame, round_df: pd.DataFrame) -> dict:
 
     # Join with outcomes
     syc_by_round = syc_by_round.merge(
-        round_df[["game_id", "round_number", "overdrawn", "joint_reward"]],
-        on=["game_id", "round_number"],
+        round_df[["episode_uid", "round_number", "overdrawn", "joint_reward"]],
+        on=["episode_uid", "round_number"],
         how="left",
     )
 
@@ -110,7 +110,7 @@ def print_summary(results: dict) -> None:
     turn_df = results["turn_df"]
     print("\nBy condition:")
     for cond, grp in turn_df.groupby("condition"):
-        n_games = grp["game_id"].nunique()
+        n_games = grp["episode_uid"].nunique()
         print(f"  {cond} (n={n_games}): {grp['is_sycophantic'].mean():.1%}")
 
     print("\nSubtype rates:")

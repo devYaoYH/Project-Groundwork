@@ -8,11 +8,11 @@ description: >
 participants: [gpt-mini, haiku]
 
 defaults:
-  game_name: word_guess
+  environment_id: word_guess
   num_agents: 2
   max_turns: 10
 
-batches:
+cells:
   - label: dog
     count: 1
     config:

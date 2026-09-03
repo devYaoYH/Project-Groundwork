@@ -18,9 +18,9 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from a2a_engine.registry import discover_games, get_game_spec
+from a2a_engine.registry import discover_environments, get_environment_spec
 from a2a_engine.ratings import rebuild_rating_snapshot
-from a2a_engine.storage.sqlite import SQLiteTraceStore
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
@@ -57,7 +57,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             control = self._control()
             by_game = control.available_experiments()
             return self._json({"releases": [
-                {**release.__dict__, "experiments": by_game.get(release.game_name, [])}
+                {**release.__dict__, "experiments": by_game.get(release.environment_id, [])}
                 for release in control.releases()
             ]})
         if parsed.path == "/api/agent-pool":
@@ -73,17 +73,17 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 404)
         if parsed.path == "/api/experiments":
             return self._json({"experiments": [experiment.__dict__ for experiment in self._control().experiments()]})
-        if parsed.path == "/api/rollouts":
-            return self._json({"rollouts": [rollout.__dict__ for rollout in self._control().rollouts()]})
-        if parsed.path.startswith("/api/rollouts/") and parsed.path.endswith("/events"):
-            rollout_id = unquote(parsed.path.removeprefix("/api/rollouts/").removesuffix("/events").rstrip("/"))
-            return self._sse_rollout_events(rollout_id)
-        if parsed.path.startswith("/api/rollouts/"):
-            rollout_id = unquote(parsed.path.removeprefix("/api/rollouts/"))
+        if parsed.path == "/api/launches":
+            return self._json({"launches": [launch.__dict__ for launch in self._control().launches()]})
+        if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/events"):
+            launch_id = unquote(parsed.path.removeprefix("/api/launches/").removesuffix("/events").rstrip("/"))
+            return self._sse_launch_events(launch_id)
+        if parsed.path.startswith("/api/launches/"):
+            launch_id = unquote(parsed.path.removeprefix("/api/launches/"))
             try:
-                return self._json(self._control().rollout_detail(rollout_id))
+                return self._json(self._control().launch_detail(launch_id))
             except KeyError:
-                return self._json({"error": "rollout not found"}, 404)
+                return self._json({"error": "launch not found"}, 404)
         if parsed.path.startswith("/api/streams/") and parsed.path.endswith("/trace"):
             stream = unquote(parsed.path.removeprefix("/api/streams/").removesuffix("/trace"))
             payload, status = self._stream_trace(stream)
@@ -91,27 +91,27 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/streams/"):
             stream = unquote(parsed.path.removeprefix("/api/streams/"))
             return self._json(self._stream_events(stream))
-        if parsed.path == "/api/traces":
-            return self._json({"traces": self._trace_summaries()})
-        if parsed.path.startswith("/api/traces/") and parsed.path.endswith("/observability"):
-            game_id = unquote(parsed.path.removeprefix("/api/traces/").removesuffix("/observability"))
-            payload = self._observability(game_id)
+        if parsed.path == "/api/episodes":
+            return self._json({"episodes": self._trace_summaries()})
+        if parsed.path.startswith("/api/episodes/") and parsed.path.endswith("/observability"):
+            episode_uid = unquote(parsed.path.removeprefix("/api/episodes/").removesuffix("/observability"))
+            payload = self._observability(episode_uid)
             return self._json(payload if payload is not None else {"error": "trace not found"}, 200 if payload else 404)
-        if parsed.path.startswith("/api/traces/") and parsed.path.endswith("/artifacts"):
-            game_id = unquote(parsed.path.removeprefix("/api/traces/").removesuffix("/artifacts"))
-            payload = self._artifacts(game_id)
+        if parsed.path.startswith("/api/episodes/") and parsed.path.endswith("/artifacts"):
+            episode_uid = unquote(parsed.path.removeprefix("/api/episodes/").removesuffix("/artifacts"))
+            payload = self._artifacts(episode_uid)
             return self._json(payload if payload is not None else {"error": "trace not found"}, 200 if payload else 404)
-        if parsed.path.startswith("/api/traces/"):
-            game_id = unquote(parsed.path.removeprefix("/api/traces/"))
-            trace = self._trace(game_id)
+        if parsed.path.startswith("/api/episodes/"):
+            episode_uid = unquote(parsed.path.removeprefix("/api/episodes/"))
+            trace = self._trace(episode_uid)
             return self._json(trace if trace is not None else {"error": "trace not found"}, 200 if trace else 404)
         if parsed.path == "/api/leaderboards":
             return self._json({
                 "leaderboards": [{
-                    "game_name": "calendar",
+                    "environment_id": "calendar",
                     "href": "/api/leaderboards/calendar",
                     "kind": "openskill",
-                    "note": "Calendar is the only shipped game with a rating-event adapter.",
+                    "note": "Calendar is the only shipped environment with a rating-event adapter.",
                 }],
             })
         if parsed.path == "/api/leaderboards/calendar":
@@ -129,16 +129,16 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     name=body.get("name"),
                 )
                 return self._json(experiment.__dict__, 201)
-            if parsed.path == "/api/rollouts":
-                rollout = self._control().launch_rollout(
+            if parsed.path == "/api/launches":
+                launch = self._control().launch_experiment(
                     str(body.get("experiment_id") or ""),
                     max_parallelism=int(body.get("max_parallelism") or 1),
                     smoke_test=bool(body.get("smoke_test", False)),
                 )
-                return self._json(rollout.__dict__, 202)
-            if parsed.path.startswith("/api/rollouts/") and parsed.path.endswith("/cancel"):
-                rollout_id = unquote(parsed.path.removeprefix("/api/rollouts/").removesuffix("/cancel").rstrip("/"))
-                return self._json(self._control().cancel_rollout(rollout_id).__dict__)
+                return self._json(launch.__dict__, 202)
+            if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/cancel"):
+                launch_id = unquote(parsed.path.removeprefix("/api/launches/").removesuffix("/cancel").rstrip("/"))
+                return self._json(self._control().cancel_launch(launch_id).__dict__)
         except (KeyError, ValueError) as exc:
             return self._json({"error": str(exc)}, 400)
         return self._json({"error": "not found"}, 404)
@@ -149,8 +149,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     @classmethod
-    def _store(cls) -> SQLiteTraceStore:
-        return SQLiteTraceStore(path=cls.database)
+    def _store(cls) -> SQLiteEpisodeStore:
+        return SQLiteEpisodeStore(path=cls.database)
 
     @classmethod
     def _control(cls) -> ControlPlane:
@@ -163,49 +163,49 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     @classmethod
     def _health(cls) -> dict[str, object]:
         try:
-            count = sum(1 for _ in cls._store().iter_traces())
+            count = sum(1 for _ in cls._store().iter_episodes())
             return {
                 "ok": True,
                 "database": "ready" if cls.database.exists() else "waiting for first run",
-                "trace_count": count,
+                "episode_count": count,
             }
         except Exception as exc:
             return {"ok": False, "database": "unreadable", "error": str(exc)}
 
     @classmethod
     def _trace_summaries(cls) -> list[dict[str, object]]:
-        traces = list(cls._store().iter_traces())
+        episodes = list(cls._store().iter_episodes())
         return [{
-            "game_id": trace.game_id,
-            "game_name": trace.config.game_name,
+            "episode_uid": trace.episode_uid,
+            "environment_id": trace.config.environment_id,
             "experiment_name": trace.config.experiment_name,
-            "experiment_run_id": trace.config.experiment_run_id,
-            "environment_id": trace.environment.id if trace.environment else None,
-            "environment_revision": trace.environment.revision if trace.environment else None,
-            "episode_id": trace.episode.id if trace.episode else None,
-            "batch_label": trace.config.extra.get("batch_label"),
-            "run_idx": trace.config.extra.get("run_idx"),
+            "episode_id": trace.config.episode_id,
+            "release_id": trace.release.id if trace.release else None,
+            "release_version": trace.release.release if trace.release else None,
+            "episode_reference_id": trace.episode.id if trace.episode else None,
+            "cell_id": trace.config.extra.get("cell_id"),
+            "episode_idx": trace.config.extra.get("episode_idx"),
             "started_at": trace.started_at,
             "ended_at": trace.ended_at,
             "stopped": trace.stopped,
             "metrics": trace.metrics,
             "created_at": trace.started_at,
-        } for trace in reversed(traces)]
+        } for trace in reversed(episodes)]
 
     @classmethod
-    def _trace(cls, game_id: str) -> dict[str, object] | None:
-        trace = cls._store().get_trace(game_id)
+    def _trace(cls, episode_uid: str) -> dict[str, object] | None:
+        trace = cls._store().get_episode(episode_uid)
         return trace.model_dump(mode="json") if trace is not None else None
 
     @classmethod
-    def _observability(cls, game_id: str) -> dict[str, object] | None:
+    def _observability(cls, episode_uid: str) -> dict[str, object] | None:
         """Return the local OTel projection correlated to one persisted trace.
 
         The SQLite trace remains the source of truth. JSONL is intentionally a
         local, append-only projection: an interrupted last line is ignored and
         a missing exporter simply yields no spans for an otherwise valid trace.
         """
-        trace = cls._store().get_trace(game_id)
+        trace = cls._store().get_episode(episode_uid)
         if trace is None:
             return None
         observability = dict(trace.observability)
@@ -223,32 +223,32 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                         spans.append(span)
         spans.sort(key=lambda span: str(span.get("start_time") or ""))
         return {
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "observability": observability,
             "span_count": len(spans),
             "spans": spans,
         }
 
     @classmethod
-    def _artifacts(cls, game_id: str) -> dict[str, object] | None:
+    def _artifacts(cls, episode_uid: str) -> dict[str, object] | None:
         store = cls._store()
-        if store.get_trace(game_id) is None:
+        if store.get_episode(episode_uid) is None:
             return None
         return {
-            "game_id": game_id,
-            "artifacts": [artifact.model_dump(mode="json") for artifact in store.get_derived_artifacts(game_id)],
+            "episode_uid": episode_uid,
+            "artifacts": [artifact.model_dump(mode="json") for artifact in store.get_derived_artifacts(episode_uid)],
         }
 
     @classmethod
     def _calendar_leaderboard(cls) -> dict[str, object]:
         try:
-            discover_games()
-            adapter = get_game_spec("calendar").rating_adapter
+            discover_environments()
+            adapter = get_environment_spec("calendar").rating_adapter
             if adapter is None:
                 raise RuntimeError("Calendar does not register a rating adapter")
             materialization = rebuild_rating_snapshot(cls._store(), adapter)
         except Exception as exc:
-            return {"game_name": "calendar", "error": f"rating adapter unavailable: {exc}", "leaderboard": []}
+            return {"environment_id": "calendar", "error": f"rating adapter unavailable: {exc}", "leaderboard": []}
         payload = materialization.snapshot.model_dump(mode="json")
         # ``RatingSnapshot`` deliberately stores canonical player state. The
         # browser needs its derived, sorted projection as well.
@@ -269,7 +269,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def _stream_trace(cls, stream: str) -> tuple[dict[str, object], int]:
-        """Project a live stream into the trace shape a game viewer consumes.
+        """Project a live stream into the trace shape a environment viewer consumes.
 
         An episode still running has no persisted trace, so this is what lets
         one viewer render a finished and an in-flight episode the same way.
@@ -285,11 +285,11 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         payload["projection"] = projection_summary(trace)
         return payload, 200
 
-    def _sse_rollout_events(self, rollout_id: str) -> None:
+    def _sse_launch_events(self, launch_id: str) -> None:
         try:
-            self._control().rollout(rollout_id)
+            self._control().launch(launch_id)
         except KeyError:
-            return self._json({"error": "rollout not found"}, 404)
+            return self._json({"error": "launch not found"}, 404)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -299,7 +299,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         # Browsers reconnect automatically after this short bounded request;
         # SSE therefore needs no server-side client registry for local runs.
         for _ in range(80):
-            events = self._control().events(rollout_id, after_id=cursor)
+            events = self._control().events(launch_id, after_id=cursor)
             try:
                 for event in events:
                     cursor = int(event["id"])
@@ -329,15 +329,15 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # Directory names differ from game names (``word_guess`` -> ``word-guess``),
+    # Directory names differ from environment names (``word_guess`` -> ``word-guess``),
     # so the served set is declared rather than derived.
     GAME_DIRS = ("calendar", "negotiation", "buyer-seller", "word-guess")
 
     def _game_root(self, relative: str, prefix: str, suffix: str) -> tuple[Path, str] | None:
-        _, game_name, *parts = relative.split("/")
-        if game_name not in self.GAME_DIRS:
+        _, environment_id, *parts = relative.split("/")
+        if environment_id not in self.GAME_DIRS:
             return None
-        return (self.workspace / "games" / game_name / suffix).resolve(), "/".join(parts)
+        return (self.workspace / "games" / environment_id / suffix).resolve(), "/".join(parts)
 
     def _static(self, request_path: str) -> None:
         relative = request_path.lstrip("/") or "index.html"
@@ -345,8 +345,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             resolved = self._game_root(relative, "game-replays/", "replay")
         elif relative.startswith("game-assets/"):
             # The games ship their own viewers (Calendar's trace viewer,
-            # Negotiation's web app). Serving each game's directory lets a
-            # replay page load that game's real visualisation instead of a
+            # Negotiation's web app). Serving each environment's directory lets a
+            # replay page load that environment's real visualisation instead of a
             # generic event dump.
             resolved = self._game_root(relative, "game-assets/", "")
         else:

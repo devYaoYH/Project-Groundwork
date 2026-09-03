@@ -1,9 +1,9 @@
-"""Game-level taxonomy labeling with one LLM call per game.
+"""Environment-level taxonomy labeling with one LLM call per environment.
 
-This is the v3 calibration rater path: each API call receives the full game
+This is the v3 calibration rater path: each API call receives the full environment
 transcript, including all prior rounds, and returns labels for every round in
-that game. Calls are parallelized across games, then flattened to one CSV row
-per (game_id, round_number).
+that environment. Calls are parallelized across games, then flattened to one CSV row
+per (episode_uid, round_number).
 
 Prepared for repeated stability runs, but this module does not orchestrate the
 five repeats itself. Run it with distinct output paths for each repeat.
@@ -111,8 +111,8 @@ def build_system_prompt(rubric_text: str, label_ids: list[str], auxiliary_ids: l
     )
     return f"""You are an expert annotator for multi-agent negotiation research.
 
-You will receive one complete multi-round negotiation game. Label each round
-using the rubric below. Use the full game context when deciding round labels:
+You will receive one complete multi-round negotiation environment. Label each round
+using the rubric below. Use the full environment context when deciding round labels:
 prior negotiation transcripts, repeated patterns, repairs, regression, and
 precedent all matter. However, each output row should label only the mechanism
 present in that specific round.
@@ -132,7 +132,7 @@ Auxiliary tags are separate from core labels. For each auxiliary tag, mark:
 - Auxiliary tags must be based on public speech only. Do not assign auxiliary
   tags based solely on private thinking.
 
-Use the full game context, but only tag behavior exhibited in the current round.
+Use the full environment context, but only tag behavior exhibited in the current round.
 Auxiliary tags may co-occur with any core labels and with each other.
 
 ## Rubric
@@ -156,7 +156,7 @@ Respond with ONLY a JSON object:
   ]
 }}
 
-Include exactly one object for every round in the game. Use true/false values.
+Include exactly one object for every round in the environment. Use true/false values.
 If a round has no applicable labels or tags, still include that round with all
 core labels set to false and all auxiliary tags set to {{"present": false,
 "agents": []}}. Never omit a round.
@@ -165,30 +165,30 @@ No explanations, no markdown fences.
 
 
 def load_sample_games(sample_path: Path) -> list[dict]:
-    """Load calibration/exploratory sample and group round payloads by game."""
+    """Load calibration/exploratory sample and group round payloads by environment."""
     with open(sample_path) as f:
         sample = json.load(f)
 
     games_by_id: dict[str, dict] = {}
     for item in sample.get("rounds", []):
-        game_id = item["game_id"]
-        if game_id not in games_by_id:
-            games_by_id[game_id] = {
-                "game_id": game_id,
+        episode_uid = item["episode_uid"]
+        if episode_uid not in games_by_id:
+            games_by_id[episode_uid] = {
+                "episode_uid": episode_uid,
                 "model_a": item.get("model_a"),
                 "model_b": item.get("model_b"),
                 "mode": item.get("mode"),
                 "shifting_agent": item.get("shifting_agent"),
                 "mc_ratio": item.get("mc_ratio"),
                 "experiment_label": item.get("experiment_label"),
-                "experiment_run_id": item.get("experiment_run_id"),
+                "episode_id": item.get("episode_id"),
                 "rounds": [],
             }
-        games_by_id[game_id]["rounds"].append(item["round"])
+        games_by_id[episode_uid]["rounds"].append(item["round"])
 
     games = list(games_by_id.values())
-    for game in games:
-        game["rounds"].sort(key=lambda r: int(r["round_number"]))
+    for environment in games:
+        environment["rounds"].sort(key=lambda r: int(r["round_number"]))
     return games
 
 
@@ -245,20 +245,20 @@ def format_round_for_prompt(round_data: dict) -> str:
     return "\n".join(lines)
 
 
-def format_game_prompt(game: dict) -> str:
+def format_game_prompt(environment: dict) -> str:
     lines = [
-        f"# Game {game['game_id']}",
-        f"model_a: {game.get('model_a')}",
-        f"model_b: {game.get('model_b')}",
-        f"mode: {game.get('mode')}",
-        f"shifting_agent: {game.get('shifting_agent')}",
-        f"mc_ratio: {game.get('mc_ratio')}",
-        f"experiment_label: {game.get('experiment_label')}",
+        f"# Environment {environment['episode_uid']}",
+        f"model_a: {environment.get('model_a')}",
+        f"model_b: {environment.get('model_b')}",
+        f"mode: {environment.get('mode')}",
+        f"shifting_agent: {environment.get('shifting_agent')}",
+        f"mc_ratio: {environment.get('mc_ratio')}",
+        f"experiment_label: {environment.get('experiment_label')}",
         "",
         "The rounds below are chronological. Use earlier rounds as context for later labels.",
         "",
     ]
-    for round_data in game["rounds"]:
+    for round_data in environment["rounds"]:
         lines.append(format_round_for_prompt(round_data))
         lines.append("")
     return "\n".join(lines)
@@ -351,7 +351,7 @@ def coerce_bool(value) -> bool:
 
 
 def call_game_with_retry(
-    game: dict,
+    environment: dict,
     system_prompt: str,
     label_ids: list[str],
     auxiliary_ids: list[str],
@@ -362,10 +362,10 @@ def call_game_with_retry(
     max_tokens: int,
     thinking_budget: int | None,
 ) -> tuple[dict[int, dict], str | None]:
-    expected_rounds = {int(round_data["round_number"]) for round_data in game["rounds"]}
+    expected_rounds = {int(round_data["round_number"]) for round_data in environment["rounds"]}
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": format_game_prompt(game)},
+        {"role": "user", "content": format_game_prompt(environment)},
     ]
 
     last_error: Exception | None = None
@@ -393,7 +393,7 @@ def call_game_with_retry(
         wait = min(API_BACKOFF_BASE * (2 ** attempt), API_BACKOFF_MAX)
         log.warning(
             "%s failed on attempt %d/%d: %s; sleeping %.1fs",
-            game["game_id"],
+            environment["episode_uid"],
             attempt + 1,
             API_MAX_RETRIES,
             last_error,
@@ -401,7 +401,7 @@ def call_game_with_retry(
         )
         time.sleep(wait)
 
-    raise RuntimeError(f"Failed {game['game_id']} after {API_MAX_RETRIES} attempts: {last_error}")
+    raise RuntimeError(f"Failed {environment['episode_uid']} after {API_MAX_RETRIES} attempts: {last_error}")
 
 
 def auxiliary_columns(auxiliary_ids: list[str]) -> list[str]:
@@ -412,18 +412,18 @@ def auxiliary_columns(auxiliary_ids: list[str]) -> list[str]:
 
 
 def rows_for_game(
-    game: dict,
+    environment: dict,
     labels_by_round: dict[int, dict],
     label_ids: list[str],
     auxiliary_ids: list[str],
 ) -> list[dict]:
     rows: list[dict] = []
-    for round_data in game["rounds"]:
+    for round_data in environment["rounds"]:
         round_number = int(round_data["round_number"])
         label_values = labels_by_round[round_number]["core_labels"]
         aux_values = labels_by_round[round_number]["auxiliary_tags"]
         row = {
-            "game_id": game["game_id"],
+            "episode_uid": environment["episode_uid"],
             "round_number": round_number,
             "round_outcome": round_data.get("round_outcome", ""),
             "joint_efficiency": round_data.get("joint_efficiency", ""),
@@ -442,7 +442,7 @@ def rows_for_game(
 async def label_one_game(
     semaphore: asyncio.Semaphore,
     loop: asyncio.AbstractEventLoop,
-    game: dict,
+    environment: dict,
     system_prompt: str,
     label_ids: list[str],
     auxiliary_ids: list[str],
@@ -457,7 +457,7 @@ async def label_one_game(
         labels, thinking = await loop.run_in_executor(
             None,
             lambda: call_game_with_retry(
-                game=game,
+                environment=environment,
                 system_prompt=system_prompt,
                 label_ids=label_ids,
                 auxiliary_ids=auxiliary_ids,
@@ -471,8 +471,8 @@ async def label_one_game(
         )
     thinking_row = None
     if thinking:
-        thinking_row = {"game_id": game["game_id"], "thinking": thinking}
-    return rows_for_game(game, labels, label_ids, auxiliary_ids), thinking_row
+        thinking_row = {"episode_uid": environment["episode_uid"], "thinking": thinking}
+    return rows_for_game(environment, labels, label_ids, auxiliary_ids), thinking_row
 
 
 async def run_all_games(
@@ -496,7 +496,7 @@ async def run_all_games(
         label_one_game(
             semaphore=semaphore,
             loop=loop,
-            game=game,
+            environment=environment,
             system_prompt=system_prompt,
             label_ids=label_ids,
             auxiliary_ids=auxiliary_ids,
@@ -507,7 +507,7 @@ async def run_all_games(
             max_tokens=max_tokens,
             thinking_budget=thinking_budget,
         )
-        for game in games
+        for environment in games
     ]
 
     log.info("Games to label: %d (concurrency=%d)", len(tasks), concurrency)
@@ -520,9 +520,9 @@ async def run_all_games(
         if thinking_row:
             thinking_rows.append(thinking_row)
 
-    rows.sort(key=lambda r: (r["game_id"], int(r["round_number"])))
+    rows.sort(key=lambda r: (r["episode_uid"], int(r["round_number"])))
     fieldnames = [
-        "game_id",
+        "episode_uid",
         "round_number",
         "round_outcome",
         "joint_efficiency",
@@ -544,7 +544,7 @@ async def run_all_games(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Label taxonomy categories with one LLM call per game.")
+    parser = argparse.ArgumentParser(description="Label taxonomy categories with one LLM call per environment.")
     parser.add_argument("--taxonomy", type=Path, default=DEFAULT_TAXONOMY)
     parser.add_argument("--sample", type=Path, default=DEFAULT_SAMPLE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)

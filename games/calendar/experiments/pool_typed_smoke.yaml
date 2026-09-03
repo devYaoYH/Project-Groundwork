@@ -1,9 +1,9 @@
 schema_version: 1
 name: calendar_pool_typed_smoke
 description: >
-  Pinned Calendar environment with participants named from the shared agent
-  pool. The environment declares five agent slots, so five participants.
-environment: ../environments/calendar_tiny_v1.yaml
+  Pinned Calendar release with participants named from the shared agent
+  pool. The release declares five agent slots, so five participants.
+release: ../environments/calendar_tiny_v1.yaml
 participants: [gpt-mini, gpt-mini, gpt-mini, haiku, haiku]
 episodes:
   - label: pinned-task

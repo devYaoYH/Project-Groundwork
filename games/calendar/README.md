@@ -1,22 +1,22 @@
-# Calendar Game
+# Calendar Environment
 
-This package contains the CalBench calendar scheduling environment. It registers
-the `calendar` game with `a2a-engine`, provides task generation and oracle
-solving, implements scripted/DSM/LLM agents, and writes JSON traces with
+This package contains the CalBench calendar scheduling release. It registers
+the `calendar` environment with `a2a-engine`, provides task generation and oracle
+solving, implements scripted/DSM/LLM agents, and writes JSON episodes with
 evaluation metrics.
 
 ## Engine integration contract
 
-Calendar is the repository's canonical non-trivial integration. The live game
+Calendar is the repository's canonical non-trivial integration. The live environment
 owns the scheduling protocol; the engine owns persistence and reporting:
 
-1. The runner wraps the game in an OpenTelemetry root span and persists its IDs
+1. The runner wraps the environment in an OpenTelemetry root span and persists its IDs
    under `trace.observability`.
 2. Calendar emits `final_state.rating_context`, a versioned deep copy of the
    scenario fields required for later scoring. A copied trace therefore does
    not need a checkout-local task file.
 3. The registered `CalendarRatingAdapter` derives rating events only from
-   completed traces. It never writes rating state while a model is running.
+   completed episodes. It never writes rating state while a model is running.
 4. Expensive VPS analysis is attached later through a digest-bound artifact:
 
 ```bash
@@ -416,7 +416,7 @@ greedy_normalized_regret =
 cost_score = clip(1 - greedy_normalized_regret, 0, 1)
 ```
 
-For partial-success traces, cost scoring uses a matched scheduled-only oracle
+For partial-success episodes, cost scoring uses a matched scheduled-only oracle
 when available:
 
 ```text
@@ -456,8 +456,8 @@ If no privacy experiment or privacy metrics are present, `privacy_score` default
 to `1.0` and `privacy_score_available` is `false`.
 
 Communication efficiency rewards using fewer cheap-talk message actions. In new
-traces this includes private DMs and groupchat actions via
-`total_cheap_talk_messages`; older traces fall back to `total_dms_sent`:
+episodes this includes private DMs and groupchat actions via
+`total_cheap_talk_messages`; older episodes fall back to `total_dms_sent`:
 
 ```text
 dm_budget_total = num_meetings * num_agents * dm_cap
@@ -535,9 +535,9 @@ Useful runner flags:
 
 | Flag | Effect |
 | --- | --- |
-| `--results-dir DIR` | Write traces under `DIR/<experiment_name>/` |
+| `--results-dir DIR` | Write episodes under `DIR/<experiment_name>/` |
 | `--max-parallelism N` | Number of games to run concurrently |
-| `--resume` | Skip completed `experiment_run_id`s |
+| `--resume` | Skip completed `episode_id`s |
 | `--shard-index I --shard-count N` | Partition expanded runs across machines |
 | `--dry-run` | Replace agents with deterministic scripted clients |
 
@@ -548,7 +548,7 @@ Minimal real-model experiment:
 ```yaml
 name: my_openai_run
 defaults:
-  game_name: calendar
+  environment_id: calendar
   task_path: tasks/calbench_90_uniform.jsonl
   num_agents: 5
   num_slots: 16
@@ -563,7 +563,7 @@ defaults:
     - {type: llm, model: gpt-4o-mini}
     - {type: llm, model: gpt-4o-mini}
     - {type: llm, model: gpt-4o-mini}
-batches:
+cells:
   - label: b037_easy_5a_3p_d0p6_c1_1
     count: 1
     config:
@@ -592,7 +592,7 @@ Mixed-team and protocol knobs:
 
 ```yaml
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 5
   communication_protocol: all         # dm, participant_groupchat, all_groupchat, or all
   agent_densities: [0.6, 0.8, 1.0, 0.6, 0.8]  # optional per-agent calendar density
@@ -675,7 +675,7 @@ Export analysis tables:
 ```bash
 uv run python -m calendar_game.evaluate results/uniform_full_dsm \
   --summary-csv results/uniform_full_dsm/summary.csv \
-  --game-csv results/uniform_full_dsm/games.csv \
+  --environment-csv results/uniform_full_dsm/games.csv \
   --round-csv results/uniform_full_dsm/rounds.csv \
   --agent-csv results/uniform_full_dsm/agents.csv \
   --message-csv results/uniform_full_dsm/messages.csv
@@ -684,9 +684,9 @@ uv run python -m calendar_game.evaluate results/uniform_full_dsm \
 Programmatic loading:
 
 ```python
-from calendar_game.dataset import CalendarGameDataset
+from calendar_game.dataset import CalendarEpisodeDataset
 
-ds = CalendarGameDataset.from_dir("results/uniform_full_dsm")
+ds = CalendarEpisodeDataset.from_dir("results/uniform_full_dsm")
 game_df = ds.to_game_df()
 round_df = ds.to_round_df()
 agent_df = ds.to_agent_df()

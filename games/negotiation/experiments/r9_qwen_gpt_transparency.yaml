@@ -4,9 +4,9 @@ description: >
   condition matrix — stable at mc=0.5/1.0 (fixed/rotate) and shifting at mc=0.5/0.8/1.0
   (fixed/rotate), alongside the existing stable mc=0.8 results.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: qwen-gpt5m_stable_fixed_transparency_mc05
   count: 10
   config:

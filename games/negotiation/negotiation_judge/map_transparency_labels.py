@@ -106,8 +106,8 @@ def main():
     alias_index = build_alias_index(taxonomy)
 
     games = load_experiment_data()
-    transp_ids = {g["game_id"] for g in games if g.get("experiment_run_id") in TRANSPARENCY_RUN_IDS}
-    log.info("Transparency game IDs: %d", len(transp_ids))
+    transp_ids = {g["episode_uid"] for g in games if g.get("episode_id") in TRANSPARENCY_RUN_IDS}
+    log.info("Transparency environment IDs: %d", len(transp_ids))
 
     unmatched = collect_unmatched(transp_ids, alias_index)
     log.info("Unique unmatched names: %d  (total instances: %d)", len(unmatched), sum(unmatched.values()))

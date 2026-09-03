@@ -50,7 +50,7 @@ def _init_db(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS trace_outcomes (
             trace_path TEXT PRIMARY KEY,
-            game_id TEXT,
+            episode_uid TEXT,
             experiment_name TEXT,
             started_at TEXT,
             ended_at TEXT,
@@ -228,7 +228,7 @@ def _row_for_trace(trace_path: Path) -> dict[str, Any]:
     )
     return {
         "trace_path": str(trace_path),
-        "game_id": trace.get("game_id") or trace_path.stem,
+        "episode_uid": trace.get("episode_uid") or trace_path.stem,
         "experiment_name": _experiment_name(trace_path, trace),
         "started_at": trace.get("started_at"),
         "ended_at": trace.get("ended_at"),
@@ -290,11 +290,11 @@ def index_traces(db_path: Path, trace_paths: list[Path]) -> int:
 def main() -> int:
     root = _calendar_root()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("traces", nargs="+", help="Trace JSON files, directories, or globs.")
+    parser.add_argument("episodes", nargs="+", help="Trace JSON files, directories, or globs.")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     args = parser.parse_args()
 
-    trace_paths = _trace_paths(args.traces, root=root)
+    trace_paths = _trace_paths(args.episodes, root=root)
     db_path = _resolve(args.db, root=root)
     count = index_traces(db_path, trace_paths)
     print(f"indexed {count} trace(s) into {db_path}")

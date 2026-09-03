@@ -4,9 +4,9 @@ description: >
   3 MC ratios x 10 games = 360 self-play games. Cheap talk remains enabled;
   agents are prompted to maximize joint combined reward via maximize_joint=true.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: sonnet_jointgoal_stable_fixed_mc05
   count: 10
   config:

@@ -36,7 +36,7 @@ def main() -> None:
     out = [
         "# Multi-Agent Coordination Pattern Rubric (taxonomy_v2)",
         "",
-        "Domain-neutral classification rubric for multi-agent coordination traces.",
+        "Domain-neutral classification rubric for multi-agent coordination episodes.",
         "Intended for both LLM and human raters. Classification is **outcome-agnostic** —",
         "a positive pattern can appear in a failed round, a negative in an optimal round.",
         "Stratify by outcome at the reporting layer, not at classification.",

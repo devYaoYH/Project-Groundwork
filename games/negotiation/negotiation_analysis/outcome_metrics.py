@@ -30,7 +30,7 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
     """Compute all outcome metrics for V5+ project-based games.
 
     Returns dict with:
-        - game_df: one row per game with all outcome metrics
+        - game_df: one row per environment with all outcome metrics
         - round_df: per-round efficiency and overdraw data
         - summary: aggregate statistics
     """
@@ -41,8 +41,8 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
 
     game_records = []
     for g in dataset.games:
-        gid = g.game_id
-        gr = round_df[round_df["game_id"] == gid]
+        gid = g.episode_uid
+        gr = round_df[round_df["episode_uid"] == gid]
         if len(gr) == 0:
             continue
         pair = gr["pair"].iloc[0]
@@ -95,7 +95,7 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
         b_fair_effs = gr["agent_b_fair_efficiency"].dropna()
 
         game_records.append({
-            "game_id": gid,
+            "episode_uid": gid,
             "model_a": model_a,
             "model_b": model_b,
             "pair": pair,
@@ -120,16 +120,16 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
 
     game_df = pd.DataFrame(game_records)
 
-    # 3. Value sharing rate (per-game, uses turn_df)
+    # 3. Value sharing rate (per-environment, uses turn_df)
     vs_results = analyze_value_sharing(dataset)
     vs_turn_df = vs_results.get("turn_df", pd.DataFrame())
     if not vs_turn_df.empty and "shares_values" in vs_turn_df.columns:
         vs_by_game = (
-            vs_turn_df.groupby("game_id")["shares_values"]
+            vs_turn_df.groupby("episode_uid")["shares_values"]
             .mean()
             .rename("value_sharing_rate")
         )
-        game_df = game_df.merge(vs_by_game, on="game_id", how="left")
+        game_df = game_df.merge(vs_by_game, on="episode_uid", how="left")
     else:
         game_df["value_sharing_rate"] = np.nan
 
@@ -137,11 +137,11 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
     pf_results = analyze_perfunctory_fairness(dataset)
     pf_rdf = pf_results.get("round_df", pd.DataFrame())
     if not pf_rdf.empty:
-        pf_by_game = pf_rdf.groupby("game_id").agg(
+        pf_by_game = pf_rdf.groupby("episode_uid").agg(
             equal_split_rate=pd.NamedAgg(column="has_equal_split", aggfunc="mean"),
             perfunctory_fair_rate=pd.NamedAgg(column="perfunctory_fair", aggfunc="mean"),
         )
-        game_df = game_df.merge(pf_by_game, on="game_id", how="left")
+        game_df = game_df.merge(pf_by_game, on="episode_uid", how="left")
     else:
         game_df["equal_split_rate"] = np.nan
         game_df["perfunctory_fair_rate"] = np.nan
@@ -160,17 +160,17 @@ def compute_outcome_metrics(dataset: NegotiationDataset) -> dict:
         "mean_perfunctory_fair_rate": game_df["perfunctory_fair_rate"].mean(),
     }
 
-    # Build per-model individual efficiency (melt: each game → 2 rows)
+    # Build per-model individual efficiency (melt: each environment → 2 rows)
     model_records = []
     for _, row in game_df.iterrows():
         model_records.append({
             "model": row["model_a"], "fair_eff": row["agent_a_fair_eff"],
-            "role": "agent_a", "game_id": row["game_id"],
+            "role": "agent_a", "episode_uid": row["episode_uid"],
             "opponent": row["model_b"], "is_cross_play": row["is_cross_play"],
         })
         model_records.append({
             "model": row["model_b"], "fair_eff": row["agent_b_fair_eff"],
-            "role": "agent_b", "game_id": row["game_id"],
+            "role": "agent_b", "episode_uid": row["episode_uid"],
             "opponent": row["model_a"], "is_cross_play": row["is_cross_play"],
         })
     model_df = pd.DataFrame(model_records)
@@ -190,7 +190,7 @@ def build_model_round_df(dataset: NegotiationDataset, optimality_threshold: floa
         return pd.DataFrame()
 
     cols = [
-        "game_id", "round_number", "model_a", "model_b", "pair", "is_cross_play",
+        "episode_uid", "round_number", "model_a", "model_b", "pair", "is_cross_play",
         "mode", "is_shifting", "is_rotating", "mc_bucket", "experiment_label",
         "joint_efficiency",
         "agent_a_fair_efficiency", "agent_b_fair_efficiency",
@@ -224,7 +224,7 @@ def print_summary(results: dict) -> None:
     if "pair" in gdf.columns and gdf["pair"].nunique() > 1:
         print("\nBy pair:")
         by_pair = gdf.groupby("pair").agg(
-            n=pd.NamedAgg(column="game_id", aggfunc="count"),
+            n=pd.NamedAgg(column="episode_uid", aggfunc="count"),
             joint_eff=pd.NamedAgg(column="allocation_efficiency", aggfunc="mean"),
             overdraw=pd.NamedAgg(column="overdraw_rate", aggfunc="mean"),
         ).round(3)
@@ -235,7 +235,7 @@ def print_summary(results: dict) -> None:
     if not mdf.empty:
         print("\nBy individual model (across all opponents):")
         by_model = mdf.groupby("model").agg(
-            n_games=pd.NamedAgg(column="game_id", aggfunc="count"),
+            n_games=pd.NamedAgg(column="episode_uid", aggfunc="count"),
             fair_eff=pd.NamedAgg(column="fair_eff", aggfunc="mean"),
         ).round(3)
         print(by_model.to_string())
@@ -245,7 +245,7 @@ def print_summary(results: dict) -> None:
     if "mc_bucket" in gdf.columns and gdf["mc_bucket"].notna().any():
         print("\nBy M/C bucket:")
         by_mc = gdf.groupby("mc_bucket").agg(
-            n=pd.NamedAgg(column="game_id", aggfunc="count"),
+            n=pd.NamedAgg(column="episode_uid", aggfunc="count"),
             joint_eff=pd.NamedAgg(column="allocation_efficiency", aggfunc="mean"),
             overdraw=pd.NamedAgg(column="overdraw_rate", aggfunc="mean"),
         ).round(3)

@@ -1,8 +1,8 @@
 """Generic agent interface.
 
-A game provides ``observation`` and a ``tools`` dict of callables (e.g.
+A environment provides ``observation`` and a ``tools`` dict of callables (e.g.
 ``send_p2p``, ``broadcast``, ``finalize``). The agent returns an action dict
-describing what it did. Action schema is game-defined.
+describing what it did. Action schema is environment-defined.
 """
 
 from abc import ABC, abstractmethod
@@ -30,8 +30,8 @@ class LLMAgent(AgentInterface):
     """Base class for LLM-backed agents.
 
     Subclasses override ``build_messages`` (and optionally ``parse_response``)
-    to map game observations to chat messages and back. Keeps the LLM-call
-    plumbing in one place so per-game agents stay tiny.
+    to map environment observations to chat messages and back. Keeps the LLM-call
+    plumbing in one place so per-environment agents stay tiny.
     """
 
     def __init__(self, client: LLMClient, system_prompt: str = "", name: str | None = None) -> None:
@@ -44,7 +44,7 @@ class LLMAgent(AgentInterface):
         observation: dict[str, Any],
         tools: dict[str, Callable],
     ) -> list[dict]:
-        """Build chat messages for the LLM. Override per-game."""
+        """Build chat messages for the LLM. Override per-environment."""
         msgs: list[dict] = []
         if self.system_prompt:
             msgs.append({"role": "system", "content": self.system_prompt})
@@ -57,7 +57,7 @@ class LLMAgent(AgentInterface):
         observation: dict[str, Any],
         tools: dict[str, Callable],
     ) -> dict[str, Any]:
-        """Parse the LLM's text into an action dict. Override per-game."""
+        """Parse the LLM's text into an action dict. Override per-environment."""
         return {"text": text}
 
     async def act(

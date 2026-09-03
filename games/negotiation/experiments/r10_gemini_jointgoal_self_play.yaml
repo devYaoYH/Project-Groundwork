@@ -3,12 +3,12 @@ description: >
   R10 Gemini joint-goal self-play condition: 2 models x 4 paradigms x
   3 MC ratios x 10 games = 240 self-play games. Cheap talk remains enabled;
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
   vertex_adc_file: ${A2A_VERTEX_GEMINI_ADC_FILE}
   gcp_project: ${A2A_VERTEX_GEMINI_PROJECT}
   gcp_location: global
-batches:
+cells:
 - label: gemini31pro_jointgoal_stable_fixed_mc05
   count: 10
   config:

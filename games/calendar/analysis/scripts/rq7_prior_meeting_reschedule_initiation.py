@@ -56,7 +56,7 @@ def analyze_trace(path: Path, model: str) -> list[dict]:
             {
                 "model": model,
                 "setting": setting,
-                "game_id": trace.get("game_id") or path.stem,
+                "episode_uid": trace.get("episode_uid") or path.stem,
                 "task_id": task_id(trace, path),
                 "trace_path": str(path),
                 "round": round_idx,
@@ -108,9 +108,9 @@ def summarize(rows: list[dict]) -> list[dict]:
 def summarize_games(rows: list[dict]) -> list[dict]:
     groups: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for row in rows:
-        groups[(row["model"], row["setting"], row["game_id"])].append(row)
+        groups[(row["model"], row["setting"], row["episode_uid"])].append(row)
     out: list[dict] = []
-    for (model, setting, game_id), group in sorted(groups.items()):
+    for (model, setting, episode_uid), group in sorted(groups.items()):
         displaced: set[str] = set()
         actions = 0
         cost = 0.0
@@ -124,7 +124,7 @@ def summarize_games(rows: list[dict]) -> list[dict]:
             {
                 "model": model,
                 "setting": setting,
-                "game_id": game_id,
+                "episode_uid": episode_uid,
                 "task_id": group[0]["task_id"],
                 "trace_path": group[0]["trace_path"],
                 "prior_meetings_rescheduled": len(displaced),
@@ -153,8 +153,8 @@ def plot(per_game: list[dict], rows: list[dict], out: Path) -> None:
             vals.append(value)
             ymax = max(ymax, value)
         ax.bar([x + (idx - 0.5) * width for x in xs], vals, width=width, label=setting.title())
-    ax.set_ylabel("Mean prior meetings rescheduled per game")
-    ax.set_title("RQ7: Prior Meetings Rescheduled Per Game")
+    ax.set_ylabel("Mean prior meetings rescheduled per environment")
+    ax.set_title("RQ7: Prior Meetings Rescheduled Per Environment")
     ax.set_xticks(xs)
     ax.set_xticklabels(models, rotation=30, ha="right")
     ax.set_ylim(0, ymax * 1.2 if ymax else 1)
@@ -168,7 +168,7 @@ def plot(per_game: list[dict], rows: list[dict], out: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--traces-root", default=str(default_traces_root()))
+    parser.add_argument("--episodes-root", default=str(default_traces_root()))
     parser.add_argument("--out", default="rq7_prior_meeting_reschedule_initiation")
     args = parser.parse_args()
 

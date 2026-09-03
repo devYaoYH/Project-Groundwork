@@ -69,17 +69,17 @@ def analyze_value_sharing(dataset: NegotiationDataset) -> dict:
     round_df = dataset.to_round_df()
     turn_df = dataset.to_turn_df()
 
-    # Build game_id -> schema_version lookup from round_df
-    sv_map = round_df.set_index("game_id")["schema_version"].to_dict()
+    # Build episode_uid -> schema_version lookup from round_df
+    sv_map = round_df.set_index("episode_uid")["schema_version"].to_dict()
     turn_df = turn_df.copy()
-    turn_df["schema_version"] = turn_df["game_id"].map(sv_map).fillna(1).astype(int)
+    turn_df["schema_version"] = turn_df["episode_uid"].map(sv_map).fillna(1).astype(int)
     turn_df["shares_values"] = turn_df.apply(
         lambda row: _shares_info(row["message"], row["schema_version"]), axis=1
     )
 
     # By round
     sharing_by_round = (
-        turn_df.groupby(["game_id", "round_number", "mode"])
+        turn_df.groupby(["episode_uid", "round_number", "mode"])
         .agg(
             any_sharing=pd.NamedAgg(column="shares_values", aggfunc="any"),
             n_sharing_msgs=pd.NamedAgg(column="shares_values", aggfunc="sum"),

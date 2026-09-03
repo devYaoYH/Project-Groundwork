@@ -1,7 +1,7 @@
 # a2a Trace Viewer
 
-Static, dependency-free viewer for `GameTraceBase` JSON files written by
-`a2a_engine.tracing.write_trace`. Plain HTML + ES modules + CSS — no build
+Static, dependency-free viewer for `EpisodeTrace` JSON files written by
+`a2a_engine.tracing.write_episode`. Plain HTML + ES modules + CSS — no build
 step.
 
 ## Run
@@ -33,9 +33,9 @@ js/
     game_lifecycle.js  renderers for "game_start" and "game_end"
 ```
 
-## Adding a custom renderer for a downstream game
+## Adding a custom renderer for a downstream environment
 
-1. Create `js/renderers/<game_name>.js`:
+1. Create `js/renderers/<environment_id>.js`:
 
    ```js
    import { registerRenderer } from "./index.js";

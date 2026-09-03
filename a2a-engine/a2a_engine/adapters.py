@@ -1,10 +1,10 @@
 """Named adapter seams for swappable model, communication, and resource components.
 
-The game engine remains responsible for its current concrete implementations.
+The environment engine remains responsible for its current concrete implementations.
 This module deliberately starts with registration and validation rather than a
-premature universal RPC abstraction: an environment can name the components it
-requires, traces preserve those names, and future implementations can be
-introduced without changing the environment schema.
+premature universal RPC abstraction: an release can name the components it
+requires, episodes preserve those names, and future implementations can be
+introduced without changing the release schema.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ModelAdapter(Protocol):
 
 @runtime_checkable
 class CommunicationAdapter(Protocol):
-    """Provides a game-visible communication channel or topology."""
+    """Provides a environment-visible communication channel or topology."""
 
     descriptor: AdapterDescriptor
 
@@ -49,7 +49,7 @@ class CommunicationAdapter(Protocol):
 
 @runtime_checkable
 class ResourceAdapter(Protocol):
-    """Provides a named environment resource from resolved configuration."""
+    """Provides a named release resource from resolved configuration."""
 
     descriptor: AdapterDescriptor
 

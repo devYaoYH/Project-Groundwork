@@ -1,4 +1,4 @@
-"""Durable Calendar fields consumed outside the live game process.
+"""Durable Calendar fields consumed outside the live environment process.
 
 This is intentionally separate from the runtime loop: a persisted trace is the
 handoff between the live LLM session and later replay, rating, or analysis.

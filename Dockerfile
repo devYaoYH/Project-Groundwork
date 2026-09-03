@@ -9,7 +9,7 @@ WORKDIR /workspace
 
 COPY . /workspace
 
-# Install every shipped game so the runner's entry-point discovery works in the
+# Install every shipped environment so the runner's entry-point discovery works in the
 # same way it does for a collaborator's editable local checkout.  This image
 # deliberately contains no cloud credentials or provider configuration.
 RUN python -m pip install --no-cache-dir --upgrade pip \

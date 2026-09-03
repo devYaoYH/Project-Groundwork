@@ -12,16 +12,16 @@
   .muted { color: #6b7280; }
 </style>
 </head>
-<body data-game="calendar">
+<body data-environment="calendar">
 <main>
   <a href="/control.html">← Control plane</a>
   <h1>Calendar stream replay</h1>
   <p class="muted">
-    Replays a rollout's Redis event stream through Calendar's own trace viewer.
+    Replays a launch's Redis event stream through Calendar's own trace viewer.
     An episode that is still running renders as far as it has got.
   </p>
   <label for="stream">Redis stream</label>
-  <input id="stream" placeholder="a2a:rollout:…:episode:…">
+  <input id="stream" placeholder="a2a:launch:…:episode:…">
   <button id="open">Open in Calendar viewer</button>
   <p id="status" class="muted"></p>
 </main>

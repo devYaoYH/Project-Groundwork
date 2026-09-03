@@ -1,9 +1,9 @@
 name: v2_projects_test
 description: 'test for v2 projects with shifting and rotating conditions set.'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: gpt54m-qwen_stable_rotate_share_named_tom_mc08
   count: 1
   config:

@@ -1,7 +1,7 @@
 [project]
 name = "a2a-engine"
 version = "0.1.0"
-description = "Game-agnostic framework for agent-to-agent coordination experiments."
+description = "Environment-agnostic framework for agent-to-agent coordination experiments."
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",

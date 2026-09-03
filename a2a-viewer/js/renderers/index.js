@@ -1,4 +1,4 @@
-// Renderer registry. Game-specific renderers register themselves by event type.
+// Renderer registry. Environment-specific renderers register themselves by event type.
 export const renderers = {};
 
 export function registerRenderer(eventType, fn) {

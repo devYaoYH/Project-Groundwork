@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Execute one reviewed game runtime release locally or inside its image.
+"""Execute one reviewed environment runtime release locally or inside its image.
 
-Each release lives in ``games/<game>/runtime/release.json``.  The CLI validates
-that the experiment names the release's game before delegating to the ordinary
+Each release lives in ``games/<environment>/runtime/release.json``.  The CLI validates
+that the experiment names the release's environment before delegating to the ordinary
 runner, preserving the identical trace/manifest and Redis event-stream path.
 """
 
@@ -28,14 +28,14 @@ def main(argv: list[str] | None = None) -> int:
 
     release_path = Path(args.release).resolve()
     release = json.loads(release_path.read_text(encoding="utf-8"))
-    game_name = str(release["game_name"])
+    environment_id = str(release["environment_id"])
     experiment_path = Path(args.experiment or release["experiment"])
     if not experiment_path.is_absolute():
         experiment_path = (release_path.parents[3] / experiment_path).resolve()
     experiment = load_experiment(experiment_path)
-    games = experiment.game_names()
-    if games != [game_name]:
-        raise ValueError(f"release {release_path} is for {game_name!r}, experiment selects {games!r}")
+    games = experiment.environment_ids()
+    if games != [environment_id]:
+        raise ValueError(f"release {release_path} is for {environment_id!r}, experiment selects {games!r}")
     runner_args = [str(experiment_path), "--storage-path", args.storage_path,
                    "--max-parallelism", str(args.max_parallelism)]
     if args.smoke_test:

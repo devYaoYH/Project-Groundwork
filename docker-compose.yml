@@ -14,7 +14,7 @@ services:
       timeout: 3s
       retries: 12
 
-  # The default job is fully deterministic: it exercises every packaged game,
+  # The default job is fully deterministic: it exercises every packaged environment,
   # writes to the shared SQLite volume, and makes no model or cloud requests.
   runner:
     build:
@@ -29,10 +29,10 @@ services:
       A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
       A2A_CAPTURE_CONTENT: "true"
       A2A_REDIS_URL: redis://redis:6379/0
-      # The default smoke job is replayable too; per-rollout launches override
-      # this namespace with their own immutable rollout ID.
-      A2A_ROLLOUT_ID: compose-smoke
-      A2A_REDIS_STREAM_PREFIX: a2a:rollout:compose-smoke
+      # The default smoke job is replayable too; per-launch launches override
+      # this namespace with their own immutable launch ID.
+      A2A_LAUNCH_ID: compose-smoke
+      A2A_REDIS_STREAM_PREFIX: a2a:launch:compose-smoke
       A2A_REDIS_STREAM_TTL_SECONDS: "604800"
       # Provider credentials are interpolated from the repo-root `.env` (or the
       # shell) and default to empty, so the credential-free smoke path still

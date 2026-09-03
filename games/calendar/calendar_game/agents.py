@@ -1,4 +1,4 @@
-"""Agents for the calendar scheduling game."""
+"""Agents for the calendar scheduling environment."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -21,7 +21,7 @@ class GameConfig:
     num_agents: int
     num_slots: int
     agent_id: int               # this specific agent's identity
-    all_agent_ids: list[int]    # all agent ids in the game
+    all_agent_ids: list[int]    # all agent ids in the environment
     dm_cap: int = 1_000_000     # legacy name: max delivered cheap-talk messaging actions per agent per round
     decision_retries: int = 3   # max retries allowed in DECISION phase
     dsm_num_proposals: int = 4
@@ -86,7 +86,7 @@ class ReflectionResult:
 class BaseClient(ABC):
     @abstractmethod
     def register(self, agent_id: int, game_config: GameConfig) -> None:
-        """Called once at game start. LLM clients build system prompt here."""
+        """Called once at environment start. LLM clients build system prompt here."""
 
     @abstractmethod
     def start_round(self, meeting: dict, calendar_render: str, round_num: int) -> None:
@@ -114,7 +114,7 @@ class BaseClient(ABC):
 
     def retry_decide(self, attempt: int, max_attempts: int, conflict: str) -> DecideResult:
         """
-        Called when a decision batch fails validation. Default raises NotImplementedError.
+        Called when a decision cell fails validation. Default raises NotImplementedError.
         attempt is 1-indexed (first retry = 1).
         """
         raise NotImplementedError(
@@ -151,7 +151,7 @@ class BaseClient(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Agent (game-engine-facing wrapper)
+# Agent (environment-engine-facing wrapper)
 # ---------------------------------------------------------------------------
 
 class Agent:

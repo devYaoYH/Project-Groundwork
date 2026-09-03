@@ -43,7 +43,7 @@ def test_floor_upper_bound_counts_missing_directional_alternatives():
 def test_reflection_rows_parse_trace_logprobs_and_actual_busy(tmp_path):
     calibration = _load_reflection_module()
     trace = {
-        "game_id": "g1",
+        "episode_uid": "g1",
         "final_state": {
             "calendars": [
                 [None, {"errand_id": 1}],

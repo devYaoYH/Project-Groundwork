@@ -1,5 +1,5 @@
 """
-Pydantic schemas for game data structures.
+Pydantic schemas for environment data structures.
 
 These models define the canonical shapes for data persisted to Firestore
 and local JSON storage. Used for validation, documentation, and type safety.
@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 CURRENT_SCHEMA_VERSION = 9  # V9: maximize_joint and full_transparency flags
 
 
-class AgentInfo(BaseModel):
+class ParticipantBinding(BaseModel):
     type: str = "random"
     model: str | None = None
 
@@ -45,7 +45,7 @@ class OracleStatsSchema(BaseModel):
 
 
 class GameConfigSchema(BaseModel):
-    """Schema for the game configuration stored alongside each trace."""
+    """Schema for the environment configuration stored alongside each trace."""
     mode: str
     num_rounds: int
     cheap_talk_turns: int
@@ -57,7 +57,7 @@ class GameConfigSchema(BaseModel):
     agent_projects: list[list[ProjectSchema]]
     agent_shifting: list[bool]
     first_speaker: int
-    agents: list[AgentInfo]
+    agents: list[ParticipantBinding]
     goal: str = ""
     thinking: bool = False
     visible_utilities: bool = False
@@ -78,7 +78,7 @@ class GameConfigSchema(BaseModel):
     target_mc_ratio: float | None = None
     rotate_projects: bool = False  # When True, sample new projects each round from pool
     # Experiment tracking metadata
-    experiment_run_id: str | None = None
+    episode_id: str | None = None
     experiment_name: str | None = None
     git_hash: str | None = None
 
@@ -104,7 +104,7 @@ class ProjectRunsSchema(BaseModel):
 
 
 class RoundResultSchema(BaseModel):
-    """Schema for a single round's result within the game summary."""
+    """Schema for a single round's result within the environment summary."""
     model_config = {"use_enum_values": True}
 
     round_number: int
@@ -132,8 +132,8 @@ class PerRoundScenarioSchema(BaseModel):
 
 
 class GameResultSchema(BaseModel):
-    """Schema for the game result/summary returned by the engine."""
-    game_id: str
+    """Schema for the environment result/summary returned by the engine."""
+    episode_uid: str
     mode: str
     num_rounds: int
     agent_a_cumulative_reward: float
@@ -146,10 +146,10 @@ class GameResultSchema(BaseModel):
     stopped: bool = False
     api_failures: dict[str, int] | None = None
     per_round_scenarios: list[PerRoundScenarioSchema] | None = None
-    reflections: dict[str, str] | None = None  # agent_id -> reflection text (post-game learnings)
+    reflections: dict[str, str] | None = None  # agent_id -> reflection text (post-environment learnings)
 
 
-class GameEventSchema(BaseModel):
+class EventSchema(BaseModel):
     """Schema for a single event in the event log."""
     type: str
     data: dict
@@ -169,6 +169,6 @@ class FirestoreDocumentSchema(BaseModel):
     game_config: GameConfigSchema
     result: GameResultSchema
     # V1/V2: events (uncompressed)
-    events: list[GameEventSchema] | None = None
+    events: list[EventSchema] | None = None
     # V3+: events_compressed (gzip + base64)
     events_compressed: str | None = None

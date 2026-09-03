@@ -1,10 +1,10 @@
-"""Typed, replay-only materialization of metrics declared by an environment.
+"""Typed, replay-only materialization of metrics declared by an release.
 
 Live games write their native measurements to ``trace.metrics``.  Expensive or
 evolving measurements run afterwards against the completed immutable trace and
 are stored as digest-bound ``DerivedArtifact`` records.  This keeps a model
 session independent of reporting, makes backfills idempotent, and gives every
-new game the same extension point.
+new environment the same extension point.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from a2a_engine.derived import DerivedArtifact, trace_digest
-from a2a_engine.environment import MetricConfig
-from a2a_engine.schemas import GameTraceBase
-from a2a_engine.storage.base import iter_traces
+from a2a_engine.environment import MeasureConfig
+from a2a_engine.schemas import EpisodeTrace
+from a2a_engine.storage.base import iter_episodes
 
 
 MetricValue = float | dict[str, float]
@@ -72,35 +72,35 @@ def register_derived_metric_extractor(extractor: DerivedMetricExtractor) -> None
 
 @dataclass(frozen=True)
 class DerivedMetricMaterialization:
-    game_id: str
+    episode_uid: str
     artifact: DerivedArtifact | None
     changed: bool
     skipped_reason: str | None = None
 
 
-def _environment_metrics(trace: GameTraceBase) -> list[MetricConfig]:
-    environment = trace.environment
-    if environment is None:
+def _environment_metrics(trace: EpisodeTrace) -> list[MeasureConfig]:
+    release = trace.release
+    if release is None:
         return []
-    raw = environment.model_dump(mode="json").get("metrics", [])
-    return [MetricConfig.model_validate(metric) for metric in raw]
+    raw = release.model_dump(mode="json").get("metrics", [])
+    return [MeasureConfig.model_validate(metric) for metric in raw]
 
 
-def _artifact_map(store: object, game_id: str, digest: str) -> dict[str, DerivedArtifact]:
+def _artifact_map(store: object, episode_uid: str, digest: str) -> dict[str, DerivedArtifact]:
     getter = getattr(store, "get_derived_artifacts", None)
     if getter is None:
         return {}
     return {
         artifact.key: artifact
-        for artifact in getter(game_id)
+        for artifact in getter(episode_uid)
         if artifact.trace_digest == digest
     }
 
 
 def materialize_derived_metrics(
-    store: object, *, game_name: str | None = None
+    store: object, *, environment_id: str | None = None
 ) -> list[DerivedMetricMaterialization]:
-    """Materialize every declared derived metric from completed stored traces.
+    """Materialize every declared derived metric from completed stored episodes.
 
     Multiple declared metrics can share an extractor; it runs once per trace.
     Results are persisted as ``derived_metrics.<identifier>@<version>`` when
@@ -108,31 +108,31 @@ def materialize_derived_metrics(
     silently treated as zero-valued measurements.
     """
     results: list[DerivedMetricMaterialization] = []
-    filters = {"game_name": game_name} if game_name else None
-    for trace in iter_traces(store, filters=filters):
+    filters = {"environment_id": environment_id} if environment_id else None
+    for trace in iter_episodes(store, filters=filters):
         declared = [metric for metric in _environment_metrics(trace) if metric.producer == "derived"]
         if not declared:
             continue
         digest = trace_digest(trace)
-        by_extractor: dict[str, list[MetricConfig]] = {}
+        by_extractor: dict[str, list[MeasureConfig]] = {}
         for metric in declared:
-            assert metric.extractor is not None  # enforced by MetricConfig
+            assert metric.extractor is not None  # enforced by MeasureConfig
             by_extractor.setdefault(metric.extractor, []).append(metric)
-        artifact_inputs = _artifact_map(store, trace.game_id, digest)
+        artifact_inputs = _artifact_map(store, trace.episode_uid, digest)
         payload = trace.model_dump(mode="json")
         for identifier, metrics in by_extractor.items():
             try:
                 extractor = derived_metrics.get(identifier)
             except KeyError:
                 results.append(DerivedMetricMaterialization(
-                    game_id=trace.game_id, artifact=None, changed=False,
+                    episode_uid=trace.episode_uid, artifact=None, changed=False,
                     skipped_reason=f"unregistered extractor: {identifier}",
                 ))
                 continue
             extracted = extractor.extract(payload, artifact_inputs)
             if extracted is None:
                 results.append(DerivedMetricMaterialization(
-                    game_id=trace.game_id, artifact=None, changed=False,
+                    episode_uid=trace.episode_uid, artifact=None, changed=False,
                     skipped_reason=f"extractor returned no result: {identifier}",
                 ))
                 continue
@@ -140,10 +140,10 @@ def materialize_derived_metrics(
             missing = sorted(required - set(extracted.values))
             if missing:
                 raise ValueError(
-                    f"{identifier} did not produce declared metrics {missing} for {trace.game_id}"
+                    f"{identifier} did not produce declared metrics {missing} for {trace.episode_uid}"
                 )
             artifact = DerivedArtifact(
-                game_id=trace.game_id,
+                episode_uid=trace.episode_uid,
                 kind=f"derived_metrics.{identifier}",
                 version=extractor.version,
                 trace_digest=digest,
@@ -152,5 +152,5 @@ def materialize_derived_metrics(
             )
             writer = getattr(store, "put_derived_artifact", None)
             changed = bool(writer(artifact)) if writer is not None else False
-            results.append(DerivedMetricMaterialization(trace.game_id, artifact, changed))
+            results.append(DerivedMetricMaterialization(trace.episode_uid, artifact, changed))
     return results

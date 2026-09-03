@@ -11,25 +11,25 @@ import argparse
 from pathlib import Path
 
 from a2a_engine.derived_metrics import materialize_derived_metrics
-from a2a_engine.registry import discover_games
-from a2a_engine.storage.sqlite import SQLiteTraceStore
+from a2a_engine.registry import discover_environments
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Materialize derived environment metrics from completed traces.")
+    parser = argparse.ArgumentParser(description="Materialize derived release metrics from completed episodes.")
     parser.add_argument("--database", default="./results/a2a_traces.db")
-    parser.add_argument("--game", help="Optional game-name filter")
+    parser.add_argument("--environment", help="Optional environment-name filter")
     args = parser.parse_args(argv)
 
-    discover_games()
+    discover_environments()
     results = materialize_derived_metrics(
-        SQLiteTraceStore(path=Path(args.database)), game_name=args.game,
+        SQLiteEpisodeStore(path=Path(args.database)), environment_id=args.environment,
     )
     changed = sum(item.changed for item in results)
     skipped = [item for item in results if item.skipped_reason]
     print(f"materialized={len(results) - len(skipped)} changed={changed} skipped={len(skipped)}")
     for item in skipped:
-        print(f"  {item.game_id}: {item.skipped_reason}")
+        print(f"  {item.episode_uid}: {item.skipped_reason}")
     return 0
 
 

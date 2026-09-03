@@ -28,7 +28,7 @@ def test_reflection_uses_the_vendored_prompt_module_after_initialization():
 def test_legacy_v3_analysis_decompresses_events_from_the_vendored_module():
     trace = {
         "schema_version": 3,
-        "game_id": "legacy-v3",
+        "episode_uid": "legacy-v3",
         "game_config": {"experiment_label": "stable_competitive_hidden_thinking"},
         "result": {"rounds": [{"round_number": 1}]},
         "events_compressed": compress_events([
@@ -36,10 +36,10 @@ def test_legacy_v3_analysis_decompresses_events_from_the_vendored_module():
         ]),
     }
 
-    game = _trace_to_game(trace)
+    environment = _trace_to_game(trace)
 
-    assert game["events"][0]["data"]["message"] == "hello"
-    assert game["rounds"][0]["cheap_talk_transcript"][0]["message"] == "hello"
+    assert environment["events"][0]["data"]["message"] == "hello"
+    assert environment["rounds"][0]["cheap_talk_transcript"][0]["message"] == "hello"
 
 
 def test_negotiation_judge_has_an_offline_prompt_version():

@@ -29,16 +29,16 @@ async function fetchTracesPage(page) {
     try {
         _currentPage = page;
         const offset = (page - 1) * _pageSize;
-        const url = `/api/traces?limit=${_pageSize}&offset=${offset}`;
+        const url = `/api/episodes?limit=${_pageSize}&offset=${offset}`;
         const resp = await fetch(url);
         const data = await resp.json();
-        _datasetTraces = data.traces || [];
+        _datasetTraces = data.episodes || [];
         _totalTraces = data.total || _datasetTraces.length;
         renderDatasetTable();
         renderPagination();
         document.getElementById('datasetEmpty').style.display = _datasetTraces.length === 0 ? 'block' : 'none';
     } catch (e) {
-        console.error('Failed to load traces:', e);
+        console.error('Failed to load episodes:', e);
     }
 }
 
@@ -77,7 +77,7 @@ function renderPagination() {
 
     html += `
         <button class="page-btn" ${_currentPage === totalPages ? 'disabled' : ''} onclick="goToPage(${_currentPage + 1})">Next ›</button>
-        <span class="page-info">${_totalTraces} total traces</span>
+        <span class="page-info">${_totalTraces} total episodes</span>
     `;
 
     document.getElementById('datasetPagination').innerHTML = html;
@@ -114,7 +114,7 @@ function renderDatasetTable() {
                 <thead>
                     <tr>
                         <th><input type="checkbox" id="selectAllCheckbox" title="Select all"></th>
-                        <th>Game ID<span class="col-resize"></span></th>
+                        <th>Environment ID<span class="col-resize"></span></th>
                         <th>Experiment<span class="col-resize"></span></th>
                         <th>Mode<span class="col-resize"></span></th>
                         <th>Agents<span class="col-resize"></span></th>
@@ -126,11 +126,11 @@ function renderDatasetTable() {
                 </thead>
                 <tbody>
                     ${filtered.map(t => `
-                        <tr data-game-id="${t.game_id}">
+                        <tr data-environment-id="${t.episode_uid}">
                             <td class="checkbox-cell" onclick="event.stopPropagation()">
-                                <input type="checkbox" class="game-checkbox" data-game-id="${t.game_id}" ${_selectedGameIds.has(t.game_id) ? 'checked' : ''}>
+                                <input type="checkbox" class="environment-checkbox" data-environment-id="${t.episode_uid}" ${_selectedGameIds.has(t.episode_uid) ? 'checked' : ''}>
                             </td>
-                            <td class="gid">${t.game_id.substring(0, 8)}</td>
+                            <td class="gid">${t.episode_uid.substring(0, 8)}</td>
                             <td class="dataset-cell-ellipsis" title="${escapeHtml(t.experiment_label || '-')}">${escapeHtml(t.experiment_label || '-')}</td>
                             <td><span class="mode-badge small">${t.mode}</span>${t.swapped ? ' <span class="swap-badge">swapped</span>' : ''}</td>
                             <td>${(t.agents || []).map(a => a.type).join(' vs ')}</td>
@@ -152,7 +152,7 @@ function renderDatasetTable() {
 
     // Attach checkbox handlers
     const selectAllCheckbox = container.querySelector('#selectAllCheckbox');
-    const gameCheckboxes = container.querySelectorAll('.game-checkbox');
+    const gameCheckboxes = container.querySelectorAll('.environment-checkbox');
 
     selectAllCheckbox.addEventListener('change', (e) => {
         const isChecked = e.target.checked;
@@ -180,7 +180,7 @@ function renderDatasetTable() {
     });
 
     function updateSelectAllCheckboxState() {
-        const allVisibleIds = new Set(filtered.map(t => t.game_id));
+        const allVisibleIds = new Set(filtered.map(t => t.episode_uid));
         const allSelected = Array.from(allVisibleIds).every(id => _selectedGameIds.has(id));
         selectAllCheckbox.checked = allSelected && allVisibleIds.size > 0;
     }
@@ -225,33 +225,33 @@ function initColumnResize(table) {
     });
 }
 
-function filterTraces(traces) {
+function filterTraces(episodes) {
     const modeFilter = document.getElementById('datasetFilterMode').value;
     const agentFilter = document.getElementById('datasetFilterAgent').value;
     const expFilter = (document.getElementById('datasetFilterExperiment')?.value || '').trim().toLowerCase();
-    return traces.filter(t => {
+    return episodes.filter(t => {
         if (modeFilter && t.mode !== modeFilter) return false;
         if (agentFilter) {
             const types = (t.agents || []).map(a => a.type);
             if (!types.includes(agentFilter)) return false;
         }
-        if (expFilter && !(t.experiment_label || '').toLowerCase().includes(expFilter) && !(t.game_id || '').toLowerCase().includes(expFilter)) return false;
+        if (expFilter && !(t.experiment_label || '').toLowerCase().includes(expFilter) && !(t.episode_uid || '').toLowerCase().includes(expFilter)) return false;
         return true;
     });
 }
 
-function updateDatasetStats(traces) {
+function updateDatasetStats(episodes) {
     const stats = document.getElementById('datasetStats');
-    if (traces.length === 0) {
+    if (episodes.length === 0) {
         stats.innerHTML = '';
         return;
     }
-    const totalA = traces.reduce((s, t) => s + Number(t.agent_a_reward), 0);
-    const totalB = traces.reduce((s, t) => s + Number(t.agent_b_reward), 0);
+    const totalA = episodes.reduce((s, t) => s + Number(t.agent_a_reward), 0);
+    const totalB = episodes.reduce((s, t) => s + Number(t.agent_b_reward), 0);
     stats.innerHTML = `
-        <span>${traces.length} traces</span>
-        <span>Avg A: ${(totalA / traces.length).toFixed(1)}</span>
-        <span>Avg B: ${(totalB / traces.length).toFixed(1)}</span>
+        <span>${episodes.length} episodes</span>
+        <span>Avg A: ${(totalA / episodes.length).toFixed(1)}</span>
+        <span>Avg B: ${(totalB / episodes.length).toFixed(1)}</span>
     `;
 }
 
@@ -283,7 +283,7 @@ function renderReflections(reflections, agentAReward, agentBReward, perRoundScen
     }
 
     let html = '<div class="reflections-section" style="margin-top:24px;padding:16px;background:var(--surface-2);border-radius:6px">';
-    html += '<h3 style="margin-top:0;font-size:1.1em;color:var(--text)">🤔 Post-Game Reflections</h3>';
+    html += '<h3 style="margin-top:0;font-size:1.1em;color:var(--text)">🤔 Post-Environment Reflections</h3>';
 
     if (theoreticalJointMax !== null) {
         const jointActual = (agentAReward || 0) + (agentBReward || 0);
@@ -421,7 +421,7 @@ async function loadTraceDetail(gameId) {
         if (cached) {
             traceData = JSON.parse(cached);
         } else {
-            const resp = await fetch(`/api/traces/${gameId}`);
+            const resp = await fetch(`/api/episodes/${gameId}`);
             if (!resp.ok) {
                 alert('Failed to load trace');
                 return;
@@ -438,8 +438,8 @@ async function loadTraceDetail(gameId) {
         detail.style.display = 'block';
 
         let html = `
-            <div class="game-header">
-                <h2>Trace ${data.game_id || gameId}</h2>
+            <div class="environment-header">
+                <h2>Trace ${data.episode_uid || gameId}</h2>
                 <span class="mode-badge">${data.mode || '?'}</span>
             </div>
             <div class="scoreboard">
@@ -486,10 +486,10 @@ async function loadTraceDetail(gameId) {
             if (!judgeHtml) return;
             detail.insertAdjacentHTML('beforeend', judgeHtml);
 
-            // Cancel any listener from a previously selected game, then attach a
+            // Cancel any listener from a previously selected environment, then attach a
             // fresh one scoped to this gameId. Without this, selecting multiple
             // games accumulates listeners that all fire on a single dropdown change,
-            // replacing the view with a different game's judgment.
+            // replacing the view with a different environment's judgment.
             if (_judgeListenerAbort) _judgeListenerAbort.abort();
             _judgeListenerAbort = new AbortController();
             detail.addEventListener('change', async (e) => {
@@ -522,20 +522,20 @@ async function loadTraceDetail(gameId) {
 export async function exportDatasetJSONL() {
     const filtered = filterTraces(_datasetTraces);
     if (filtered.length === 0) {
-        alert('No traces to export');
+        alert('No episodes to export');
         return;
     }
 
     const lines = [];
     for (const t of filtered) {
         try {
-            const resp = await fetch(`/api/traces/${t.game_id}`);
+            const resp = await fetch(`/api/episodes/${t.episode_uid}`);
             if (resp.ok) {
                 const full = await resp.json();
                 lines.push(JSON.stringify(full));
             }
         } catch (e) {
-            console.error(`Failed to fetch trace ${t.game_id}:`, e);
+            console.error(`Failed to fetch trace ${t.episode_uid}:`, e);
         }
     }
 
@@ -564,7 +564,7 @@ function showDeleteModal() {
         <div class="command-modal-content">
             <span class="command-modal-close">&times;</span>
             <h3>Firestore Delete Command</h3>
-            <p>Run the following command in your shell to delete the selected game traces:</p>
+            <p>Run the following command in your shell to delete the selected environment episodes:</p>
             <pre id="deleteCommand">${command}</pre>
             <button id="copyCommandBtn">Copy to Clipboard</button>
         </div>
@@ -597,7 +597,7 @@ function renderPromptEvents(promptEvents) {
 
     let inner = '';
 
-    // System prompts (one per agent, emitted at game start)
+    // System prompts (one per agent, emitted at environment start)
     for (const ev of systemPrompts) {
         const d = ev.data || {};
         inner += `<div style="margin-bottom:8px">

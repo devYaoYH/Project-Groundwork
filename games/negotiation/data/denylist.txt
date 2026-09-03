@@ -1,10 +1,10 @@
-# Game IDs excluded from analysis.
-# One game_id prefix per line. Lines starting with # are comments.
-# Format: <game_id_prefix> <reason>
+# Environment IDs excluded from analysis.
+# One episode_uid prefix per line. Lines starting with # are comments.
+# Format: <episode_uid_prefix> <reason>
 #
-# To invalidate a game, add its ID (or prefix) here and re-run analysis.
+# To invalidate a environment, add its ID (or prefix) here and re-run analysis.
 
-# GPT-5 Mini shifting_fixed_mc05 — massive heuristic fallback rates (11-24 per game)
+# GPT-5 Mini shifting_fixed_mc05 — massive heuristic fallback rates (11-24 per environment)
 ff13f5c9 heuristic_fallback:24/4rounds
 45790742 heuristic_fallback:23/4rounds
 532a9a03 heuristic_fallback:15/4rounds

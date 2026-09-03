@@ -61,7 +61,7 @@ def test_game_uses_speaker_order_for_first_turn_order():
         participant_lists=[[0, 1, 2]],
         speaker_orders=[[2, 0, 1]],
     )
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=7,
             num_agents=3,
@@ -74,7 +74,7 @@ def test_game_uses_speaker_order_for_first_turn_order():
         dry_run=True,
     )
 
-    trace = game.run_with_scenario(scenario)
+    trace = environment.run_with_scenario(scenario)
     first_turn_agents = [
         event.data["agent_id"]
         for event in trace.events
@@ -105,7 +105,7 @@ def test_game_adds_balanced_speaker_order_for_legacy_scenarios():
     )
     for meeting in scenario["meetings"]:
         meeting.pop("speaker_order", None)
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=11,
             num_agents=5,
@@ -118,7 +118,7 @@ def test_game_adds_balanced_speaker_order_for_legacy_scenarios():
         dry_run=True,
     )
 
-    trace = game.run_with_scenario(scenario)
+    trace = environment.run_with_scenario(scenario)
     first_speakers = Counter(
         event.data["speaker_order"][0]
         for event in trace.events

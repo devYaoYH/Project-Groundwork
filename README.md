@@ -1,24 +1,24 @@
 # a2a-comm
 
 A framework for multi-agent communication experiments: one engine, one
-experiment runner, one analysis layer — and a game per environment.
+experiment runner, one analysis layer — and a environment per release.
 
 ```
 a2a-comm/
   a2a-engine/     contract + runtime: schemas, agents, LLM clients, registry,
-                  dataset, tracing, ratings, RunManifest, TraceStore backends
+                  dataset, tracing, ratings, EpisodeManifest, EpisodeStore backends
   expt-runner/    CLI: expand -> run -> persist
   a2a-judge/      LLM-as-judge scaffolding: prompts, judgment store, resume
-  a2a-viewer/     browser control plane, trace viewer, and per-game replay apps
-  local_stack/    local control-plane service: releases, experiments, rollouts
-  site/           static landing page (GitHub Pages) linking out to game sites
-  experiments/    cross-game experiment configs + shared sink definitions
+  a2a-viewer/     browser control plane, trace viewer, and per-environment replay apps
+  local_stack/    local control-plane service: releases, experiments, launches
+  site/           static landing page (GitHub Pages) linking out to environment sites
+  experiments/    cross-environment experiment configs + shared sink definitions
   scripts/        new_game.py scaffold
   games/
     buyer-seller/ sequential bargaining under asymmetric information
     calendar/     multi-agent meeting scheduling
     negotiation/  resource negotiation with cheap talk
-    word-guess/   minimal reference game
+    word-guess/   minimal reference environment
   docs/
 ```
 
@@ -51,12 +51,12 @@ docker compose up --build
 
 | | |
 |---|---|
-| <http://localhost:8080/control.html> | launch experiments, watch rollouts, open traces and replays |
+| <http://localhost:8080/control.html> | launch experiments, watch launches, open episodes and replays |
 | <http://localhost:8080/> | browse the trace corpus and the Calendar leaderboard |
 
-From the control plane you pick an installed game release and a checked-in
-experiment YAML, launch a rollout, and follow it live. Each episode links to its
-persisted trace and to a per-game replay of its Redis event stream. The browser
+From the control plane you pick an installed environment release and a checked-in
+experiment YAML, launch a launch, and follow it live. Each episode links to its
+persisted trace and to a per-environment replay of its Redis event stream. The browser
 never uploads code, a Dockerfile, or an image — it selects releases and configs
 that are already in the workspace.
 
@@ -70,16 +70,16 @@ Negotiation  games/negotiation/experiments/smoke_local.yaml
 The default job uses scripted agents, so it has no cloud or API dependency. See
 `docs/LOCAL_STACK.md` for episode statuses, follow-up jobs, local model
 endpoints, and the single-host SQLite boundary; `docs/RUNTIMES_AND_REPLAY.md`
-covers the per-game runtime images and replay apps.
+covers the per-environment runtime images and replay apps.
 
 ```
 [1/3] Sink reachability
       OK   sqlite [./results/a2a_traces.db] (4ms): write/read/delete round-trip succeeded
 [2/3] Experiment expansion
-      OK   word_guess -> game=word_guess
-      OK   buyer_seller -> game=buyer_seller
-      OK   calendar -> game=calendar
-      OK   negotiation -> game=negotiation
+      OK   word_guess -> environment=word_guess
+      OK   buyer_seller -> environment=buyer_seller
+      OK   calendar -> environment=calendar
+      OK   negotiation -> environment=negotiation
 [3/3] End-to-end write/read via sqlite (4 runs, scripted agents)
       ...
 PASS  4/4 runs persisted and read back  | sink: sqlite
@@ -120,25 +120,25 @@ See `docs/STORAGE.md`.
 **Analysis is sink-agnostic** — switching storage does not change analysis code:
 
 ```python
-from a2a_engine import GameDataset
-ds = GameDataset.from_config({"backend": "sqlite", "path": "./results/a2a.db"})
-ds.to_games_df(); ds.to_messages_df(); ds.to_events_df()
+from a2a_engine import EpisodeDataset
+ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a.db"})
+ds.to_episodes_df(); ds.to_messages_df(); ds.to_events_df()
 ```
 
-## Adding a game
+## Adding a environment
 
 ```bash
-python scripts/new_game.py my-game
-uv pip install -e games/my-game
-a2a-run games/my-game/experiments/example.yaml --smoke-test
+python scripts/new_game.py my-environment
+uv pip install -e games/my-environment
+a2a-run games/my-environment/experiments/example.yaml --smoke-test
 ```
 
-The scaffold passes its smoke test before you write any game logic. See
+The scaffold passes its smoke test before you write any environment logic. See
 `docs/ADDING_A_GAME.md` and `CONTRIBUTING.md`; `games/buyer-seller/` is the
 reference implementation.
 
-Games are found through an `a2a_engine.games` entry point, so `a2a-run` works on
-any installed game without importing it first.
+Games are found through an `a2a_engine.environments` entry point, so `a2a-run` works on
+any installed environment without importing it first.
 
 ## Tests
 
@@ -148,7 +148,7 @@ python scripts/release_check.py        # release-hazard scan, no network
 ```
 
 None need API keys, a server, or cloud credentials. CI runs the same suite on
-3.11 and 3.12, plus the cross-game smoke test, every per-game runtime release,
+3.11 and 3.12, plus the cross-environment smoke test, every per-environment runtime release,
 package builds, and a full Compose bring-up that asserts the trace, OTel,
 artifact, leaderboard, and replay APIs.
 
@@ -156,24 +156,24 @@ artifact, leaderboard, and replay APIs.
 
 | | |
 |---|---|
-| `docs/CONTRACTS.md` | the game, trace, storage and judge interfaces |
-| `docs/ADDING_A_GAME.md` | adding an environment |
+| `docs/CONTRACTS.md` | the environment, trace, storage and judge interfaces |
+| `docs/ADDING_A_GAME.md` | adding an release |
 | `docs/STORAGE.md` | sinks, config inheritance, the data loader |
 | `docs/LOCAL_STACK.md` | cloud-free Docker Compose collaboration stack |
 | `docs/AGENT_CONFIGURATION.md` | agent YAML, the agent pool, API formats and credentials |
 | `docs/DATA_EXPLORATION.md` | SQLite analysis, viewer API and leaderboards |
-| `docs/RUNTIMES_AND_REPLAY.md` | per-game runtime images, Redis streams, replay and recovery |
+| `docs/RUNTIMES_AND_REPLAY.md` | per-environment runtime images, Redis streams, replay and recovery |
 | `docs/VIEWER_EXTENSIONS.md` | viewer and control-plane front-end structure |
 | `CONTRIBUTING.md` | setup, house style, PR checklist |
 
 ## Status and known limitations
 
-What this repo commits to is the game contract, the runner, and the
+What this repo commits to is the environment contract, the runner, and the
 trace/analysis layer. Everything below is known, deliberate, and open.
 
-**The judge is not yet cross-game.** `games/negotiation/negotiation_judge/`
-still imports negotiation's own dataset layer rather than `GameDataset`. Its
-storage and resume lifecycle are already game-agnostic; the rubric and taxonomy
+**The judge is not yet cross-environment.** `games/negotiation/negotiation_judge/`
+still imports negotiation's own dataset layer rather than `EpisodeDataset`. Its
+storage and resume lifecycle are already environment-agnostic; the rubric and taxonomy
 modules are not. Researchers are expected to bring their own judge for now.
 
 **LLM transport is duplicated.** The robustness layer — retry classification,
@@ -184,8 +184,8 @@ SSE parsers and payload builders. The engine's copy is the more advanced one
 (it carries OTel spans), so the merge direction is negotiation's onto the
 engine's, lifting `call_llm_oneshot_with_thinking` across.
 
-**`--smoke-test` runs scripted agents by design.** It proves the game and data
+**`--smoke-test` runs scripted agents by design.** It proves the environment and data
 paths without model spend. Live-provider runs are a separate, explicit mode.
 
-**Negotiation's scenario pools are configs, not results.** Agent traces are
+**Negotiation's scenario pools are configs, not results.** Agent episodes are
 never committed; they are experiment output and belong in a configured sink.

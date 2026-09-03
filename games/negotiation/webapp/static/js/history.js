@@ -25,9 +25,9 @@ export async function loadHistory() {
 
         for (const g of inProgress) {
             allItems.push(`
-                <div class="game-list-item" data-action="loadGameDetail" data-game-id="${g.game_id}">
+                <div class="environment-list-item" data-action="loadGameDetail" data-environment-id="${g.episode_uid}">
                     <div>
-                        <span class="gid">${g.game_id}</span>
+                        <span class="gid">${g.episode_uid}</span>
                         <span class="meta" style="margin-left:12px">in progress</span>
                     </div>
                     <div class="meta"><span class="spinner"></span> Running</div>
@@ -38,9 +38,9 @@ export async function loadHistory() {
         for (const g of localGames.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))) {
             const r = g.result || {};
             allItems.push(`
-                <div class="game-list-item" data-action="loadLocalGameDetail" data-game-id="${g.game_id}">
+                <div class="environment-list-item" data-action="loadLocalGameDetail" data-environment-id="${g.episode_uid}">
                     <div>
-                        <span class="gid">${g.game_id}</span>
+                        <span class="gid">${g.episode_uid}</span>
                         <span class="meta" style="margin-left:12px">${r.mode || '?'} · ${r.num_rounds || '?'} rounds</span>
                     </div>
                     <div class="meta">A: ${Number(r.agent_a_cumulative_reward || 0).toFixed(1)} · B: ${Number(r.agent_b_cumulative_reward || 0).toFixed(1)}</div>
@@ -80,8 +80,8 @@ export async function loadLocalGameDetail(gameId) {
         detail.style.display = 'block';
 
         let html = `
-            <div class="game-header">
-                <h2>Game ${data.game_id}</h2>
+            <div class="environment-header">
+                <h2>Environment ${data.episode_uid}</h2>
                 <span class="mode-badge">${data.mode}</span>
             </div>
             <div class="scoreboard">
@@ -123,7 +123,7 @@ export async function exportLocalGame(gameId) {
 
 export async function loadGameDetail(gameId) {
     try {
-        const resp = await fetch(`/api/game/${gameId}`);
+        const resp = await fetch(`/api/environment/${gameId}`);
         const data = await resp.json();
 
         if (data.status === 'in_progress') {
@@ -144,8 +144,8 @@ export async function loadGameDetail(gameId) {
         const cheapTalkTurns = 0;
 
         let html = `
-            <div class="game-header">
-                <h2>Game ${data.game_id}</h2>
+            <div class="environment-header">
+                <h2>Environment ${data.episode_uid}</h2>
                 <span class="mode-badge">${data.mode}</span>
             </div>
             <div class="scoreboard">

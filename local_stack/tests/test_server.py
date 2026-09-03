@@ -4,10 +4,10 @@ import json
 import sys
 from pathlib import Path
 
-from a2a_engine.manifest import RunManifest
+from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.derived import DerivedArtifact, trace_digest
-from a2a_engine.schemas import AgentInfo, GameConfigBase, GameTraceBase
-from a2a_engine.storage.sqlite import SQLiteTraceStore
+from a2a_engine.schemas import ParticipantBinding, EpisodeConfigBase, EpisodeTrace
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 # The local control plane is a runnable service, not a separately installed
 # package. Add the repository root when pytest imports this test by path.
@@ -17,15 +17,15 @@ from local_stack.control_plane import ControlPlane
 
 
 def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_path):
-    config = GameConfigBase(
-        game_name="calendar",
+    config = EpisodeConfigBase(
+        environment_id="calendar",
         num_agents=2,
-        agents=[AgentInfo(model="model-a"), AgentInfo(model="model-b")],
+        agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
         experiment_name="local-test",
-        experiment_run_id="local-test.batch.0",
+        episode_id="local-test.cell.0",
     )
-    trace = GameTraceBase(
-        game_id="calendar-run",
+    trace = EpisodeTrace(
+        episode_uid="calendar-run",
         config=config,
         metrics={
             "coordination_rate": 0.8,
@@ -33,20 +33,20 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
         },
         final_state={},
     )
-    manifest = RunManifest.from_run(
+    manifest = EpisodeManifest.from_run(
         config=config.model_dump(), experiment_name="local-test",
-        batch_label="batch", run_idx=0, game_id=trace.game_id,
+        cell_id="cell", episode_idx=0, episode_uid=trace.episode_uid,
     )
-    manifest.game_name = "calendar"
-    store = SQLiteTraceStore(path=tmp_path / "traces.db")
-    store.put_trace(trace, manifest)
+    manifest.environment_id = "calendar"
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, manifest)
 
     previous = LocalStackHandler.database
     try:
         LocalStackHandler.database = store.path
-        assert LocalStackHandler._health()["trace_count"] == 1
-        assert LocalStackHandler._trace_summaries()[0]["game_id"] == trace.game_id
-        assert LocalStackHandler._trace(trace.game_id)["metrics"] == trace.metrics
+        assert LocalStackHandler._health()["episode_count"] == 1
+        assert LocalStackHandler._trace_summaries()[0]["episode_uid"] == trace.episode_uid
+        assert LocalStackHandler._trace(trace.episode_uid)["metrics"] == trace.metrics
 
         board = LocalStackHandler._calendar_leaderboard()
         assert board["metadata"]["rating_event_count"] == 1
@@ -56,24 +56,24 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
 
 
 def test_control_plane_correlates_local_otel_spans_by_trace_id(tmp_path):
-    config = GameConfigBase(game_name="word_guess", num_agents=2)
-    trace = GameTraceBase(
-        game_id="otel-run",
+    config = EpisodeConfigBase(environment_id="word_guess", num_agents=2)
+    trace = EpisodeTrace(
+        episode_uid="otel-run",
         config=config,
         observability={"otel_trace_id": "a" * 32, "otel_root_span_id": "b" * 16},
     )
-    manifest = RunManifest.from_run(
+    manifest = EpisodeManifest.from_run(
         config=config.model_dump(), experiment_name="otel-test",
-        batch_label="batch", run_idx=0, game_id=trace.game_id,
+        cell_id="cell", episode_idx=0, episode_uid=trace.episode_uid,
     )
-    store = SQLiteTraceStore(path=tmp_path / "traces.db")
-    store.put_trace(trace, manifest)
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, manifest)
     otel_file = tmp_path / "spans.jsonl"
     otel_file.write_text(
         json.dumps({"name": "other", "context": {"trace_id": "c" * 32}})
         + "\n"
         + json.dumps({
-            "name": "game word_guess",
+            "name": "environment word_guess",
             "start_time": "2026-01-01T00:00:00Z",
             "context": {"trace_id": "a" * 32, "span_id": "b" * 16},
         })
@@ -85,74 +85,74 @@ def test_control_plane_correlates_local_otel_spans_by_trace_id(tmp_path):
     try:
         LocalStackHandler.database = store.path
         LocalStackHandler.otel_file = otel_file
-        payload = LocalStackHandler._observability(trace.game_id)
+        payload = LocalStackHandler._observability(trace.episode_uid)
         assert payload is not None
         assert payload["observability"] == trace.observability
         assert payload["span_count"] == 1
-        assert payload["spans"][0]["name"] == "game word_guess"
+        assert payload["spans"][0]["name"] == "environment word_guess"
     finally:
         LocalStackHandler.database = previous_database
         LocalStackHandler.otel_file = previous_otel_file
 
 
 def test_control_plane_exposes_derived_artifacts_without_mutating_the_trace(tmp_path):
-    config = GameConfigBase(game_name="word_guess", num_agents=2)
-    trace = GameTraceBase(game_id="artifact-run", config=config, metrics={"score": 1.0})
-    manifest = RunManifest.from_run(
+    config = EpisodeConfigBase(environment_id="word_guess", num_agents=2)
+    trace = EpisodeTrace(episode_uid="artifact-run", config=config, metrics={"score": 1.0})
+    manifest = EpisodeManifest.from_run(
         config=config.model_dump(), experiment_name="artifact-test",
-        batch_label="batch", run_idx=0, game_id=trace.game_id,
+        cell_id="cell", episode_idx=0, episode_uid=trace.episode_uid,
     )
-    store = SQLiteTraceStore(path=tmp_path / "traces.db")
-    store.put_trace(trace, manifest)
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, manifest)
     store.put_derived_artifact(DerivedArtifact(
-        game_id=trace.game_id, kind="derived_metrics.test", version="v1",
+        episode_uid=trace.episode_uid, kind="derived_metrics.test", version="v1",
         trace_digest=trace_digest(trace), payload={"values": {"quality": 0.75}},
     ))
 
     previous = LocalStackHandler.database
     try:
         LocalStackHandler.database = store.path
-        payload = LocalStackHandler._artifacts(trace.game_id)
+        payload = LocalStackHandler._artifacts(trace.episode_uid)
         assert payload and payload["artifacts"][0]["payload"]["values"]["quality"] == 0.75
-        assert LocalStackHandler._trace(trace.game_id)["metrics"] == {"score": 1.0}
+        assert LocalStackHandler._trace(trace.episode_uid)["metrics"] == {"score": 1.0}
     finally:
         LocalStackHandler.database = previous
 
 
 def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts(tmp_path):
-    """M1 records remain separate from traces and are launcher-independent."""
+    """M1 records remain separate from episodes and are launcher-independent."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     experiment = control.create_experiment(
         release_id="local-word_guess", yaml_path="games/word-guess/experiments/example.yaml",
     )
 
     class CompletingLauncher:
-        def launch(self, rollout, _experiment, on_line, *, smoke_test=False):
+        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
             assert smoke_test is True
-            control._mark_rollout_started(rollout.id)
+            control._mark_launch_started(launch.id)
             on_line(f"      OK   {experiment.name}.dog.0  [word_guess] -> sqlite:///dog")
             on_line(f"      OK   {experiment.name}.apple.0  [word_guess] -> sqlite:///apple")
-            control._finish_rollout(rollout.id, 0)
+            control._finish_launch(launch.id, 0)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = CompletingLauncher()
-    rollout = control.launch_rollout(experiment.id, smoke_test=True)
-    detail = control.rollout_detail(rollout.id)
-    assert detail["rollout"]["status"] == "COMPLETED"
-    assert {attempt["status"] for attempt in detail["episode_attempts"]} == {"COMPLETED"}
-    assert {attempt["trace_uri"] for attempt in detail["episode_attempts"]} == {"sqlite:///dog", "sqlite:///apple"}
-    assert all(attempt["redis_stream"].startswith(f"a2a:rollout:{rollout.id}:") for attempt in detail["episode_attempts"])
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    detail = control.launch_detail(launch.id)
+    assert detail["launch"]["status"] == "COMPLETED"
+    assert {attempt["status"] for attempt in detail["attempts"]} == {"COMPLETED"}
+    assert {attempt["episode_uri"] for attempt in detail["attempts"]} == {"sqlite:///dog", "sqlite:///apple"}
+    assert all(attempt["redis_stream"].startswith(f"a2a:launch:{launch.id}:") for attempt in detail["attempts"])
 
 
 def _buyer_seller_control(tmp_path):
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     experiment = control.create_experiment(
         release_id="local-buyer_seller",
@@ -161,72 +161,72 @@ def _buyer_seller_control(tmp_path):
     return control, experiment
 
 
-def test_smoke_rollout_plans_only_the_runs_the_runner_executes(tmp_path):
-    """A smoke run covers one run per batch, so it must not queue batch.count."""
+def test_smoke_launch_plans_only_the_runs_the_runner_executes(tmp_path):
+    """A smoke run covers one run per cell, so it must not queue cell.count."""
     control, experiment = _buyer_seller_control(tmp_path)
 
     class RecordingLauncher:
         def __init__(self):
             self.command_smoke = None
 
-        def launch(self, rollout, _experiment, _on_line, *, smoke_test=False):
+        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
             self.command_smoke = smoke_test
-            control._mark_rollout_started(rollout.id)
+            control._mark_launch_started(launch.id)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = RecordingLauncher()
-    rollout = control.launch_rollout(experiment.id, smoke_test=True)
-    attempts = control.rollout_detail(rollout.id)["episode_attempts"]
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    attempts = control.launch_detail(launch.id)["attempts"]
 
-    # example.yaml declares 3 + 3 + 2 + 3 runs across four batches.
+    # example.yaml declares 3 + 3 + 2 + 3 runs across four cells.
     assert len(attempts) == 4
-    assert {attempt["run_idx"] for attempt in attempts} == {0}
-    assert {attempt["batch_label"] for attempt in attempts} == {
+    assert {attempt["episode_idx"] for attempt in attempts} == {0}
+    assert {attempt["cell_id"] for attempt in attempts} == {
         "wide_surplus", "narrow_surplus", "no_gains_control", "monotonic",
     }
 
-    live = control.launch_rollout(experiment.id, smoke_test=False)
-    assert len(control.rollout_detail(live.id)["episode_attempts"]) == 11
+    live = control.launch_experiment(experiment.id, smoke_test=False)
+    assert len(control.launch_detail(live.id)["attempts"]) == 11
 
 
-def test_rollout_does_not_complete_episodes_the_runner_never_reported(tmp_path):
+def test_launch_does_not_complete_episodes_the_runner_never_reported(tmp_path):
     """A silent episode is an unreported gap, not a completed run."""
     control, experiment = _buyer_seller_control(tmp_path)
 
     class PartialLauncher:
-        def launch(self, rollout, _experiment, on_line, *, smoke_test=False):
-            control._mark_rollout_started(rollout.id)
+        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
+            control._mark_launch_started(launch.id)
             on_line(
                 f"      OK   {experiment.name}.wide_surplus.0  [buyer_seller] -> sqlite:///wide"
             )
-            control._finish_rollout(rollout.id, 0)
+            control._finish_launch(launch.id, 0)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = PartialLauncher()
-    rollout = control.launch_rollout(experiment.id, smoke_test=True)
-    detail = control.rollout_detail(rollout.id)
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    detail = control.launch_detail(launch.id)
 
-    by_episode = {attempt["episode_id"]: attempt for attempt in detail["episode_attempts"]}
+    by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
     reported = by_episode[f"{experiment.name}.wide_surplus.0"]
     assert reported["status"] == "COMPLETED"
-    assert reported["trace_uri"] == "sqlite:///wide"
+    assert reported["episode_uri"] == "sqlite:///wide"
 
     silent = by_episode[f"{experiment.name}.monotonic.0"]
     assert silent["status"] == "UNREPORTED"
-    assert silent["trace_uri"] is None
+    assert silent["episode_uri"] is None
 
 
 def test_failed_episodes_keep_their_own_runner_diagnostic(tmp_path):
-    """A rollout-wide exit code cannot say which episode broke; the line can."""
+    """A launch-wide exit code cannot say which episode broke; the line can."""
     control, experiment = _buyer_seller_control(tmp_path)
 
     class FailingLauncher:
-        def launch(self, rollout, _experiment, on_line, *, smoke_test=False):
-            control._mark_rollout_started(rollout.id)
+        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
+            control._mark_launch_started(launch.id)
             on_line(
                 f"      OK   {experiment.name}.wide_surplus.0  [buyer_seller] -> sqlite:///wide"
             )
@@ -236,17 +236,17 @@ def test_failed_episodes_keep_their_own_runner_diagnostic(tmp_path):
             on_line(
                 f"2026-08-31 10:00:00,000 ERROR expt_runner: fail {experiment.name}.narrow_surplus.0: TimeoutError"
             )
-            control._finish_rollout(rollout.id, 1)
+            control._finish_launch(launch.id, 1)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = FailingLauncher()
-    rollout = control.launch_rollout(experiment.id, smoke_test=True)
-    detail = control.rollout_detail(rollout.id)
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    detail = control.launch_detail(launch.id)
 
-    assert detail["rollout"]["status"] == "FAILED"
-    by_episode = {attempt["episode_id"]: attempt for attempt in detail["episode_attempts"]}
+    assert detail["launch"]["status"] == "FAILED"
+    by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
     assert by_episode[f"{experiment.name}.monotonic.0"]["error"] == "ValueError: bad price"
     assert by_episode[f"{experiment.name}.narrow_surplus.0"]["error"] == "TimeoutError"
     assert by_episode[f"{experiment.name}.wide_surplus.0"]["status"] == "COMPLETED"
@@ -257,22 +257,22 @@ def test_sse_frames_stay_unnamed_so_new_event_kinds_reach_existing_clients(tmp_p
     control, experiment = _buyer_seller_control(tmp_path)
 
     class NoisyLauncher:
-        def launch(self, rollout, _experiment, on_line, *, smoke_test=False):
-            control._mark_rollout_started(rollout.id)
+        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
+            control._mark_launch_started(launch.id)
             on_line(f"      FAIL {experiment.name}.monotonic.0  [buyer_seller]: boom")
-            control._finish_rollout(rollout.id, 0)
+            control._finish_launch(launch.id, 0)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = NoisyLauncher()
-    rollout = control.launch_rollout(experiment.id, smoke_test=True)
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
 
-    events = control.events(rollout.id, after_id=0)
+    events = control.events(launch.id, after_id=0)
     kinds = {event["kind"] for event in events}
     # These kinds postdate the browser client, which is exactly the case a
     # name whitelist would have swallowed.
-    assert {"episode.failed", "rollout.unreported_episodes"} <= kinds
+    assert {"episode.failed", "launch.unreported_episodes"} <= kinds
 
     for event in events:
         frame = sse_frame(event)
@@ -284,13 +284,13 @@ def test_sse_frames_stay_unnamed_so_new_event_kinds_reach_existing_clients(tmp_p
 
 
 def test_unknown_and_mismatched_releases_report_different_problems(tmp_path):
-    """An absent release used to be reported as a game mismatch, which hides
-    the far more common cause: the game never reached the registry."""
+    """An absent release used to be reported as a environment mismatch, which hides
+    the far more common cause: the environment never reached the registry."""
     import pytest
 
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
 
     with pytest.raises(ValueError, match="no release registered as 'local-nonesuch'"):
@@ -299,7 +299,7 @@ def test_unknown_and_mismatched_releases_report_different_problems(tmp_path):
             yaml_path="games/word-guess/experiments/example.yaml",
         )
 
-    with pytest.raises(ValueError, match="is for game 'calendar'.*declares 'word_guess'"):
+    with pytest.raises(ValueError, match="is for environment 'calendar'.*declares 'word_guess'"):
         control.create_experiment(
             release_id="local-calendar",
             yaml_path="games/word-guess/experiments/example.yaml",
@@ -308,10 +308,10 @@ def test_unknown_and_mismatched_releases_report_different_problems(tmp_path):
 
 def test_every_release_offers_configs_it_can_actually_run(tmp_path):
     """The cold-start form pairs a release with a config, so on a fresh install
-    the first submission must succeed rather than report a game mismatch."""
+    the first submission must succeed rather than report a environment mismatch."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     control.seed_installed_releases()
 
@@ -320,13 +320,13 @@ def test_every_release_offers_configs_it_can_actually_run(tmp_path):
     assert releases, "expected the workspace games to register releases"
 
     for release in releases:
-        paths = by_game.get(release.game_name) or []
+        paths = by_game.get(release.environment_id) or []
         assert paths, f"release {release.id} offers no experiment configuration"
         # Registering the first offered config is exactly what the form does.
         experiment = control.create_experiment(
-            release_id=release.id, yaml_path=paths[0], name=f"cold-start-{release.game_name}",
+            release_id=release.id, yaml_path=paths[0], name=f"cold-start-{release.environment_id}",
         )
-        assert experiment.game_name == release.game_name
+        assert experiment.environment_id == release.environment_id
 
 
 def test_worked_examples_are_offered_before_research_configs(tmp_path):
@@ -334,17 +334,17 @@ def test_worked_examples_are_offered_before_research_configs(tmp_path):
     on the small credential-free one, not whichever sorts first."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     by_game = control.available_experiments()
 
-    for game in ("calendar", "negotiation"):
-        first = Path(by_game[game][0]).stem
-        assert "smoke" in first or "example" in first, f"{game} leads with {first!r}"
+    for environment in ("calendar", "negotiation"):
+        first = Path(by_game[environment][0]).stem
+        assert "smoke" in first or "example" in first, f"{environment} leads with {first!r}"
 
 
 def test_compose_passes_provider_credentials_to_both_services(tmp_path):
-    """The viewer spawns the runner subprocess, so a live rollout launched from
+    """The viewer spawns the runner subprocess, so a live launch launched from
     the browser needs the same credentials the runner service gets."""
     import yaml
 
@@ -364,26 +364,26 @@ def test_compose_passes_provider_credentials_to_both_services(tmp_path):
             )
 
 
-def test_live_and_smoke_rollouts_plan_different_episode_counts(tmp_path):
+def test_live_and_smoke_launches_plan_different_episode_counts(tmp_path):
     """The UI's run-mode toggle has to reach the plan, not just the CLI flag."""
     control, experiment = _buyer_seller_control(tmp_path)
 
     class NullLauncher:
-        def launch(self, rollout, _experiment, _on_line, *, smoke_test=False):
-            control._mark_rollout_started(rollout.id)
+        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
+            control._mark_launch_started(launch.id)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     control.launcher = NullLauncher()
-    smoke = control.launch_rollout(experiment.id, smoke_test=True)
-    live = control.launch_rollout(experiment.id, smoke_test=False)
+    smoke = control.launch_experiment(experiment.id, smoke_test=True)
+    live = control.launch_experiment(experiment.id, smoke_test=False)
 
-    smoke_attempts = control.rollout_detail(smoke.id)["episode_attempts"]
-    live_attempts = control.rollout_detail(live.id)["episode_attempts"]
+    smoke_attempts = control.launch_detail(smoke.id)["attempts"]
+    live_attempts = control.launch_detail(live.id)["attempts"]
 
-    assert len(smoke_attempts) == 4    # one run per batch
-    assert len(live_attempts) == 11    # each batch's declared count
+    assert len(smoke_attempts) == 4    # one run per cell
+    assert len(live_attempts) == 11    # each cell's declared count
 
 
 def _fake_stream_events(entries):
@@ -395,10 +395,10 @@ def test_stream_trace_endpoint_projects_a_viewer_ready_document(monkeypatch):
     """Both games' viewers consume a trace document, so the endpoint has to
     emit one for a stream that has no persisted trace yet."""
     entries = [
-        {"game_name": "calendar", "episode_id": "e.b.0", "stream_id": "1-0",
+        {"environment_id": "calendar", "episode_id": "e.b.0", "stream_id": "1-0",
          "event": {"type": "game_start", "timestamp": "2026-08-31T12:00:00Z",
-                   "data": {"num_agents": 5, "game_id": "cal-1"}}},
-        {"game_name": "calendar", "episode_id": "e.b.0", "stream_id": "2-0",
+                   "data": {"num_agents": 5, "episode_uid": "cal-1"}}},
+        {"environment_id": "calendar", "episode_id": "e.b.0", "stream_id": "2-0",
          "event": {"type": "game_end", "timestamp": "2026-08-31T12:01:00Z",
                    "data": {"coordination_rate": 1.0}}},
     ]
@@ -408,19 +408,19 @@ def test_stream_trace_endpoint_projects_a_viewer_ready_document(monkeypatch):
     payload, status = LocalStackHandler._stream_trace("s")
 
     assert status == 200
-    assert payload["config"]["game_name"] == "calendar"
+    assert payload["config"]["environment_id"] == "calendar"
     assert len(payload["events"]) == 2
     assert payload["projection"]["partial"] is False
     assert payload["final_state"] == {"coordination_rate": 1.0}
 
 
 def test_stream_trace_endpoint_marks_an_unfinished_episode_partial(monkeypatch):
-    """A researcher watching a live rollout must not be shown an in-flight
+    """A researcher watching a live launch must not be shown an in-flight
     episode as though it had produced a result."""
     entries = [
-        {"game_name": "negotiation", "episode_id": "e.b.0", "stream_id": "1-0",
+        {"environment_id": "negotiation", "episode_id": "e.b.0", "stream_id": "1-0",
          "event": {"type": "game_start", "timestamp": "2026-08-31T12:00:00Z", "data": {}}},
-        {"game_name": "negotiation", "episode_id": "e.b.0", "stream_id": "2-0",
+        {"environment_id": "negotiation", "episode_id": "e.b.0", "stream_id": "2-0",
          "event": {"type": "cheap_talk", "timestamp": "2026-08-31T12:00:05Z",
                    "data": {"speaker": "agent_a", "message": "hi"}}},
     ]
@@ -447,7 +447,7 @@ def test_stream_trace_endpoint_reports_unusable_streams(monkeypatch):
 
 
 def test_each_game_ships_the_viewer_its_replay_page_loads():
-    """The replay pages drive each game's own vendored visualisation; a moved
+    """The replay pages drive each environment's own vendored visualisation; a moved
     or missing asset would leave a blank page rather than an error."""
     workspace = Path(__file__).resolve().parents[2]
 
@@ -459,8 +459,8 @@ def test_each_game_ships_the_viewer_its_replay_page_loads():
     live = (workspace / "games/negotiation/webapp/static/js/live.js").read_text()
     assert "export function handleEvent(" in live
 
-    for game in ("calendar", "negotiation"):
-        assert (workspace / "games" / game / "replay" / "index.html").is_file()
+    for environment in ("calendar", "negotiation"):
+        assert (workspace / "games" / environment / "replay" / "index.html").is_file()
 
 
 def test_embedded_replay_hides_its_own_chrome_with_css_not_just_hidden():
@@ -474,13 +474,13 @@ def test_embedded_replay_hides_its_own_chrome_with_css_not_just_hidden():
 
 
 def test_replay_shell_registers_a_viewer_for_every_served_game():
-    """The shell picks a viewer from the projected game name; a game with no
+    """The shell picks a viewer from the projected environment name; a environment with no
     entry would render an empty stage rather than an error."""
     workspace = Path(__file__).resolve().parents[2]
     shell = (workspace / "a2a-viewer/js/replay.js").read_text()
 
-    for game in ("calendar", "negotiation", "buyer_seller", "word_guess"):
-        assert f"{game}:" in shell, f"replay shell has no viewer for {game}"
+    for environment in ("calendar", "negotiation", "buyer_seller", "word_guess"):
+        assert f"{environment}:" in shell, f"replay shell has no viewer for {environment}"
 
 
 def test_experiment_config_endpoint_only_serves_offered_configurations(tmp_path):
@@ -490,7 +490,7 @@ def test_experiment_config_endpoint_only_serves_offered_configurations(tmp_path)
 
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
 
     payload = control.read_experiment_config("games/negotiation/experiments/smoke_local.yaml")
@@ -503,17 +503,17 @@ def test_experiment_config_endpoint_only_serves_offered_configurations(tmp_path)
 
 
 def test_offered_configurations_are_rescanned_not_cached(tmp_path):
-    """A config dropped into a game's experiments directory has to appear
+    """A config dropped into a environment's experiments directory has to appear
     without restarting the control plane."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     added = workspace / "games/word-guess/experiments/_rescan_probe.yaml"
     added.write_text(
         "name: rescan_probe\n"
-        "defaults: {game_name: word_guess, num_agents: 2, max_turns: 4}\n"
-        "batches:\n  - label: probe\n    count: 1\n    config: {secret_word: kite, seed: 99}\n"
+        "defaults: {environment_id: word_guess, num_agents: 2, max_turns: 4}\n"
+        "cells:\n  - label: probe\n    count: 1\n    config: {secret_word: kite, seed: 99}\n"
     )
     try:
         offered = control.available_experiments()["word_guess"]
@@ -532,26 +532,34 @@ def test_control_ui_exposes_the_three_workflow_tabs_and_a_details_dialog():
     page = (workspace / "a2a-viewer/control.html").read_text()
     script = (workspace / "a2a-viewer/js/control.js").read_text()
 
-    for panel in ("panel-configure", "panel-launch", "panel-rollouts"):
+    for panel in ("panel-configure", "panel-launch", "panel-launches"):
         assert f'id="{panel}"' in page
     assert "Registered environments" in page, "releases are presented as environments"
     assert "<dialog" in page
 
-    # The trace viewer reads ?trace=<game_id>; ?game_id= would be a dead link.
+    # The trace viewer reads ?trace=<episode_uid>; ?episode_uid= would be a dead link.
     assert "/trace.html?trace=" in script
-    # Rollout state advances in the runner, so the list cannot be a one-shot render.
+    # Launch state advances in the runner, so the list cannot be a one-shot render.
     assert "schedulePoll" in script
+    # Starting a launch needs the experiment ID, while Details needs a launch
+    # ID. Sharing an attribute lets the latter click handler overwrite the
+    # former and requests /api/launches/<experiment-id>.
+    assert 'data-start-launch="${esc(experiment.id)}"' in script
+    assert 'querySelectorAll("[data-start-launch]")' in script
+    assert 'launch(button.dataset.startLaunch, button.dataset.name)' in script
+    assert 'querySelectorAll("[data-launch]")' in script
+    assert 'showLaunchDetails(button.dataset.launch)' in script
 
 
 def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeypatch):
-    """A live rollout fails inside an HTTP client when a key is absent, so the
+    """A live launch fails inside an HTTP client when a key is absent, so the
     line-up and its credential state have to be inspectable before launch."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     report = control.experiment_agents("games/word-guess/experiments/example.yaml")
 
@@ -568,11 +576,11 @@ def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeyp
 
 
 def test_a_config_without_agents_reports_unknown_not_ready(tmp_path):
-    """The game supplies its own defaults there, so claiming readiness would
+    """The environment supplies its own defaults there, so claiming readiness would
     assert a credential state nothing has checked."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     report = control.experiment_agents("games/calendar/experiments/typed_local_smoke.yaml")
 
@@ -585,7 +593,7 @@ def test_agents_without_a_model_need_no_credential(tmp_path):
     """Heuristic and scripted agents call no provider."""
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "traces.db",
+        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
     )
     report = control.experiment_agents("games/negotiation/experiments/smoke_local.yaml")
 
@@ -616,10 +624,10 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
     captured = {}
 
     class CapturingLauncher:
-        def launch(self, rollout, _experiment, _on_line, *, smoke_test=False):
-            control._mark_rollout_started(rollout.id)
+        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
+            control._mark_launch_started(launch.id)
 
-        def cancel(self, _rollout_id):
+        def cancel(self, _launch_id):
             return False
 
     from local_stack.control_plane import LocalLauncher
@@ -635,9 +643,9 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
     subprocess.Popen = fake_popen
     try:
         control.launcher = CapturingLauncher()
-        rollout = control.launch_rollout(experiment.id, smoke_test=True)
+        launch = control.launch_experiment(experiment.id, smoke_test=True)
         try:
-            launcher.launch(control.rollout(rollout.id), experiment, lambda line: None)
+            launcher.launch(control.launch(launch.id), experiment, lambda line: None)
         except RuntimeError:
             pass
     finally:

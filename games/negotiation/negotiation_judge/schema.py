@@ -40,7 +40,7 @@ class CheapTalkTurn(BaseModel):
 
 class JudgeRoundContext(BaseModel):
     """Everything the judge needs to evaluate one round."""
-    game_id: str
+    episode_uid: str
     round_number: int
     model_a: str
     model_b: str
@@ -79,7 +79,7 @@ class DiscoveredPattern(BaseModel):
 
 class RoundJudgment(BaseModel):
     """Output of a single round judgment (Phase 1)."""
-    game_id: str
+    episode_uid: str
     round_number: int
     model_a: str
     model_b: str
@@ -93,10 +93,10 @@ class RoundJudgment(BaseModel):
     prior_round_influence: Optional[str] = None
 
 
-# --- Game-level judge input (new: one call per game) ---
+# --- Environment-level judge input (new: one call per environment) ---
 
 class RoundData(BaseModel):
-    """Per-round data for game-level judging."""
+    """Per-round data for environment-level judging."""
     round_number: int
     round_outcome: RoundOutcome
     joint_efficiency: float
@@ -110,8 +110,8 @@ class RoundData(BaseModel):
 
 
 class JudgeGameContext(BaseModel):
-    """Everything the judge needs to evaluate one game (all rounds at once)."""
-    game_id: str
+    """Everything the judge needs to evaluate one environment (all rounds at once)."""
+    episode_uid: str
     model_a: str
     model_b: str
     mode: str  # "stable" or "shifting"
@@ -119,14 +119,14 @@ class JudgeGameContext(BaseModel):
     # each round; the other retains full history. None in stable mode.
     shifting_agent: Optional[str] = None  # "agent_a" | "agent_b" | None
     mc_ratio: Optional[float] = None
-    oracle_optimum: Optional[float] = None  # game-level oracle (for non-rotating)
+    oracle_optimum: Optional[float] = None  # environment-level oracle (for non-rotating)
     optimal_allocation: Optional[str] = None
     rounds: list[RoundData]
 
 
 class GameJudgment(BaseModel):
-    """Output of a whole-game judgment (Phase 1)."""
-    game_id: str
+    """Output of a whole-environment judgment (Phase 1)."""
+    episode_uid: str
     model_a: str
     model_b: str
     mode: str
@@ -140,14 +140,14 @@ class GameJudgment(BaseModel):
 class JudgmentRecord(BaseModel):
     """Full document written to the judge_results Firestore collection.
 
-    Document ID: {game_id}__{judge_model}__{prompt_version}
+    Document ID: {episode_uid}__{judge_model}__{prompt_version}
     (slashes in judge_model are replaced with underscores)
 
     Embeds the full GameJudgment plus storage metadata so the schema of
     every persisted document is explicitly typed.
     """
     # GameJudgment fields (inlined so the doc is self-contained)
-    game_id: str
+    episode_uid: str
     model_a: str
     model_b: str
     mode: str

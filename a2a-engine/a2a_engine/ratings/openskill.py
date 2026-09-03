@@ -40,13 +40,13 @@ class OpenSkillRater:
         metrics: Iterable[MetricSpec],
         *,
         players: dict[str, PlayerRatingState] | None = None,
-        processed_game_ids: Iterable[str] | None = None,
+        processed_episode_uids: Iterable[str] | None = None,
     ) -> None:
         self.metrics = list(metrics)
         self.metric_by_name = {metric.name: metric for metric in self.metrics}
         self.model = _require_openskill()()
         self.players: dict[str, PlayerRatingState] = dict(players or {})
-        self.processed_game_ids: list[str] = list(processed_game_ids or [])
+        self.processed_episode_uids: list[str] = list(processed_episode_uids or [])
 
     def _default_skill(self) -> SkillRating:
         rating = self.model.rating()
@@ -80,7 +80,7 @@ class OpenSkillRater:
         return [ranks_by_idx[idx] for idx in range(len(scores))]
 
     def rate_event(self, event: RatingEvent, *, skip_processed: bool = True) -> bool:
-        if skip_processed and event.game_id in self.processed_game_ids:
+        if skip_processed and event.episode_uid in self.processed_episode_uids:
             return False
         participant_by_id = {p.participant_id: p for p in event.participants}
         participant_counts: dict[str, int] = {}
@@ -130,11 +130,11 @@ class OpenSkillRater:
 
         for player_id, count in participant_counts.items():
             self.players[player_id].games_played += count
-        self.processed_game_ids.append(event.game_id)
+        self.processed_episode_uids.append(event.episode_uid)
         return True
 
     def rate_events(self, events: Iterable[RatingEvent]) -> RatingSnapshot:
-        for event in sorted(events, key=lambda item: (item.timestamp, item.game_id)):
+        for event in sorted(events, key=lambda item: (item.timestamp, item.episode_uid)):
             self.rate_event(event)
         return self.snapshot()
 
@@ -142,7 +142,7 @@ class OpenSkillRater:
         return RatingSnapshot(
             metrics=self.metrics,
             players=self.players,
-            processed_game_ids=self.processed_game_ids,
+            processed_episode_uids=self.processed_episode_uids,
             generated_at=datetime.now(timezone.utc),
             metadata=dict(metadata),
         )
@@ -152,5 +152,5 @@ class OpenSkillRater:
         return cls(
             snapshot.metrics,
             players=snapshot.players,
-            processed_game_ids=snapshot.processed_game_ids,
+            processed_episode_uids=snapshot.processed_episode_uids,
         )

@@ -2,9 +2,9 @@ name: projects_study_with_run_009
 description: 'V2 multi-model negotiation study: 3 models × 4 paradigms × 3 MC ratios
   × 2 speaker swap = 72 games'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: sonnet_stable_fixed_mc05
   count: 8
   config:

@@ -1,4 +1,4 @@
-"""Word-guessing example game."""
+"""Word-guessing example environment."""
 
 from word_guess.game import WordGuessConfig, WordGuessGame
 

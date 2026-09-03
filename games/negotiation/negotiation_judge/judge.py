@@ -1,6 +1,6 @@
-"""Core judge function: one game → one judgment via LLM call.
+"""Core judge function: one environment → one judgment via LLM call.
 
-One LLM call per game (sees all rounds). Output is a GameJudgment with
+One LLM call per environment (sees all rounds). Output is a GameJudgment with
 per-round breakdowns, so downstream analysis stays round-granular while
 the judge gains cross-round awareness (repair, learning, regression).
 """
@@ -38,7 +38,7 @@ class TokenBudgetExceeded(Exception):
 # Matches ```json ... ``` blocks or ``` ... ```
 _FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
 
-# Judge calls can be large (whole game transcripts). Override via JUDGE_MAX_TOKENS env var.
+# Judge calls can be large (whole environment transcripts). Override via JUDGE_MAX_TOKENS env var.
 JUDGE_MAX_TOKENS = int(os.environ.get("JUDGE_MAX_TOKENS", 16000))
 
 # Rate-limit state — protected by a lock so concurrent threads don't race.
@@ -87,14 +87,14 @@ def _load_json_with_repair(text: str) -> dict:
 def _parse_game_judgment_json(raw: str, ctx: JudgeGameContext) -> GameJudgment:
     """Parse and validate raw LLM output into a GameJudgment.
 
-    Overrides game-level metadata + per-round metadata from the context so
+    Overrides environment-level metadata + per-round metadata from the context so
     the LLM can't accidentally drift on identifiers or ground-truth fields.
     """
     cleaned = _strip_markdown_fences(raw)
     data = _load_json_with_repair(cleaned)
 
-    # Force game-level metadata from context
-    data["game_id"] = ctx.game_id
+    # Force environment-level metadata from context
+    data["episode_uid"] = ctx.episode_uid
     data["model_a"] = ctx.model_a
     data["model_b"] = ctx.model_b
     data["mode"] = ctx.mode
@@ -108,15 +108,15 @@ def _parse_game_judgment_json(raw: str, ctx: JudgeGameContext) -> GameJudgment:
         rn = rj.get("round_number")
         truth = round_truth.get(rn)
         if truth is None:
-            # LLM hallucinated a round; keep its values but force game-level metadata
-            rj["game_id"] = ctx.game_id
+            # LLM hallucinated a round; keep its values but force environment-level metadata
+            rj["episode_uid"] = ctx.episode_uid
             rj["model_a"] = ctx.model_a
             rj["model_b"] = ctx.model_b
             rj["mode"] = ctx.mode
             rj["mc_ratio"] = ctx.mc_ratio
             continue
         # Force all ground-truth fields
-        rj["game_id"] = ctx.game_id
+        rj["episode_uid"] = ctx.episode_uid
         rj["round_number"] = truth.round_number
         rj["model_a"] = ctx.model_a
         rj["model_b"] = ctx.model_b
@@ -139,10 +139,10 @@ def judge_game(
     max_retries: int = 3,
     thinking_config: dict | None = None,
 ) -> GameJudgment:
-    """Run the LLM judge on a whole game and return a validated GameJudgment.
+    """Run the LLM judge on a whole environment and return a validated GameJudgment.
 
     One LLM call sees all rounds; output is per-round breakdowns plus a
-    game-level narrative.
+    environment-level narrative.
 
     Retries on JSON parse / validation errors (up to max_retries).
     HTTP 429/5xx retries handled inside _call_with_backoff.
@@ -176,15 +176,15 @@ def judge_game(
             missing = expected - got
             extra = got - expected
             if missing:
-                log.warning("%s: judge missed rounds %s", ctx.game_id, sorted(missing))
+                log.warning("%s: judge missed rounds %s", ctx.episode_uid, sorted(missing))
             if extra:
-                log.warning("%s: judge hallucinated rounds %s", ctx.game_id, sorted(extra))
+                log.warning("%s: judge hallucinated rounds %s", ctx.episode_uid, sorted(extra))
             return judgment
         except (json.JSONDecodeError, Exception) as e:
             last_error = e
             log.warning(
                 "Parse/validation error on %s (attempt %d/%d): %s",
-                ctx.game_id, attempt + 1, max_retries, e,
+                ctx.episode_uid, attempt + 1, max_retries, e,
             )
             if attempt < max_retries - 1:
                 messages.append({"role": "assistant", "content": raw_text})
@@ -198,7 +198,7 @@ def judge_game(
                 })
 
     raise ValueError(
-        f"Failed to get valid judgment for {ctx.game_id} "
+        f"Failed to get valid judgment for {ctx.episode_uid} "
         f"after {max_retries} attempts. Last error: {last_error}"
     )
 
@@ -209,7 +209,7 @@ def _parse_judgment_json(raw: str, ctx: JudgeRoundContext) -> RoundJudgment:
     """Parse and validate raw LLM output into a RoundJudgment (legacy per-round flow)."""
     cleaned = _strip_markdown_fences(raw)
     data = json.loads(cleaned)
-    data["game_id"] = ctx.game_id
+    data["episode_uid"] = ctx.episode_uid
     data["round_number"] = ctx.round_number
     data["model_a"] = ctx.model_a
     data["model_b"] = ctx.model_b

@@ -3,7 +3,7 @@
 Stubborn anchoring = repeating the exact prior joint allocation in a round
 where the previous round was suboptimal but non-overdrawn, i.e. a failure the
 dyad could have corrected. Denominators are eligible consecutive-round pairs
-in non-rotating games from the 720-game main cohort, verified against
+in non-rotating games from the 720-environment main cohort, verified against
 `uv run python -m scripts.analysis.rq13_anchoring --main-cohort`:
 overall 99/339, stable 74/182, shifting 25/157, M/C=0.5 49/173,
 M/C=1.0 29/63.

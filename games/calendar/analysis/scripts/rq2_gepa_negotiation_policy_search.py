@@ -1,4 +1,4 @@
-"""RQ2: evolve DSPy negotiation prompt variants for calendar-game welfare.
+"""RQ2: evolve DSPy negotiation prompt variants for calendar-environment welfare.
 
 This script runs a budgeted GEPA-style search over *appended negotiation policy*
 text. It does not edit the base system prompt. Each candidate policy is written
@@ -90,7 +90,7 @@ def _write_experiment(
             for _ in range(3)
         ]
     )
-    batches = "\n".join(
+    cells = "\n".join(
         [
             f"  - label: seed_{seed}\n"
             "    count: 1\n"
@@ -100,7 +100,7 @@ def _write_experiment(
     )
     text = f"""name: {experiment_name}
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 3
   num_slots: 16
   density: 1.0
@@ -113,8 +113,8 @@ defaults:
   enable_fallback: false
   agents:
 {agents}
-batches:
-{batches}
+cells:
+{cells}
 """
     path = EXPERIMENTS_DIR / f"{experiment_name}.yaml"
     path.write_text(text, encoding="utf-8")
@@ -209,11 +209,11 @@ def _build_context(seeds: list[int]) -> str:
             f"v2={b.get('v2')}, v4={b.get('v4')}, v5={b.get('v5')}"
         )
     return f"""
-We are optimizing ONLY an appended NEGOTIATION POLICY for LLM agents in a dense calendar scheduling game.
+We are optimizing ONLY an appended NEGOTIATION POLICY for LLM agents in a dense calendar scheduling environment.
 
 Non-negotiable constraints:
 - Preserve the established JSON/action protocol.
-- Do not change game rules, calendar rendering, hidden metadata, or privacy-label hydration.
+- Do not change environment rules, calendar rendering, hidden metadata, or privacy-label hydration.
 - Do not reveal exact costs, private event details, private labels, hidden labels, seeds, DSM results, or experiment names to the agents.
 - Agents may use qualitative language about flexibility, scarcity, bottlenecks, and low/high disruption.
 - Keep the policy concise enough for agents to act within max_turns_per_round=6.
@@ -284,7 +284,7 @@ class PolicyProgram:
         import dspy
 
         class GeneratePolicy(dspy.Signature):
-            """Generate a concise appended negotiation policy for calendar-game agents."""
+            """Generate a concise appended negotiation policy for calendar-environment agents."""
 
             context = dspy.InputField()
             policy = dspy.OutputField()
@@ -422,7 +422,7 @@ def run_gepa(args: argparse.Namespace) -> None:
         metric=metric,
         max_full_evals=args.candidates,
         reflection_lm=lm,
-        reflection_minibatch_size=1,
+        reflection_minicell_size=1,
         candidate_selection_strategy="current_best",
         log_dir=str(out_dir / "gepa_logs"),
         track_stats=True,

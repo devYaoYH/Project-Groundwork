@@ -1,8 +1,8 @@
 """
-Persistent storage for completed game logs.
+Persistent storage for completed environment logs.
 
-Each game is saved as a JSON file under DATA_DIR/<game_id>.json containing
-the full game result and the event log.
+Each environment is saved as a JSON file under DATA_DIR/<episode_uid>.json containing
+the full environment result and the event log.
 
 On Cloud Run, local file I/O is skipped. Firestore is write-only when available.
 """
@@ -74,7 +74,7 @@ def firestore_available() -> bool:
 
 
 def validate_firestore_document(game_config: dict, result: dict, events: list[dict]) -> FirestoreDocumentSchema:
-    """Validate a game trace against the Firestore schema. Raises ValidationError on mismatch."""
+    """Validate a environment trace against the Firestore schema. Raises ValidationError on mismatch."""
     return FirestoreDocumentSchema(
         game_config=game_config,
         result=result,
@@ -82,8 +82,8 @@ def validate_firestore_document(game_config: dict, result: dict, events: list[di
     )
 
 
-def save_to_firestore(game_id: str, game_config: dict, result: dict, events: list[dict]) -> None:
-    """Write a completed game trace to Firestore with current schema version (V3).
+def save_to_firestore(episode_uid: str, game_config: dict, result: dict, events: list[dict]) -> None:
+    """Write a completed environment trace to Firestore with current schema version (V3).
 
     V3 schema compresses events array with gzip to reduce storage size while
     keeping game_config and result uncompressed for queryability.
@@ -118,7 +118,7 @@ def save_to_firestore(game_id: str, game_config: dict, result: dict, events: lis
         doc["schema_version"] = CURRENT_SCHEMA_VERSION
         doc["created_at"] = SERVER_TIMESTAMP
 
-        _firestore_client.collection(FIRESTORE_COLLECTION).document(game_id).set(doc)
+        _firestore_client.collection(FIRESTORE_COLLECTION).document(episode_uid).set(doc)
 
         # Log with size info
         orig_size = len(json.dumps(events, separators=(',', ':')))
@@ -126,14 +126,14 @@ def save_to_firestore(game_id: str, game_config: dict, result: dict, events: lis
         reduction_pct = (1 - compressed_size / orig_size) * 100 if orig_size > 0 else 0
         log.info(
             "[%s] saved to Firestore (schema v%d, events: %d→%d bytes, %.1f%% reduction)",
-            game_id[:8], CURRENT_SCHEMA_VERSION, orig_size, compressed_size, reduction_pct
+            episode_uid[:8], CURRENT_SCHEMA_VERSION, orig_size, compressed_size, reduction_pct
         )
     except Exception as e:
-        log.error("[%s] Firestore write failed: %s", game_id[:8], e)
+        log.error("[%s] Firestore write failed: %s", episode_uid[:8], e)
 
 
-def save_visitor_signup(game_id: str, email: str, meta: dict) -> None:
-    """Record a demo visitor signup in VISITOR_COLLECTION (doc id = game_id).
+def save_visitor_signup(episode_uid: str, email: str, meta: dict) -> None:
+    """Record a demo visitor signup in VISITOR_COLLECTION (doc id = episode_uid).
 
     Kept separate from the research trace collection so visitor PII never
     mixes with experiment data.
@@ -143,45 +143,45 @@ def save_visitor_signup(game_id: str, email: str, meta: dict) -> None:
     try:
         doc = {
             "email": email,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             **meta,
             "status": "started",
             "created_at": SERVER_TIMESTAMP,
         }
-        _firestore_client.collection(VISITOR_COLLECTION).document(game_id).set(doc)
-        log.info("[%s] visitor signup saved", game_id[:8])
+        _firestore_client.collection(VISITOR_COLLECTION).document(episode_uid).set(doc)
+        log.info("[%s] visitor signup saved", episode_uid[:8])
     except Exception as e:
-        log.error("[%s] visitor signup write failed: %s", game_id[:8], e)
+        log.error("[%s] visitor signup write failed: %s", episode_uid[:8], e)
 
 
-def update_visitor_result(game_id: str, result_summary: dict) -> None:
-    """Attach final game outcome to an existing visitor signup doc."""
+def update_visitor_result(episode_uid: str, result_summary: dict) -> None:
+    """Attach final environment outcome to an existing visitor signup doc."""
     if not _firestore_ok:
         return
     try:
-        _firestore_client.collection(VISITOR_COLLECTION).document(game_id).set(
+        _firestore_client.collection(VISITOR_COLLECTION).document(episode_uid).set(
             {**result_summary, "status": "completed", "completed_at": SERVER_TIMESTAMP},
             merge=True,
         )
-        log.info("[%s] visitor result updated", game_id[:8])
+        log.info("[%s] visitor result updated", episode_uid[:8])
     except Exception as e:
-        log.error("[%s] visitor result write failed: %s", game_id[:8], e)
+        log.error("[%s] visitor result write failed: %s", episode_uid[:8], e)
 
 
-def list_traces(limit: int = 50, start_after: str | None = None, offset: int = 0, filters: dict[str, any] | None = None) -> tuple[list[dict], int]:
-    """List game traces from Firestore, ordered by created_at desc.
+def list_episodes(limit: int = 50, start_after: str | None = None, offset: int = 0, filters: dict[str, any] | None = None) -> tuple[list[dict], int]:
+    """List environment episodes from Firestore, ordered by created_at desc.
     Returns (summary dicts, total count). Supports both cursor and offset pagination.
 
     Args:
-        limit: Maximum number of traces to return
-        start_after: Game ID to start pagination after (cursor-based, mutually exclusive with offset)
+        limit: Maximum number of episodes to return
+        start_after: Environment ID to start pagination after (cursor-based, mutually exclusive with offset)
         offset: Number of documents to skip (offset-based, mutually exclusive with start_after)
         filters: Optional dict of field filters (e.g., {"schema_version": 2})
                 Note: Server-side filtering requires a Firestore composite index.
                 If the index is not available, falls back to client-side filtering.
 
     Returns:
-        Tuple of (traces list, total count)
+        Tuple of (episodes list, total count)
     """
     if not _firestore_ok:
         return [], 0
@@ -238,7 +238,7 @@ def list_traces(limit: int = 50, start_after: str | None = None, offset: int = 0
                     continue
 
             results.append({
-                "game_id": doc.id,
+                "episode_uid": doc.id,
                 "mode": config.get("mode", "?"),
                 "num_rounds": config.get("num_rounds", 0),
                 "agent_a_reward": result.get("agent_a_cumulative_reward", 0),
@@ -248,7 +248,7 @@ def list_traces(limit: int = 50, start_after: str | None = None, offset: int = 0
                 "seed": config.get("seed"),
                 "swapped": config.get("swapped", False),
                 "experiment_label": config.get("experiment_label", ""),
-                "experiment_run_id": config.get("experiment_run_id", ""),
+                "episode_id": config.get("episode_id", ""),
                 "schema_version": data.get("schema_version", 1),
             })
 
@@ -258,7 +258,7 @@ def list_traces(limit: int = 50, start_after: str | None = None, offset: int = 0
 
         return results, total_count
     except Exception as e:
-        log.error("Firestore list_traces failed: %s", e)
+        log.error("Firestore list_episodes failed: %s", e)
         return [], 0
 
 
@@ -280,16 +280,16 @@ def _restore_agent_projects(data: dict) -> None:
                     scenario["agent_projects"] = [ap[k] for k in sorted(ap.keys())]
 
 
-def get_trace(game_id: str) -> dict | None:
-    """Fetch a single game trace from Firestore by game_id."""
+def get_episode(episode_uid: str) -> dict | None:
+    """Fetch a single environment trace from Firestore by episode_uid."""
     if not _firestore_ok:
         return None
     try:
-        doc = _firestore_client.collection(FIRESTORE_COLLECTION).document(game_id).get()
+        doc = _firestore_client.collection(FIRESTORE_COLLECTION).document(episode_uid).get()
         if not doc.exists:
             return None
         data = doc.to_dict()
-        data["game_id"] = doc.id
+        data["episode_uid"] = doc.id
         # Convert Firestore timestamp to string for JSON serialization
         if "created_at" in data and data["created_at"] is not None:
             data["created_at"] = str(data["created_at"])
@@ -297,35 +297,35 @@ def get_trace(game_id: str) -> dict | None:
         _restore_agent_projects(data)
         return data
     except Exception as e:
-        log.error("Firestore get_trace failed: %s", e)
+        log.error("Firestore get_episode failed: %s", e)
         return None
 
 
 # --- Local file storage (dev only, skipped on Cloud Run) ---
 
-def save_game(game_id: str, result: dict, events: list[dict]) -> Path | None:
-    """Write a completed game to disk. Skipped on Cloud Run."""
+def save_game(episode_uid: str, result: dict, events: list[dict]) -> Path | None:
+    """Write a completed environment to disk. Skipped on Cloud Run."""
     if IS_CLOUD_RUN:
         return None
     os.makedirs(DATA_DIR, exist_ok=True)
-    path = Path(DATA_DIR) / f"{game_id}.json"
+    path = Path(DATA_DIR) / f"{episode_uid}.json"
     payload = {"result": result, "events": events}
     path.write_text(json.dumps(payload, indent=2, default=str))
     return path
 
 
-def load_game(game_id: str) -> dict | None:
-    """Load a single game from disk, or None if not found."""
+def load_game(episode_uid: str) -> dict | None:
+    """Load a single environment from disk, or None if not found."""
     if IS_CLOUD_RUN:
         return None
-    path = Path(DATA_DIR) / f"{game_id}.json"
+    path = Path(DATA_DIR) / f"{episode_uid}.json"
     if not path.is_file():
         return None
     return json.loads(path.read_text())
 
 
 def load_all_games() -> dict[str, dict]:
-    """Load all saved games. Returns {game_id: result_dict}. Empty on Cloud Run."""
+    """Load all saved games. Returns {episode_uid: result_dict}. Empty on Cloud Run."""
     if IS_CLOUD_RUN:
         return {}
     out: dict[str, dict] = {}
@@ -336,8 +336,8 @@ def load_all_games() -> dict[str, dict]:
             continue
         try:
             data = json.loads((Path(DATA_DIR) / fname).read_text())
-            game_id = fname.removesuffix(".json")
-            out[game_id] = data["result"]
+            episode_uid = fname.removesuffix(".json")
+            out[episode_uid] = data["result"]
         except (json.JSONDecodeError, KeyError):
             continue
     return out

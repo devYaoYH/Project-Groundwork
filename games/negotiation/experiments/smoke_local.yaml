@@ -4,14 +4,14 @@ description: >
   standalone Negotiation experiment selects its registered SQLite local-first
   default without API keys or cloud configuration.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   num_rounds: 2
   cheap_talk_turns: 2
   enable_cheap_talk: true
   agents:
     - {type: heuristic}
     - {type: heuristic}
-batches:
+cells:
   - label: smoke
     count: 2
     config: {seed: 7}

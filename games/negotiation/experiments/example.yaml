@@ -2,11 +2,11 @@ name: sample_experiment
 description: Example experimental design
 
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: default
   enable_cheap_talk: true
 
-batches:
+cells:
   - label: baseline
     count: 1
     config:

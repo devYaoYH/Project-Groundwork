@@ -1,8 +1,8 @@
 """Post-hoc calibration for calendar reflection logprobs.
 
-The calendar game records end-of-game reflection prompts that ask each agent
+The calendar environment records end-of-environment reflection prompts that ask each agent
 how much more or less willing they are to say another agent is occupied at
-each slot. This script replays those reflection outputs from saved traces and
+each slot. This script replays those reflection outputs from saved episodes and
 computes several offline calibrations:
 
 * sampled_delta: direct score from the emitted integer in [-3, 3]
@@ -249,7 +249,7 @@ def _reflection_rows(trace: dict[str, Any], trace_path: Path) -> list[dict[str, 
             upper_delta = _floor_upper_abs_expected(slot_logprobs[slot])
             rows.append({
                 "trace_path": str(trace_path),
-                "game_id": trace.get("game_id") or trace_path.stem,
+                "episode_uid": trace.get("episode_uid") or trace_path.stem,
                 "agent_id": agent_id,
                 "target_agent_id": target_agent_id,
                 "slot": slot,

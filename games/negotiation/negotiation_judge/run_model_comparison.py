@@ -1,9 +1,9 @@
-"""Test the judge on a single game with multiple models.
+"""Test the judge on a single environment with multiple models.
 
 Outputs one JSON per model to judge/output/model_comparison/<model_slug>.json
 
 Usage:
-    uv run python -m judge.run_model_comparison --game-id 40ae9f36
+    uv run python -m judge.run_model_comparison --environment-id 40ae9f36
 """
 
 import argparse
@@ -65,8 +65,8 @@ PROVIDERS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run judge on one game with multiple models")
-    parser.add_argument("--game-id", default="40ae9f36", help="Game ID (or prefix)")
+    parser = argparse.ArgumentParser(description="Run judge on one environment with multiple models")
+    parser.add_argument("--environment-id", default="40ae9f36", help="Environment ID (or prefix)")
     parser.add_argument("--output-dir", type=Path,
                         default=REPO_ROOT / "judge" / "output" / "model_comparison")
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -75,24 +75,24 @@ def main():
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load the game context
+    # Load the environment context
     log.info("Loading experiment data...")
     raw_traces = load_experiment_data()
     dataset = NegotiationDataset.from_traces(raw_traces)
 
-    # Find the game
-    matching = [g.game_id for g in dataset.games if g.game_id.startswith(args.game_id)]
+    # Find the environment
+    matching = [g.episode_uid for g in dataset.games if g.episode_uid.startswith(args.episode_uid)]
     if not matching:
-        log.error("No game found matching '%s'", args.game_id)
+        log.error("No environment found matching '%s'", args.episode_uid)
         sys.exit(1)
-    game_id = matching[0]
+    episode_uid = matching[0]
 
-    game_ctxs = extract_all_game_contexts(dataset, game_ids={game_id})
+    game_ctxs = extract_all_game_contexts(dataset, episode_uids={episode_uid})
     if not game_ctxs:
-        log.error("No eligible game context for %s", game_id)
+        log.error("No eligible environment context for %s", episode_uid)
         sys.exit(1)
     ctx = game_ctxs[0]
-    log.info("Game: %s (%d rounds, %s vs %s, %s)", game_id, len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode)
+    log.info("Environment: %s (%d rounds, %s vs %s, %s)", episode_uid, len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode)
 
     # Run each model
     for m in MODELS:
@@ -133,7 +133,7 @@ def main():
     print(f"\n{'='*60}")
     print("MODEL COMPARISON RESULTS")
     print(f"{'='*60}")
-    print(f"Game: {game_id}")
+    print(f"Environment: {episode_uid}")
     for m in MODELS:
         out_path = output_dir / f"{m['slug']}.json"
         err_path = output_dir / f"{m['slug']}_error.txt"

@@ -4,7 +4,7 @@ Centralises payload construction, header building, SSE parsing and response
 extraction for OpenAI-compatible, Anthropic, and Vertex AI APIs so every call
 site uses the same logic and honours ``model_config.py``.
 
-Game-agnostic: no game-specific prompt formatting lives here.
+Environment-agnostic: no environment-specific prompt formatting lives here.
 """
 
 import asyncio

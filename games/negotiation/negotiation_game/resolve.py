@@ -1,7 +1,7 @@
-"""Batch-level config resolution for negotiation.
+"""Cell-level config resolution for negotiation.
 
-Ported from ``generate_projects_for_batch`` in a2a-negotiation's
-``scripts/run_experiment.py``. The runner calls this once per batch, before
+Ported from ``generate_projects_for_cell`` in a2a-negotiation's
+``scripts/run_experiment.py``. The runner calls this once per cell, before
 fan-out, via the ``resolve_config`` hook declared at registration.
 
 Why this matters for reproducibility: ``mc_ratio`` drives a *stochastic*
@@ -53,7 +53,7 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     resolved["agent_projects"] = result["agent_projects"]
     resolved["oracle_stats"] = result["oracle_stats"]
     # Record the request alongside what the solver actually hit — the solver is
-    # approximate, and the realized ratio is the one the game was played at.
+    # approximate, and the realized ratio is the one the environment was played at.
     resolved["requested_mc_ratio"] = mc_ratio
     log.info(
         "Generated scenario: M/C = %.3f (target %.3f)",

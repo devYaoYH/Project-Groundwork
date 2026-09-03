@@ -80,7 +80,7 @@ def analyze_information_density(raw_games: list[dict]) -> dict:
                 msg = entry.get("message", "")
                 info = compute_information_density(msg)
                 rows.append({
-                    "game_id": g["game_id"],
+                    "episode_uid": g["episode_uid"],
                     "round_number": r["round_number"],
                     "turn_number": entry.get("turn", 0),
                     "speaker": speaker,

@@ -7,7 +7,7 @@
 <base href="/game-assets/negotiation/webapp/static/">
 <link rel="stylesheet" href="styles/base.css">
 <link rel="stylesheet" href="styles/forms.css">
-<link rel="stylesheet" href="styles/game.css">
+<link rel="stylesheet" href="styles/environment.css">
 <style>
   .replay-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center;
                 padding:12px 16px; border-bottom:1px solid rgba(128,128,128,.3); }
@@ -22,11 +22,11 @@
   body.embedded .replay-bar, body.embedded .replay-note { display:none; }
 </style>
 </head>
-<body data-game="negotiation">
+<body data-environment="negotiation">
 <main class="replay">
   <div class="replay-bar" id="replayBar">
     <a href="/control.html">&larr; Control plane</a>
-    <input id="stream" placeholder="a2a:rollout:&hellip;:episode:&hellip;">
+    <input id="stream" placeholder="a2a:launch:&hellip;:episode:&hellip;">
     <button id="load">Load</button>
     <button id="step">Step</button>
     <button id="play">Play</button>
@@ -37,11 +37,11 @@
             <div class="thinking-notice" id="thinkingNotice" style="display:none">
                 Dashed italic bubbles show each agent's private reasoning — this text is <strong>not</strong> visible to the other agent.
             </div>
-            <div class="game-header">
-                <h2>Game <span id="liveGameId"></span></h2>
+            <div class="environment-header">
+                <h2>Environment <span id="liveGameId"></span></h2>
                 <div style="display:flex;align-items:center;gap:8px">
-                    <button class="stop-btn" id="stopBtn" hidden>Stop Game</button>
-                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download game events as JSONL">Export Log</button>
+                    <button class="stop-btn" id="stopBtn" hidden>Stop Environment</button>
+                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download environment events as JSONL">Export Log</button>
                     <span class="mode-badge" id="liveMode"></span>
                 </div>
             </div>
@@ -105,7 +105,7 @@
 <script type="module">
 // Negotiation's own live renderer, driven from a recorded Redis stream rather
 // than the polling loop it was written for. Reusing `handleEvent` verbatim is
-// the point: replay shows the same visualisation the game shows while running.
+// the point: replay shows the same visualisation the environment shows while running.
 import { handleEvent } from "./js/live.js";
 
 const $ = id => document.getElementById(id);
@@ -153,7 +153,7 @@ async function load(stream) {
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     events = payload.events || [];
     resetView();
-    $("liveGameId").textContent = payload.game_id || stream;
+    $("liveGameId").textContent = payload.episode_uid || stream;
     $("liveMode").textContent = payload.config?.mode || "";
     const { partial, event_count } = payload.projection;
     setStatus(
@@ -175,7 +175,7 @@ $("reset").addEventListener("click", () => { stop(); resetView(); });
 const params = new URLSearchParams(location.search);
 
 // Inside the shared replay shell the surrounding controls and status line are
-// already provided, so the page contributes only the game's own rendering.
+// already provided, so the page contributes only the environment's own rendering.
 if (params.get("embed") === "1") {
   document.body.classList.add("embedded");
   $("replayBar").hidden = true;

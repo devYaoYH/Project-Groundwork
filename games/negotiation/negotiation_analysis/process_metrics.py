@@ -36,7 +36,7 @@ def compute_process_metrics(dataset: NegotiationDataset) -> dict:
     """Compute all process metrics for V5+ project-based games.
 
     Returns dict with:
-        - game_df: one row per game with process metrics
+        - game_df: one row per environment with process metrics
         - stated_vs_actual: detailed stated-vs-actual results
         - anchoring: detailed anchoring results
         - first_proposal: detailed first-proposal deference results
@@ -53,7 +53,7 @@ def compute_process_metrics(dataset: NegotiationDataset) -> dict:
     sva_df = sva_results.get("cohere_df", pd.DataFrame())
     if not sva_df.empty and "resource_match" in sva_df.columns:
         sva_by_game = (
-            sva_df.groupby("game_id")["resource_match"]
+            sva_df.groupby("episode_uid")["resource_match"]
             .mean()
             .rename("stated_actual_coherence")
         )
@@ -65,7 +65,7 @@ def compute_process_metrics(dataset: NegotiationDataset) -> dict:
     fpd_df = fpd_results.get("round_df", pd.DataFrame())
     if not fpd_df.empty and "opponent_deference_resource_match" in fpd_df.columns:
         fpd_by_game = (
-            fpd_df.groupby("game_id")["opponent_deference_resource_match"]
+            fpd_df.groupby("episode_uid")["opponent_deference_resource_match"]
             .mean()
             .rename("first_proposal_deference")
         )
@@ -75,47 +75,47 @@ def compute_process_metrics(dataset: NegotiationDataset) -> dict:
     # 4. Allocation anchoring (returns DataFrame directly)
     anch_df = analyze_anchoring(dataset)
     if not anch_df.empty and "stubborn_anchor" in anch_df.columns:
-        anch_by_game = anch_df.groupby("game_id").agg(
+        anch_by_game = anch_df.groupby("episode_uid").agg(
             stubborn_anchor_rate=pd.NamedAgg(column="stubborn_anchor", aggfunc="mean"),
         )
     else:
         anch_by_game = pd.DataFrame(columns=["stubborn_anchor_rate"])
 
-    # Build game-level DataFrame
+    # Build environment-level DataFrame
     game_df = (
-        round_df.groupby("game_id")[["model_a", "model_b", "pair", "is_cross_play", "mode", "mc_bucket", "is_rotating"]]
+        round_df.groupby("episode_uid")[["model_a", "model_b", "pair", "is_cross_play", "mode", "mc_bucket", "is_rotating"]]
         .first()
         .reset_index()
     )
 
     # Merge metrics
-    game_df = game_df.merge(sva_by_game, on="game_id", how="left")
-    game_df = game_df.merge(fpd_by_game, on="game_id", how="left")
-    game_df = game_df.merge(anch_by_game, on="game_id", how="left")
+    game_df = game_df.merge(sva_by_game, on="episode_uid", how="left")
+    game_df = game_df.merge(fpd_by_game, on="episode_uid", how="left")
+    game_df = game_df.merge(anch_by_game, on="episode_uid", how="left")
 
     # Project mention frequency (from rq6)
     proj_df = sva_results.get("project_df", pd.DataFrame())
     if not proj_df.empty and "project_mention_rate" in proj_df.columns:
         proj_by_game = (
             proj_df[proj_df["num_messages"] > 0]
-            .groupby("game_id")["project_mention_rate"]
+            .groupby("episode_uid")["project_mention_rate"]
             .mean()
             .rename("project_mention_rate")
         )
-        game_df = game_df.merge(proj_by_game, on="game_id", how="left")
+        game_df = game_df.merge(proj_by_game, on="episode_uid", how="left")
     else:
         game_df["project_mention_rate"] = np.nan
 
-    # Information density (per-game mean across turns)
+    # Information density (per-environment mean across turns)
     id_results = analyze_information_density(raw_games)
     id_turn_df = id_results.get("turn_df", pd.DataFrame())
     if not id_turn_df.empty and "density" in id_turn_df.columns:
         id_by_game = (
-            id_turn_df.groupby("game_id")["density"]
+            id_turn_df.groupby("episode_uid")["density"]
             .mean()
             .rename("information_density")
         )
-        game_df = game_df.merge(id_by_game, on="game_id", how="left")
+        game_df = game_df.merge(id_by_game, on="episode_uid", how="left")
     else:
         game_df["information_density"] = np.nan
 
@@ -127,8 +127,8 @@ def compute_process_metrics(dataset: NegotiationDataset) -> dict:
         "turn_taking_rate_2", "turn_taking_rate_4", "win_stay_rate", "lose_shift_rate",
     ]
     if not tax_game_df.empty:
-        merge_cols = ["game_id"] + [c for c in tax_cols if c in tax_game_df.columns]
-        game_df = game_df.merge(tax_game_df[merge_cols], on="game_id", how="left")
+        merge_cols = ["episode_uid"] + [c for c in tax_cols if c in tax_game_df.columns]
+        game_df = game_df.merge(tax_game_df[merge_cols], on="episode_uid", how="left")
 
     # 5. Referential binding — STUB
     game_df["referential_binding"] = None  # Deferred: requires LLM-as-judge

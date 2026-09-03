@@ -1,15 +1,15 @@
-"""CLI: load an experiment YAML, expand batches, run games in-process, persist traces.
+"""CLI: load an experiment YAML, expand cells, run games in-process, persist episodes.
 
 Usage:
 
     a2a-run path/to/experiment.yaml --max-parallelism 4 --results-dir ./results
 
 Games are discovered automatically from installed packages that declare an
-``a2a_engine.games`` entry point, so an experiment can name any installed game
+``a2a_engine.environments`` entry point, so an experiment can name any installed environment
 without the caller importing it first.
 
-Persistence goes through a ``TraceStore`` chosen by the experiment's ``storage:``
-block, falling back to the game's registered default and then to local JSON.
+Persistence goes through a ``EpisodeStore`` chosen by the experiment's ``storage:``
+block, falling back to the environment's registered default and then to local JSON.
 
 Three execution modes, which answer different questions:
 
@@ -19,7 +19,7 @@ Three execution modes, which answer different questions:
 
 ``--smoke-test``
     *Is my data pipeline reachable?* Probes the configured sink, then runs one
-    run per batch with scripted agents and **persists** each trace through that
+    run per cell with scripted agents and **persists** each trace through that
     sink, reading it back to prove the round-trip. Needs no API keys.
 
 (neither)
@@ -35,19 +35,19 @@ import uuid
 from pathlib import Path
 
 from a2a_engine import (
-    EnvironmentReference,
+    ReleaseReference,
     EpisodeReference,
-    GameTraceBase,
-    expand_batches,
-    get_game_spec,
-    list_games,
+    EpisodeTrace,
+    expand_cells,
+    get_environment_spec,
+    list_environments,
     load_experiment,
     run_with_parallelism,
 )
 from a2a_engine._context import current_conversation_id
 from a2a_engine.experiment import resolve_storage
-from a2a_engine.manifest import RunManifest, git_hash
-from a2a_engine.registry import discover_games
+from a2a_engine.manifest import EpisodeManifest, git_hash
+from a2a_engine.registry import discover_environments
 from a2a_engine.storage import check_store, make_store
 from a2a_engine.storage.local import LocalJSONStore
 from a2a_engine.tracing_otel import get_tracer, init_tracing, shutdown_tracing
@@ -55,29 +55,29 @@ from a2a_engine.tracing_otel import get_tracer, init_tracing, shutdown_tracing
 log = logging.getLogger("expt_runner")
 
 
-def _make_run_context(experiment_name: str, batch_label: str, resolved_cfg: dict,
-                      run_idx: int, dry_run: bool, persist: bool = True) -> dict:
+def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
+                      episode_idx: int, dry_run: bool, persist: bool = True) -> dict:
     cfg = dict(resolved_cfg)
     cfg["experiment_name"] = experiment_name
-    cfg["experiment_run_id"] = f"{experiment_name}.{batch_label}.{run_idx}"
-    cfg.setdefault("game_name", cfg.get("game_name"))
+    cfg["episode_id"] = f"{experiment_name}.{cell_id}.{episode_idx}"
+    cfg.setdefault("environment_id", cfg.get("environment_id"))
     cfg.setdefault("git_hash", git_hash(Path.cwd()))
-    # Redis credentials remain process environment only.  The resolved config
+    # Redis credentials remain process release only.  The resolved config
     # records the stream name so a completed trace can be joined to its
     # operational recovery/replay log without leaking a connection string.
     redis_url = os.environ.get("A2A_REDIS_URL")
-    rollout_id = os.environ.get("A2A_ROLLOUT_ID")
-    if redis_url and rollout_id:
-        episode_id = str(cfg["experiment_run_id"])
-        prefix = os.environ.get("A2A_REDIS_STREAM_PREFIX", f"a2a:rollout:{rollout_id}")
+    launch_id = os.environ.get("A2A_LAUNCH_ID")
+    if redis_url and launch_id:
+        episode_id = str(cfg["episode_id"])
+        prefix = os.environ.get("A2A_REDIS_STREAM_PREFIX", f"a2a:launch:{launch_id}")
         cfg["event_stream"] = {
             "stream": f"{prefix}:episode:{episode_id}",
             "episode_id": episode_id,
-            "rollout_id": rollout_id,
+            "launch_id": launch_id,
         }
     return {"config": cfg, "dry_run": dry_run, "persist": persist,
             "experiment_name": experiment_name,
-            "batch_label": batch_label, "run_idx": run_idx}
+            "cell_id": cell_id, "episode_idx": episode_idx}
 
 
 def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
@@ -140,7 +140,7 @@ def _preflight_credentials(contexts: list[dict]) -> None:
     """Assert every distinct agent line-up in this run has usable credentials.
 
     Unlike the dry-run check this is not gated on ``dry_run_checks_keys``: that
-    declaration is about a game substituting scripted agents for its dry run,
+    declaration is about a environment substituting scripted agents for its dry run,
     and says nothing about whether a live run will call a provider.
     """
     seen: set[str] = set()
@@ -161,10 +161,10 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     cfg = ctx["config"]
     dry_run = ctx["dry_run"]
     persist = ctx.get("persist", True)
-    game_name = cfg.get("game_name")
-    if not game_name:
-        raise ValueError("config is missing 'game_name'")
-    spec = get_game_spec(game_name)
+    environment_id = cfg.get("environment_id")
+    if not environment_id:
+        raise ValueError("config is missing 'environment_id'")
+    spec = get_environment_spec(environment_id)
 
     # The key assertion belongs to --dry-run, whose question is model
     # reachability. A smoke test runs scripted agents to exercise storage, so
@@ -172,83 +172,83 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     if dry_run and persist is False and spec.dry_run_checks_keys:
         _check_api_keys(cfg)
 
-    game = spec.cls(config=cfg, dry_run=dry_run)
+    environment = spec.cls(config=cfg, dry_run=dry_run)
 
-    game_id = str(uuid.uuid4())
+    episode_uid = str(uuid.uuid4())
     tracer = get_tracer()
-    with tracer.start_as_current_span(f"game {game_name}") as span:
-        span.set_attribute("gen_ai.conversation.id", game_id)
-        span.set_attribute("langfuse.session.id", game_id)
-        span.set_attribute("a2a.episode.id", str(cfg.get("experiment_run_id") or game_id))
-        span.set_attribute("a2a.game.name", str(game_name))
-        environment = cfg.get("environment") or {}
-        if isinstance(environment, dict):
-            if environment.get("id"):
-                span.set_attribute("a2a.environment.id", str(environment["id"]))
-            if environment.get("revision"):
-                span.set_attribute("a2a.environment.revision", str(environment["revision"]))
-            if environment.get("content_sha256"):
-                span.set_attribute("a2a.environment.content_sha256", str(environment["content_sha256"]))
+    with tracer.start_as_current_span(f"environment {environment_id}") as span:
+        span.set_attribute("gen_ai.conversation.id", episode_uid)
+        span.set_attribute("langfuse.session.id", episode_uid)
+        span.set_attribute("a2a.episode.id", str(cfg.get("episode_id") or episode_uid))
+        span.set_attribute("a2a.environment.name", str(environment_id))
+        release = cfg.get("release") or {}
+        if isinstance(release, dict):
+            if release.get("id"):
+                span.set_attribute("a2a.release.id", str(release["id"]))
+            if release.get("release"):
+                span.set_attribute("a2a.release.version", str(release["release"]))
+            if release.get("content_sha256"):
+                span.set_attribute("a2a.release.content_sha256", str(release["content_sha256"]))
         span.set_attribute(
             "langfuse.trace.tags",
-            [ctx["experiment_name"], ctx["batch_label"]],
+            [ctx["experiment_name"], ctx["cell_id"]],
         )
-        token = current_conversation_id.set(game_id)
+        token = current_conversation_id.set(episode_uid)
         try:
-            trace = game.run()
+            trace = environment.run()
             context = span.get_span_context()
-            if isinstance(trace, GameTraceBase):
-                if isinstance(environment, dict) and environment.get("id"):
-                    trace.environment = EnvironmentReference.model_validate(environment)
+            if isinstance(trace, EpisodeTrace):
+                if isinstance(release, dict) and release.get("id"):
+                    trace.release = ReleaseReference.model_validate(release)
                 trace.episode = EpisodeReference(
-                    id=str(cfg.get("experiment_run_id") or game_id),
+                    id=str(cfg.get("episode_id") or episode_uid),
                     experiment_name=ctx["experiment_name"],
-                    batch_label=ctx["batch_label"],
-                    run_idx=ctx["run_idx"],
+                    cell_id=ctx["cell_id"],
+                    episode_idx=ctx["episode_idx"],
                 )
                 if context.is_valid:
                     trace.observability.update({
                         "otel_trace_id": f"{context.trace_id:032x}",
                         "otel_root_span_id": f"{context.span_id:016x}",
-                        "episode_id": str(cfg.get("experiment_run_id") or game_id),
+                        "episode_id": str(cfg.get("episode_id") or episode_uid),
                     })
         finally:
             current_conversation_id.reset(token)
 
-    if not isinstance(trace, GameTraceBase):
+    if not isinstance(trace, EpisodeTrace):
         raise TypeError(
-            f"Game {game_name} returned {type(trace).__name__}, expected GameTraceBase"
+            f"Environment {environment_id} returned {type(trace).__name__}, expected EpisodeTrace"
         )
-    trace.game_id = game_id
+    trace.episode_uid = episode_uid
 
     if not persist:
-        log.info("dry-run: skipping persistence for %s", cfg.get("experiment_run_id"))
-        return f"dry-run-{game_id}"
+        log.info("dry-run: skipping persistence for %s", cfg.get("episode_id"))
+        return f"dry-run-{episode_uid}"
 
-    manifest = RunManifest.from_run(
+    manifest = EpisodeManifest.from_run(
         config=cfg,
         experiment_name=ctx["experiment_name"],
-        batch_label=ctx["batch_label"],
-        run_idx=ctx["run_idx"],
-        game_id=game_id,
+        cell_id=ctx["cell_id"],
+        episode_idx=ctx["episode_idx"],
+        episode_uid=episode_uid,
         game_package=spec.package,
         repo_root=Path.cwd(),
     )
-    uri = store.put_trace(trace, manifest)
+    uri = store.put_episode(trace, manifest)
     _expire_event_stream(cfg)
 
     if ctx.get("verify_readback"):
         # The point of a smoke test is proving the trace survives the sink, not
-        # merely that put_trace returned without raising.
-        restored = store.get_trace(game_id)
+        # merely that put_episode returned without raising.
+        restored = store.get_episode(episode_uid)
         if restored is None:
             raise RuntimeError(
-                f"{store.name}: trace {game_id} was written to {uri} but did not "
+                f"{store.name}: trace {episode_uid} was written to {uri} but did not "
                 "read back — the sink accepted the write without persisting it"
             )
         if len(restored.events) != len(trace.events):
             raise RuntimeError(
-                f"{store.name}: trace {game_id} read back with {len(restored.events)} "
+                f"{store.name}: trace {episode_uid} read back with {len(restored.events)} "
                 f"events, expected {len(trace.events)}"
             )
     return uri
@@ -270,24 +270,24 @@ def _expire_event_stream(config: dict) -> None:
         log.warning("could not apply Redis stream retention", exc_info=True)
 
 
-def _storage_for(spec, args, game_names: list[str]) -> dict:
+def _storage_for(spec, args, environment_ids: list[str]) -> dict:
     """Resolve the experiment's sink.
 
-    A game's registered default only applies when the experiment does not choose
-    for itself *and* every batch belongs to that one game — with several games in
-    play there is no principled way to pick between game-specific defaults, so
+    A environment's registered default only applies when the experiment does not choose
+    for itself *and* every cell belongs to that one environment — with several games in
+    play there is no principled way to pick between environment-specific defaults, so
     the neutral local store wins and the experiment is expected to be explicit.
     """
     game_default: dict = {}
-    if not spec.storage and len(game_names) > 1:
+    if not spec.storage and len(environment_ids) > 1:
         log.info(
             "Experiment spans %d games and declares no storage: block; "
-            "using the default local store rather than any one game's default.",
-            len(game_names),
+            "using the default local store rather than any one environment's default.",
+            len(environment_ids),
         )
-    elif len(game_names) == 1:
+    elif len(environment_ids) == 1:
         try:
-            game_default = dict(get_game_spec(game_names[0]).storage or {})
+            game_default = dict(get_environment_spec(environment_ids[0]).storage or {})
         except KeyError:
             pass
 
@@ -304,30 +304,30 @@ def _storage_for(spec, args, game_names: list[str]) -> dict:
     return resolve_storage(spec, game_default=game_default, overrides=overrides)
 
 
-def _resolve_hooks(game_names: list[str]) -> dict:
-    """Map each game in the experiment to its ``resolve_config`` hook, if any."""
+def _resolve_hooks(environment_ids: list[str]) -> dict:
+    """Map each environment in the experiment to its ``resolve_config`` hook, if any."""
     hooks: dict = {}
-    for name in game_names:
+    for name in environment_ids:
         try:
-            hook = get_game_spec(name).resolve_config
+            hook = get_environment_spec(name).resolve_config
         except KeyError:
             continue
         if hook is not None:
             hooks[name] = hook
-            log.info("Using %s's resolve_config hook for batch expansion", name)
+            log.info("Using %s's resolve_config hook for cell expansion", name)
     return hooks
 
 
 def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
                 args, results_dir: Path) -> int:
-    """Preflight the sink, then push one real trace per batch through it.
+    """Preflight the sink, then push one real trace per cell through it.
 
     Structured as three gates so a failure says which layer broke:
 
     1. **Sink reachable** — ``store.check()``.
-    2. **Batches expand** — presets, sinks and ``resolve_config`` all resolve,
-       and every game named by a batch is actually installed.
-    3. **Round-trip** — each batch runs with scripted agents, persists, and is
+    2. **Cells expand** — presets, sinks and ``resolve_config`` all resolve,
+       and every environment named by a cell is actually installed.
+    3. **Round-trip** — each cell runs with scripted agents, persists, and is
        read back from the sink.
     """
     banner = "=" * 68
@@ -348,29 +348,29 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
     # --- 2. expansion ---
     print("\n[2/3] Experiment expansion")
     try:
-        expanded = expand_batches(spec, resolve_config=resolve_hooks)
+        expanded = expand_cells(spec, resolve_config=resolve_hooks)
     except Exception as exc:
-        return fail(f"could not expand batches: {type(exc).__name__}: {exc}")
+        return fail(f"could not expand cells: {type(exc).__name__}: {exc}")
 
     contexts: list[dict] = []
     missing: list[str] = []
-    for batch, resolved in expanded:
-        game_name = str(resolved.get("game_name") or "")
+    for cell, resolved in expanded:
+        environment_id = str(resolved.get("environment_id") or "")
         try:
-            get_game_spec(game_name)
+            get_environment_spec(environment_id)
         except KeyError as exc:
-            missing.append(f"{batch.label} -> {exc}")
+            missing.append(f"{cell.label} -> {exc}")
             continue
-        for i in range(max(1, args.smoke_runs_per_batch)):
-            ctx = _make_run_context(spec.name, batch.label, resolved, i,
+        for i in range(max(1, args.smoke_episodes_per_cell)):
+            ctx = _make_run_context(spec.name, cell.label, resolved, i,
                                     dry_run=True, persist=True)
             ctx["verify_readback"] = True
             contexts.append(ctx)
-        print(f"      OK   {batch.label} -> game={game_name}")
+        print(f"      OK   {cell.label} -> environment={environment_id}")
     for problem in missing:
         print(f"      FAIL {problem}")
     if missing:
-        return fail("some batches name games that are not installed.")
+        return fail("some cells name games that are not installed.")
 
     # --- 3. end-to-end round-trip ---
     plural = "run" if len(contexts) == 1 else "runs"
@@ -381,14 +381,14 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
         items=contexts,
         max_workers=args.max_parallelism,
         on_result=lambda ctx, uri: print(
-            f"      OK   {ctx['config']['experiment_run_id']}"
-            f"  [{ctx['config'].get('game_name')}] -> {uri}"),
+            f"      OK   {ctx['config']['episode_id']}"
+            f"  [{ctx['config'].get('environment_id')}] -> {uri}"),
         on_error=lambda ctx, e: print(
-            f"      FAIL {ctx['config']['experiment_run_id']}"
-            f"  [{ctx['config'].get('game_name')}]: {e}"),
+            f"      FAIL {ctx['config']['episode_id']}"
+            f"  [{ctx['config'].get('environment_id')}]: {e}"),
     )
 
-    games = sorted({c["config"].get("game_name") for c in contexts})
+    games = sorted({c["config"].get("environment_id") for c in contexts})
     print(f"\n{banner}")
     print(f"{'PASS' if not errors else 'FAIL'}  "
           f"{len(results)}/{len(contexts)} runs persisted and read back  "
@@ -409,11 +409,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="Probe the configured sink, then run scripted agents and "
                              "persist through it, verifying each trace reads back. "
                              "Needs no API keys.")
-    parser.add_argument("--smoke-runs-per-batch", type=int, default=1,
-                        help="Runs per batch during --smoke-test (default: 1).")
+    parser.add_argument("--smoke-episodes-per-cell", type=int, default=1,
+                        help="Runs per cell during --smoke-test (default: 1).")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip experiment_run_id values already present in local results manifests.")
+                        help="Skip episode_id values already present in local results manifests.")
     parser.add_argument("--shard-index", type=int, default=0,
                         help="Zero-based shard index to run after expanding the experiment.")
     parser.add_argument("--shard-count", type=int, default=1,
@@ -434,20 +434,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.shard_index < 0 or args.shard_index >= args.shard_count:
         parser.error("--shard-index must satisfy 0 <= index < shard-count")
 
-    discover_games()
+    discover_environments()
 
     spec = load_experiment(args.yaml_path)
     _configure_observability(spec.observability, results_dir=Path(args.results_dir))
     init_tracing("a2a-engine")
-    log.info("Loaded experiment %r with %d batches", spec.name, len(spec.batches))
-    log.info("Registered games: %s", list_games() or "<none>")
+    log.info("Loaded experiment %r with %d cells", spec.name, len(spec.cells))
+    log.info("Registered games: %s", list_environments() or "<none>")
 
-    game_names = spec.game_names()
-    log.info("Experiment games: %s", ", ".join(game_names) or "<none>")
-    resolve_hooks = _resolve_hooks(game_names)
+    environment_ids = spec.environment_ids()
+    log.info("Experiment games: %s", ", ".join(environment_ids) or "<none>")
+    resolve_hooks = _resolve_hooks(environment_ids)
 
     results_dir = Path(args.results_dir)
-    storage_cfg = _storage_for(spec, args, game_names)
+    storage_cfg = _storage_for(spec, args, environment_ids)
     store = make_store(storage_cfg, results_dir=results_dir)
     log.info("Trace store: %s (%s)", store.name, storage_cfg or "defaults")
 
@@ -455,10 +455,10 @@ def main(argv: list[str] | None = None) -> int:
         return _smoke_test(spec, store, storage_cfg, resolve_hooks, args, results_dir)
 
     contexts: list[dict] = []
-    for batch, resolved in expand_batches(spec, resolve_config=resolve_hooks):
-        for i in range(batch.count):
+    for cell, resolved in expand_cells(spec, resolve_config=resolve_hooks):
+        for i in range(cell.count):
             contexts.append(
-                _make_run_context(spec.name, batch.label, resolved, i,
+                _make_run_context(spec.name, cell.label, resolved, i,
                                   args.dry_run, persist=not args.dry_run)
             )
 
@@ -477,14 +477,14 @@ def main(argv: list[str] | None = None) -> int:
         # Ask the configured sink what it already holds; only fall back to the
         # JSON tree for backends that cannot answer (resuming against S3 still
         # reads the local mirror, which is where its manifests live).
-        resumable = store if hasattr(store, "completed_run_ids") else LocalJSONStore(
+        resumable = store if hasattr(store, "completed_episode_ids") else LocalJSONStore(
             results_dir=results_dir
         )
-        completed = resumable.completed_run_ids(spec.name)
+        completed = resumable.completed_episode_ids(spec.name)
         before = len(contexts)
         contexts = [
             ctx for ctx in contexts
-            if ctx["config"]["experiment_run_id"] not in completed
+            if ctx["config"]["episode_id"] not in completed
         ]
         log.info("Resume enabled: skipping %d completed runs, %d remaining",
                  before - len(contexts), len(contexts))
@@ -508,8 +508,8 @@ def main(argv: list[str] | None = None) -> int:
         fn=lambda ctx: _run_one(ctx, store, results_dir),
         items=contexts,
         max_workers=args.max_parallelism,
-        on_result=lambda ctx, p: log.info("ok  %s -> %s", ctx["config"]["experiment_run_id"], p),
-        on_error=lambda ctx, e: log.error("fail %s: %s", ctx["config"]["experiment_run_id"], e),
+        on_result=lambda ctx, p: log.info("ok  %s -> %s", ctx["config"]["episode_id"], p),
+        on_error=lambda ctx, e: log.error("fail %s: %s", ctx["config"]["episode_id"], e),
     )
     log.info("Done: %d ok, %d failed", len(results), len(errors))
     shutdown_tracing()
@@ -519,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
 def _configure_observability(config: dict | None, *, results_dir: Path) -> None:
     """Apply typed ExperimentConfig observability before creating a tracer.
 
-    Legacy YAML has no observability block and continues to use environment
+    Legacy YAML has no observability block and continues to use release
     variables untouched. The typed config is explicit experiment input, so it
     wins when present and is then retained in the normalized run config.
     """

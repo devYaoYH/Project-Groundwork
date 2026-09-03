@@ -2,7 +2,7 @@ name: arena_entry_deepseek-v4-pro_calbench90_varied
 description: Arena entry calibration for deepseek/deepseek-v4-pro. Runs the fixed CalBench 90 varied suite with the entrant
   in seat 0 and a static four-model anchor panel.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   task_path: tasks/calbench_90_varied.jsonl
   num_agents: 5
   num_slots: 16
@@ -50,7 +50,7 @@ defaults:
     gcp_project: ${A2A_VERTEX_GEMINI_PROJECT}
     gcp_location: global
     vertex_adc_file: ${A2A_VERTEX_GEMINI_ADC_FILE}
-batches:
+cells:
 - label: b001_easy_5a_3p_d0p6_c3_1
   count: 1
   config:

@@ -1,8 +1,8 @@
-"""Generic, game-agnostic schemas for agent-to-agent experiments.
+"""Generic, environment-agnostic schemas for agent-to-agent experiments.
 
 Concrete benchmarks subclass these — e.g. a calendar-scheduling benchmark
-extends ``GameConfigBase`` to add its own fields, and writes per-game payloads
-into ``GameEvent.data`` and ``GameTraceBase.final_state``/``metrics``.
+extends ``EpisodeConfigBase`` to add its own fields, and writes per-environment payloads
+into ``Event.data`` and ``EpisodeTrace.final_state``/``metrics``.
 """
 
 from datetime import datetime
@@ -11,36 +11,36 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 
-class AgentInfo(BaseModel):
+class ParticipantBinding(BaseModel):
     """Per-agent configuration entry inside a GameConfig."""
 
     model_config = ConfigDict(extra="allow")
 
-    type: str = "llm"  # "llm" | "human" | "heuristic" | "random" | game-defined
+    type: str = "llm"  # "llm" | "human" | "heuristic" | "random" | environment-defined
     model: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-class GameConfigBase(BaseModel):
-    """Base game config. Subclass per benchmark to add game-specific fields."""
+class EpisodeConfigBase(BaseModel):
+    """Base environment config. Subclass per benchmark to add environment-specific fields."""
 
     model_config = ConfigDict(extra="allow")
 
-    game_name: str
+    environment_id: str
     num_agents: int
-    agents: list[AgentInfo] = Field(default_factory=list)
+    agents: list[ParticipantBinding] = Field(default_factory=list)
     seed: int | None = None
-    experiment_run_id: str | None = None
+    episode_id: str | None = None
     experiment_name: str | None = None
     git_hash: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-class GameEvent(BaseModel):
-    """A single event in a game trace.
+class Event(BaseModel):
+    """A single event in a environment trace.
 
-    ``type`` is a game-defined string, e.g. "message", "broadcast",
-    "task_injected", "decision", "round_start". Game-specific payload lives in
+    ``type`` is a environment-defined string, e.g. "message", "broadcast",
+    "task_injected", "decision", "round_start". Environment-specific payload lives in
     ``data``.
     """
 
@@ -51,8 +51,8 @@ class GameEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-class EnvironmentInputReference(BaseModel):
-    """The input artifact declaration copied from an EnvironmentConfig."""
+class ReleaseInputReference(BaseModel):
+    """The input artifact declaration copied from an ReleaseDeclaration."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,16 +61,16 @@ class EnvironmentInputReference(BaseModel):
     sha256: str
 
 
-class EnvironmentReference(BaseModel):
-    """Immutable environment identity attached to every typed-config trace."""
+class ReleaseReference(BaseModel):
+    """Immutable release identity attached to every typed-config trace."""
 
     model_config = ConfigDict(extra="allow")
 
     schema_version: int = 1
     id: str
-    revision: str
+    release: str
     content_sha256: str
-    inputs: list[EnvironmentInputReference] = Field(default_factory=list)
+    inputs: list[ReleaseInputReference] = Field(default_factory=list)
 
 
 class EpisodeReference(BaseModel):
@@ -80,25 +80,25 @@ class EpisodeReference(BaseModel):
 
     id: str
     experiment_name: str
-    batch_label: str
-    run_idx: int
+    cell_id: str
+    episode_idx: int
 
 
-class GameTraceBase(BaseModel):
-    """Persisted record of a single game run."""
+class EpisodeTrace(BaseModel):
+    """Persisted record of a single environment run."""
 
     model_config = ConfigDict(extra="allow")
 
-    game_id: str
-    config: SerializeAsAny[GameConfigBase]
-    events: list[GameEvent] = Field(default_factory=list)
+    episode_uid: str
+    config: SerializeAsAny[EpisodeConfigBase]
+    events: list[Event] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
-    environment: EnvironmentReference | None = None
+    release: ReleaseReference | None = None
     episode: EpisodeReference | None = None
     # Operational correlation is kept separate from benchmark semantics. These
     # fields identify external telemetry without making an OTLP exporter the
-    # source of truth for a game result.
+    # source of truth for a environment result.
     observability: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=datetime.utcnow)
     ended_at: datetime | None = None

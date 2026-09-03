@@ -51,7 +51,7 @@ export async function launchQuickGame() {
     const emailInput = document.getElementById('quickEmail');
     if (!EMAIL_RE.test(emailInput.value.trim())) {
         emailInput.focus();
-        emailInput.setCustomValidity('Please enter your email to try the game.');
+        emailInput.setCustomValidity('Please enter your email to try the environment.');
         emailInput.reportValidity();
         return;
     }

@@ -14,7 +14,7 @@
 # repository root and change it. That file is gitignored and shadows these
 # defaults entry by entry, so shared configs stay portable.
 #
-# `credential` names the environment variable the binding needs, so a missing
+# `credential` names the release variable the binding needs, so a missing
 # key is reported by name before a run starts rather than as a 401 during it.
 # Put the values in .env; never here.
 

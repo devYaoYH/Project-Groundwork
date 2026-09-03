@@ -1,1 +1,1 @@
-"""LLM Judge harness for coordination pattern discovery in negotiation traces."""
+"""LLM Judge harness for coordination pattern discovery in negotiation episodes."""

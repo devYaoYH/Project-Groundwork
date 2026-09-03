@@ -11,12 +11,12 @@ export function renderHeader(trace) {
   const h2 = document.createElement("h2"); h2.textContent = "Trace"; root.appendChild(h2);
 
   const dl = document.createElement("dl"); dl.className = "kv";
-  dl.append(...row("game_id", trace.game_id ?? "?"));
-  dl.append(...row("game_name", trace.config?.game_name ?? "?"));
+  dl.append(...row("episode_uid", trace.episode_uid ?? "?"));
+  dl.append(...row("environment_id", trace.config?.environment_id ?? "?"));
   dl.append(...row("experiment", trace.config?.experiment_name ?? "—"));
-  if (trace.environment?.id) {
-    dl.append(...row("environment", `${trace.environment.id}@${trace.environment.revision ?? "?"}`));
-    dl.append(...row("environment_sha256", trace.environment.content_sha256 ?? "—"));
+  if (trace.release?.id) {
+    dl.append(...row("release", `${trace.release.id}@${trace.release.release ?? "?"}`));
+    dl.append(...row("environment_sha256", trace.release.content_sha256 ?? "—"));
   }
   if (trace.episode?.id) {
     dl.append(...row("episode", trace.episode.id));
@@ -52,7 +52,7 @@ export function renderHeader(trace) {
     root.appendChild(dl2);
   }
 
-  // Communication stats, derived for older traces when metrics are missing.
+  // Communication stats, derived for older episodes when metrics are missing.
   const dmEvents = (trace.events ?? []).filter((e) => e.type === "dm_sent");
   if (dmEvents.length) {
     const lengths = dmEvents.map((e) => {

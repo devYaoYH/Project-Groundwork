@@ -30,20 +30,20 @@ def analyze(dataset: NegotiationDataset) -> dict:
     round_df = dataset.to_round_df()
 
     multi_round_ids = set(
-        round_df[round_df["num_game_rounds"] >= 2]["game_id"]
+        round_df[round_df["num_game_rounds"] >= 2]["episode_uid"]
     )
     stable_rounds = (
         round_df[
             (round_df["mode"] == "stable")
-            & (round_df["game_id"].isin(multi_round_ids))
+            & (round_df["episode_uid"].isin(multi_round_ids))
         ]
-        .sort_values(["game_id", "round_number"])
+        .sort_values(["episode_uid", "round_number"])
         .copy()
     )
 
     # Previous round overdraw flag
     stable_rounds["prev_overdrawn"] = (
-        stable_rounds.groupby("game_id")["overdrawn"].shift(1).fillna(False)
+        stable_rounds.groupby("episode_uid")["overdrawn"].shift(1).fillna(False)
     )
 
     # Extract per-resource allocation columns for L1 distance computation
@@ -59,7 +59,7 @@ def analyze(dataset: NegotiationDataset) -> dict:
     ]
 
     stable_rounds["alloc_change_l1"] = stable_rounds.groupby(
-        "game_id", group_keys=False
+        "episode_uid", group_keys=False
     ).apply(lambda grp: _compute_alloc_change_l1(grp, alloc_cols))
 
     post_r1 = stable_rounds[stable_rounds["round_number"] > 1].copy()
@@ -97,7 +97,7 @@ def analyze(dataset: NegotiationDataset) -> dict:
 
     # Repair latency
     repair_records = []
-    for gid, grp in stable_rounds.groupby("game_id"):
+    for gid, grp in stable_rounds.groupby("episode_uid"):
         grp = grp.sort_values("round_number").reset_index(drop=True)
         od_list = grp["overdrawn"].tolist()
         i = 0
@@ -107,7 +107,7 @@ def analyze(dataset: NegotiationDataset) -> dict:
                 while j < len(od_list) and od_list[j]:
                     j += 1
                 repair_records.append({
-                    "game_id": gid,
+                    "episode_uid": gid,
                     "overdraw_round": grp.loc[i, "round_number"],
                     "latency": j - i,
                     "recovered": j < len(od_list),

@@ -9,9 +9,9 @@ from calendar_game.ratings import (
 
 def test_legacy_score_margin_extractor_preserves_maximizing_order():
     trace = {
-        "game_id": "legacy-score-margin",
+        "episode_uid": "legacy-score-margin",
         "config": {
-            "game_name": "calendar",
+            "environment_id": "calendar",
             "num_agents": 2,
             "agents": [{"model": "model-a"}, {"model": "model-b"}],
         },
@@ -30,7 +30,7 @@ def test_legacy_score_margin_extractor_preserves_maximizing_order():
             ],
         },
         "events": [{
-            "type": "batch_applied",
+            "type": "cell_applied",
             "data": {
                 "agent_id": 0,
                 "actions": [{"type": "reschedule", "item_id": 1}],
@@ -47,9 +47,9 @@ def test_legacy_score_margin_extractor_preserves_maximizing_order():
 
 def test_score_margin_variant_counts_varied_errand_units_against_oracle():
     trace = {
-        "game_id": "g1",
+        "episode_uid": "g1",
         "config": {
-            "game_name": "calendar",
+            "environment_id": "calendar",
             "num_agents": 2,
             "task_path": "tasks/calbench_90_varied.jsonl",
             "task_id": "synthetic_varied",
@@ -74,7 +74,7 @@ def test_score_margin_variant_counts_varied_errand_units_against_oracle():
         },
         "events": [
             {
-                "type": "batch_applied",
+                "type": "cell_applied",
                 "data": {
                     "agent_id": 0,
                     "actions": [
@@ -108,9 +108,9 @@ def test_score_margin_variant_counts_varied_errand_units_against_oracle():
 
 def test_score_margin_variant_caps_uniform_excess_cost():
     trace = {
-        "game_id": "g2",
+        "episode_uid": "g2",
         "config": {
-            "game_name": "calendar",
+            "environment_id": "calendar",
             "num_agents": 2,
             "task_path": "tasks/calbench_90_uniform.jsonl",
             "task_id": "synthetic_uniform",
@@ -132,7 +132,7 @@ def test_score_margin_variant_caps_uniform_excess_cost():
         },
         "events": [
             {
-                "type": "batch_applied",
+                "type": "cell_applied",
                 "data": {
                     "agent_id": 0,
                     "actions": [
@@ -163,9 +163,9 @@ def test_score_margin_variant_caps_uniform_excess_cost():
 
 def test_rating_event_uses_explicit_rating_player_id():
     trace = {
-        "game_id": "game-1",
+        "episode_uid": "environment-1",
         "config": {
-            "game_name": "calendar",
+            "environment_id": "calendar",
             "num_agents": 2,
             "agents": [
                 {
@@ -197,9 +197,9 @@ def test_rating_event_uses_explicit_rating_player_id():
 
 def test_registered_adapter_uses_digest_bound_vps_artifact_without_task_file():
     trace = {
-        "game_id": "game-2",
+        "episode_uid": "environment-2",
         "config": {
-            "game_name": "calendar",
+            "environment_id": "calendar",
             "num_agents": 2,
             "agents": [{"model": "model-a"}, {"model": "model-b"}],
         },

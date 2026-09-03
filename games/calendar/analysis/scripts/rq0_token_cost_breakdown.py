@@ -1,4 +1,4 @@
-"""Report LLM token cost breakdowns for calendar traces.
+"""Report LLM token cost breakdowns for calendar episodes.
 
 This separates total prompt tokens into fresh input tokens and cached prompt
 hits. Reasoning tokens are reported separately and also included in output
@@ -93,7 +93,7 @@ def _row(path: Path) -> dict[str, Any]:
     return {
         "trace_path": str(path),
         "experiment_name": config.get("experiment_name") or config.get("name") or path.parent.name,
-        "game_id": trace.get("game_id") or path.stem,
+        "episode_uid": trace.get("episode_uid") or path.stem,
         "model_names": ",".join(
             str(agent.get("model") or agent.get("type"))
             for agent in config.get("agents", [])
@@ -108,18 +108,18 @@ def _row(path: Path) -> dict[str, Any]:
 def main() -> int:
     root = _calendar_root()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("traces", nargs="+", help="Trace JSON files, directories, or globs.")
+    parser.add_argument("episodes", nargs="+", help="Trace JSON files, directories, or globs.")
     parser.add_argument("--json", action="store_true", help="Emit JSON rows instead of TSV.")
     args = parser.parse_args()
 
-    rows = [_row(path) for path in _trace_paths(args.traces, root=root)]
+    rows = [_row(path) for path in _trace_paths(args.episodes, root=root)]
     if args.json:
         print(json.dumps(rows, indent=2, sort_keys=True))
         return 0
 
     columns = [
         "experiment_name",
-        "game_id",
+        "episode_uid",
         "llm_calls",
         "calls_with_token_usage",
         "fresh_prompt_tokens",

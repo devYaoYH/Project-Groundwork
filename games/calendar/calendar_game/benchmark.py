@@ -1,4 +1,4 @@
-"""CLI sweep for the calendar scheduling benchmark."""
+"""CLI benchmark study for the calendar scheduling environment."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def score(optimal_cost: int | None, realized_cost: int | None) -> dict[str, int 
     return {"correct": True, "gap": realized_cost - optimal_cost}
 
 
-def run_sweep(
+def run_benchmark(
     *,
     densities: list[float],
     pref_levels: list[int],
@@ -84,7 +84,7 @@ def _print_table(rows: list[dict]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the calendar benchmark sweep.")
+    parser = argparse.ArgumentParser(description="Run the calendar benchmark study.")
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--strategy", choices=["optimal", "greedy"], default="greedy")
     parser.add_argument("--densities", default="0.3,0.5,0.8")
@@ -93,7 +93,7 @@ def main() -> int:
     parser.add_argument("--num-meetings", type=int, default=1)
     args = parser.parse_args()
 
-    rows = run_sweep(
+    rows = run_benchmark(
         densities=[float(x) for x in args.densities.split(",")],
         pref_levels=[int(x) for x in args.pref_levels.split(",")],
         runs=args.runs,

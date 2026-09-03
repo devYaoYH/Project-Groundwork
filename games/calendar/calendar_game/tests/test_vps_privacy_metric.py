@@ -57,7 +57,7 @@ def test_vps_game_rows_keep_uniform_and_cost_modes_separate():
     pair_rows = [
         {
             "trace_path": "/tmp/trace.json",
-            "game_id": "g1",
+            "episode_uid": "g1",
             "target_is_participant": True,
             "observer_is_participant": True,
             "observations": 1,
@@ -67,7 +67,7 @@ def test_vps_game_rows_keep_uniform_and_cost_modes_separate():
         },
         {
             "trace_path": "/tmp/trace.json",
-            "game_id": "g1",
+            "episode_uid": "g1",
             "target_is_participant": True,
             "observer_is_participant": True,
             "observations": 1,

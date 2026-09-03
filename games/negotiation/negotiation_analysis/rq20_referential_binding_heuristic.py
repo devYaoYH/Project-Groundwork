@@ -165,7 +165,7 @@ def analyze_binding_failures(
             )
 
             records.append({
-                "game_id":            g.game_id,
+                "episode_uid":            g.episode_uid,
                 "round_number":       r.round_number,
                 "mode":               g.mode,
                 "mc_bucket":          g.metadata.get("mc_bucket"),
@@ -241,7 +241,7 @@ def write_markdown(df: pd.DataFrame, top_n: int, tail_turns: int, output_path: P
 
     for rank, (_, row) in enumerate(candidates.iterrows(), start=1):
         md_lines += [
-            f"## Example {rank} — Game `{row['game_id'][:12]}` · Round {row['round_number']}\n",
+            f"## Example {rank} — Environment `{row['episode_uid'][:12]}` · Round {row['round_number']}\n",
             f"**Mode:** {row['mode']}  |  **M/C bucket:** {row['mc_bucket']}  "
             f"|  **Models:** `{row['model_a']}` vs `{row['model_b']}`  \n",
             f"**Egregious score:** {row['egregious_score']:.2f}  "
@@ -299,12 +299,12 @@ if __name__ == "__main__":
         print(f"  + Agreement (stage 2+3): {len(df)}  ({len(df)/max(overdrawn,1):.1%} of overdrawn)")
 
         display_cols = [
-            "game_id", "round_number", "mode", "mc_bucket",
+            "episode_uid", "round_number", "mode", "mc_bucket",
             "model_a", "agreement_strength", "disconnect_score", "egregious_score", "overdraw_units",
         ]
-        print("\nTop candidates (truncated game_id):")
+        print("\nTop candidates (truncated episode_uid):")
         top = df[display_cols].head(args.top_n).copy()
-        top["game_id"] = top["game_id"].str[:10]
+        top["episode_uid"] = top["episode_uid"].str[:10]
         print(top.to_string(index=False))
 
         write_markdown(df, top_n=args.top_n, tail_turns=args.tail_turns, output_path=args.output)

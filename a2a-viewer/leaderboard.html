@@ -11,9 +11,9 @@
 </head>
 <body>
 <main>
-  <p><a href="/">← All traces</a></p>
+  <p><a href="/">← All episodes</a></p>
   <h1>Local leaderboard</h1>
-  <p>Calendar OpenSkill ratings rebuilt from the traces in this SQLite database. Other games need to publish a rating-event adapter before they can join this board.</p>
+  <p>Calendar OpenSkill ratings rebuilt from the episodes in this SQLite database. Other games need to publish a rating-event adapter before they can join this board.</p>
   <p id="status">Loading…</p>
   <table><thead><tr><th>Rank</th><th>Player</th><th>Games</th><th>MMR</th></tr></thead><tbody id="rows"></tbody></table>
 </main>
@@ -23,8 +23,8 @@
   try {
     const data = await (await fetch('/api/leaderboards/calendar')).json();
     const board = data.leaderboard || [];
-    status.textContent = `${data.metadata?.rating_event_count ?? 0} rated runs from ${data.metadata?.trace_count ?? 0} Calendar traces`;
-    rows.innerHTML = board.map((row, i) => `<tr><td>${i + 1}</td><td>${esc(row.player_id)}</td><td>${row.games_played}</td><td>${Number(row.mmr).toFixed(3)}</td></tr>`).join('') || '<tr><td colspan="4">No rateable Calendar traces yet.</td></tr>';
+    status.textContent = `${data.metadata?.rating_event_count ?? 0} rated runs from ${data.metadata?.episode_count ?? 0} Calendar episodes`;
+    rows.innerHTML = board.map((row, i) => `<tr><td>${i + 1}</td><td>${esc(row.player_id)}</td><td>${row.games_played}</td><td>${Number(row.mmr).toFixed(3)}</td></tr>`).join('') || '<tr><td colspan="4">No rateable Calendar episodes yet.</td></tr>';
   } catch (error) { status.textContent = `Could not load leaderboard: ${error.message}`; }
 })();
 function esc(value) { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

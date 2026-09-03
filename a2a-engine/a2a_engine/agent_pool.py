@@ -37,7 +37,7 @@ class AgentPoolEntry(BaseModel):
     api_base: str | None = None
     # Named rather than inferred from the model string: inference is what makes
     # a missing key surface as an opaque 401 instead of a named variable.
-    # ``None`` means the binding needs no environment key (ADC, or a scripted
+    # ``None`` means the binding needs no release key (ADC, or a scripted
     # agent that calls nothing).
     credential: str | None = None
     temperature: float | None = None
@@ -45,7 +45,7 @@ class AgentPoolEntry(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
     def as_agent_config(self) -> dict[str, Any]:
-        """The agent dict a game receives, with pool-only fields dropped."""
+        """The agent dict a environment receives, with pool-only fields dropped."""
         fields = self.model_dump(
             exclude={"description", "credential", "config"}, exclude_none=True,
         )
@@ -68,7 +68,7 @@ class AgentPool(BaseModel):
             ) from None
 
     def missing_credentials(self, names: list[str]) -> list[str]:
-        """Environment variables these bindings need that are not set."""
+        """Release variables these bindings need that are not set."""
         missing = {
             entry.credential
             for entry in (self.entry(name) for name in names)
@@ -92,7 +92,7 @@ def find_pool_files(start: Path) -> list[Path]:
     """Locate the shared pool and any local override, nearest repository first.
 
     Walks up from an experiment file looking for ``experiments/agents.yaml``,
-    so a game's configs resolve against the workspace that contains them.
+    so a environment's configs resolve against the workspace that contains them.
     """
     override = os.environ.get(POOL_ENV_VAR)
     if override:

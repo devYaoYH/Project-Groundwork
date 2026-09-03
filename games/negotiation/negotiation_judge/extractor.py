@@ -1,7 +1,7 @@
 """Extract judge contexts from NegotiationDataset.
 
-Supports both per-round contexts (legacy) and per-game contexts (current).
-The current pipeline uses per-game: one LLM call per game sees all rounds
+Supports both per-round contexts (legacy) and per-environment contexts (current).
+The current pipeline uses per-environment: one LLM call per environment sees all rounds
 so the judge can identify cross-round dynamics (repair, learning, regression).
 """
 
@@ -74,7 +74,7 @@ def _safe_efficiency(rnd: NegotiationRound) -> float:
 
 
 def _extract_round_data(rnd: NegotiationRound) -> RoundData:
-    """Build a RoundData object (for game-level context)."""
+    """Build a RoundData object (for environment-level context)."""
     return RoundData(
         round_number=rnd.round_number,
         round_outcome=_derive_round_outcome(rnd),
@@ -89,15 +89,15 @@ def _extract_round_data(rnd: NegotiationRound) -> RoundData:
     )
 
 
-def extract_round_context(game: NegotiationGame, rnd: NegotiationRound) -> JudgeRoundContext:
-    """Build a JudgeRoundContext from a single game round (legacy per-round flow)."""
+def extract_round_context(environment: NegotiationGame, rnd: NegotiationRound) -> JudgeRoundContext:
+    """Build a JudgeRoundContext from a single environment round (legacy per-round flow)."""
     oracle = rnd.oracle_stats or {}
     return JudgeRoundContext(
-        game_id=game.game_id,
+        episode_uid=environment.episode_uid,
         round_number=rnd.round_number,
-        model_a=game.model_a,
-        model_b=game.model_b,
-        mode=game.mode,
+        model_a=environment.model_a,
+        model_b=environment.model_b,
+        mode=environment.mode,
         mc_ratio=oracle.get("mc_ratio"),
         oracle_optimum=rnd.collab_max or None,
         optimal_allocation=oracle.get("collab_detail"),
@@ -113,30 +113,30 @@ def extract_round_context(game: NegotiationGame, rnd: NegotiationRound) -> Judge
     )
 
 
-def _derive_shifting_agent(game: NegotiationGame) -> Optional[str]:
+def _derive_shifting_agent(environment: NegotiationGame) -> Optional[str]:
     """Return 'agent_a', 'agent_b', or None for stable games."""
-    if not game.is_shifting:
+    if not environment.is_shifting:
         return None
-    if game.agent_a_shifted:
+    if environment.agent_a_shifted:
         return "agent_a"
-    if game.agent_b_shifted:
+    if environment.agent_b_shifted:
         return "agent_b"
     return None
 
 
-def extract_game_context(game: NegotiationGame) -> JudgeGameContext:
-    """Build a JudgeGameContext from a whole game (all rounds)."""
-    # Use game-level oracle for non-rotating games; per-round oracle is still
+def extract_game_context(environment: NegotiationGame) -> JudgeGameContext:
+    """Build a JudgeGameContext from a whole environment (all rounds)."""
+    # Use environment-level oracle for non-rotating games; per-round oracle is still
     # available in NegotiationRound.oracle_stats if needed. For the prompt
-    # header we just show the game-level summary.
-    oracle = game.oracle_stats or {}
-    sorted_rounds = sorted(game.rounds, key=lambda r: r.round_number)
+    # header we just show the environment-level summary.
+    oracle = environment.oracle_stats or {}
+    sorted_rounds = sorted(environment.rounds, key=lambda r: r.round_number)
     return JudgeGameContext(
-        game_id=game.game_id,
-        model_a=game.model_a,
-        model_b=game.model_b,
-        mode=game.mode,
-        shifting_agent=_derive_shifting_agent(game),
+        episode_uid=environment.episode_uid,
+        model_a=environment.model_a,
+        model_b=environment.model_b,
+        mode=environment.mode,
+        shifting_agent=_derive_shifting_agent(environment),
         mc_ratio=oracle.get("mc_ratio"),
         oracle_optimum=oracle.get("collab_max"),
         optimal_allocation=oracle.get("collab_detail"),
@@ -148,25 +148,25 @@ def extract_all_contexts(
     dataset: NegotiationDataset,
     min_schema_version: int = 5,
     skip_baselines: bool = True,
-    game_ids: Optional[set[str]] = None,
+    episode_uids: Optional[set[str]] = None,
 ) -> list[JudgeRoundContext]:
     """Extract per-round contexts (legacy). Returns one entry per round."""
     contexts = []
     skipped_version = 0
     skipped_baseline = 0
 
-    for game in dataset.games:
-        if game_ids and game.game_id not in game_ids:
+    for environment in dataset.games:
+        if episode_uids and environment.episode_uid not in episode_uids:
             continue
-        if game.schema_version < min_schema_version:
+        if environment.schema_version < min_schema_version:
             skipped_version += 1
             continue
-        if skip_baselines and game.is_baseline:
+        if skip_baselines and environment.is_baseline:
             skipped_baseline += 1
             continue
 
-        for rnd in game.rounds:
-            contexts.append(extract_round_context(game, rnd))
+        for rnd in environment.rounds:
+            contexts.append(extract_round_context(environment, rnd))
 
     if skipped_version:
         log.warning("Skipped %d games with schema_version < %d", skipped_version, min_schema_version)
@@ -182,28 +182,28 @@ def extract_all_game_contexts(
     dataset: NegotiationDataset,
     min_schema_version: int = 5,
     skip_baselines: bool = True,
-    game_ids: Optional[set[str]] = None,
+    episode_uids: Optional[set[str]] = None,
 ) -> list[JudgeGameContext]:
-    """Extract per-game contexts. Returns one entry per game (with all rounds)."""
+    """Extract per-environment contexts. Returns one entry per environment (with all rounds)."""
     contexts = []
     skipped_version = 0
     skipped_baseline = 0
     skipped_empty = 0
 
-    for game in dataset.games:
-        if game_ids and game.game_id not in game_ids:
+    for environment in dataset.games:
+        if episode_uids and environment.episode_uid not in episode_uids:
             continue
-        if game.schema_version < min_schema_version:
+        if environment.schema_version < min_schema_version:
             skipped_version += 1
             continue
-        if skip_baselines and game.is_baseline:
+        if skip_baselines and environment.is_baseline:
             skipped_baseline += 1
             continue
-        if not game.rounds:
+        if not environment.rounds:
             skipped_empty += 1
             continue
 
-        contexts.append(extract_game_context(game))
+        contexts.append(extract_game_context(environment))
 
     if skipped_version:
         log.warning("Skipped %d games with schema_version < %d", skipped_version, min_schema_version)
@@ -213,5 +213,5 @@ def extract_all_game_contexts(
         log.warning("Skipped %d games with no rounds", skipped_empty)
 
     total_rounds = sum(len(c.rounds) for c in contexts)
-    log.info("Extracted %d game contexts (%d total rounds)", len(contexts), total_rounds)
+    log.info("Extracted %d environment contexts (%d total rounds)", len(contexts), total_rounds)
     return contexts

@@ -1,4 +1,4 @@
-"""Wrapper: imports word_guess (registers the game), then defers to expt-runner CLI.
+"""Wrapper: imports word_guess (registers the environment), then defers to expt-runner CLI.
 
 Usage:
 

@@ -15,7 +15,7 @@
     border-bottom: 1px solid var(--border); flex: none;
   }
   .topbar a { font-size: 13px; white-space: nowrap; }
-  .topbar .game {
+  .topbar .environment {
     font: 600 11px/1 ui-sans-serif, system-ui; letter-spacing: .08em;
     text-transform: uppercase; color: #fff; background: var(--accent);
     padding: 4px 8px; border-radius: 3px;
@@ -82,8 +82,8 @@
 
 <div class="topbar">
   <a href="control.html">← Control plane</a>
-  <span class="game" id="game">—</span>
-  <input id="stream" placeholder="a2a:rollout:…:episode:…" spellcheck="false">
+  <span class="environment" id="environment">—</span>
+  <input id="stream" placeholder="a2a:launch:…:episode:…" spellcheck="false">
   <button class="primary" id="load">Load</button>
 </div>
 
@@ -104,7 +104,7 @@
        aria-label="Collapse event panel" title="Collapse event panel">‹</div>
 
   <div class="stage" id="stage">
-    <div class="empty" id="empty">Load a stream to replay it in this game's viewer.</div>
+    <div class="empty" id="empty">Load a stream to replay it in this environment's viewer.</div>
   </div>
 </div>
 

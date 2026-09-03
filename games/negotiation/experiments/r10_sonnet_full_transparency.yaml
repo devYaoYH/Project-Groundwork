@@ -5,9 +5,9 @@ description: >
   original, no-talk, and maximize-joint self-play grids:
   stable/shifting x fixed/rotate x M/C ratios x 10 games = 120 games.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: sonnet_stable_fixed_transparency_mc05
   count: 10
   config:

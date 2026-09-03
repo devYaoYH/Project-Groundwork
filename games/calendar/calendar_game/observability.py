@@ -2,7 +2,7 @@
 
 Calendar predates the engine's smaller ``AgentInterface`` and has a richer
 sync ``BaseClient`` contract.  This adapter keeps that contract intact while
-making every client lifecycle transition a child of the engine-owned game span.
+making every client lifecycle transition a child of the engine-owned environment span.
 It deliberately records only stable operational dimensions, never prompts,
 messages, calendars, or model output.
 """
@@ -36,7 +36,7 @@ class InstrumentedCalendarClient(BaseClient):
     def _call(self, operation: str, callback: Callable[[], T], **attributes: Any) -> T:
         tracer = get_tracer()
         with tracer.start_as_current_span(f"calendar.client.{operation}") as span:
-            span.set_attribute("a2a.game.name", "calendar")
+            span.set_attribute("a2a.environment.name", "calendar")
             span.set_attribute("a2a.agent.id", self.agent_id)
             span.set_attribute("a2a.client.type", type(self.delegate).__name__)
             span.set_attribute("a2a.operation.name", operation)
@@ -53,7 +53,7 @@ class InstrumentedCalendarClient(BaseClient):
         return self._call(
             "register",
             lambda: self.delegate.register(agent_id, game_config),
-            **{"a2a.game.num_agents": game_config.num_agents},
+            **{"a2a.environment.num_agents": game_config.num_agents},
         )
 
     def start_round(self, meeting: dict, calendar_render: str, round_num: int) -> None:

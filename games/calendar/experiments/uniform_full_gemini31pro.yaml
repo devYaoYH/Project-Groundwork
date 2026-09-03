@@ -1,14 +1,14 @@
 name: uniform_full_gemini31pro
 description: Gemini 3.1 Pro preview on all uniform_full calendar benchmark tasks.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_slots: 16
   max_turns_per_round: 15
   dm_cap: 1000000
   decision_retries: 3
   enable_fallback: false
   fallback_max_depth: 3
-batches:
+cells:
 - label: b001_easy_2a_2p_d0p6_c1_1
   count: 1
   config:

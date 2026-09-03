@@ -1,4 +1,4 @@
-const game = document.body.dataset.game;
+const environment = document.body.dataset.environment;
 const $ = selector => document.querySelector(selector);
 let entries = [];
 let cursor = 0;
@@ -30,7 +30,7 @@ async function load() {
   const payload = await response.json();
   if (!payload.available) throw new Error(payload.error || "Redis stream is unavailable");
   entries = payload.events || [];
-  $("#status").textContent = `${game}: loaded ${entries.length} event(s) from Redis stream.`;
+  $("#status").textContent = `${environment}: loaded ${entries.length} event(s) from Redis stream.`;
   render();
 }
 

@@ -11,8 +11,8 @@ calls out concurrently.
         fn=judge_one,
         items=contexts,
         max_workers=args.max_parallelism,
-        on_result=lambda ctx, r: log.info("done %s", ctx.game_id),
-        on_error=lambda ctx, e: log.error("failed %s: %s", ctx.game_id, e),
+        on_result=lambda ctx, r: log.info("done %s", ctx.episode_uid),
+        on_error=lambda ctx, e: log.error("failed %s: %s", ctx.episode_uid, e),
     )
 
 Returns

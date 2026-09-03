@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 
 let activeStream = null;
-let followedRollout = null;
+let followedLaunch = null;
 let selectedEnvironment = null;          // filters configs and experiments
 const configsByRelease = new Map();      // release id -> checked-in config paths
 const releasesById = new Map();
@@ -55,7 +55,7 @@ function renderEnvironments(releases) {
     const selected = selectedEnvironment === release.id;
     return `<div class="env" role="button" tabindex="0" data-env="${esc(release.id)}"
       aria-pressed="${selected}">
-      <span><span class="name">${esc(release.game_name)}</span><br>
+      <span><span class="name">${esc(release.environment_id)}</span><br>
       <code>${esc(release.package || "unpackaged")}</code></span>
       <span class="count">${count} config${count === 1 ? "" : "s"}</span>
     </div>`;
@@ -63,7 +63,7 @@ function renderEnvironments(releases) {
 
   document.querySelectorAll("[data-env]").forEach(node => {
     const toggle = () => {
-      // Clicking the selected environment clears the filter rather than
+      // Clicking the selected release clears the filter rather than
       // stranding the reader with no way back to everything.
       selectedEnvironment = selectedEnvironment === node.dataset.env ? null : node.dataset.env;
       refresh().catch(error => { $("#message").textContent = error.message; });
@@ -77,10 +77,10 @@ function renderEnvironments(releases) {
 
 function renderFilterNote(element, total, shown) {
   if (!selectedEnvironment) { element.hidden = true; return; }
-  const game = releasesById.get(selectedEnvironment)?.game_name || selectedEnvironment;
+  const environment = releasesById.get(selectedEnvironment)?.environment_id || selectedEnvironment;
   element.hidden = false;
   element.innerHTML =
-    `<span class="muted">Showing ${shown} of ${total} for <strong>${esc(game)}</strong>.</span>
+    `<span class="muted">Showing ${shown} of ${total} for <strong>${esc(environment)}</strong>.</span>
      <button class="secondary" data-clear-filter>Show all</button>`;
   element.querySelector("[data-clear-filter]").onclick = () => {
     selectedEnvironment = null;
@@ -159,13 +159,13 @@ function renderAgentSummary(payload) {
       ? `<code>${esc(agent.credential_env_var)}</code> ${agent.credential_present
           ? `<span class="ready yes">set</span>` : `<span class="ready no">missing</span>`}`
       : `<span class="muted">${agent.model ? "no env key" : "no model"}</span>`;
-    return `<tr><td>${esc(agent.batch_label)}</td><td>${esc(agent.index)}</td>
+    return `<tr><td>${esc(agent.cell_id)}</td><td>${esc(agent.index)}</td>
       <td>${esc(agent.type)}</td><td>${esc(agent.model ?? "—")}</td>
       <td>${esc(agent.provider ?? "—")}</td><td>${credential}</td></tr>`;
   }).join("");
   target.innerHTML = `${readinessBadge(payload)}
     <table class="agents"><thead><tr>
-      <th>Batch</th><th>#</th><th>Type</th><th>Model</th><th>Provider</th><th>Credential</th>
+      <th>Cell</th><th>#</th><th>Type</th><th>Model</th><th>Provider</th><th>Credential</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -204,7 +204,7 @@ async function renderLaunchReadiness(experiments) {
   if (blocked.length) {
     const missing = [...new Set(blocked.flatMap(([, p]) => p.missing_credentials))];
     target.innerHTML = `<p class="banner no"><strong>${blocked.length}</strong> of these will fail live:
-      ${esc(missing.join(", "))} not set in the runner environment.</p>`;
+      ${esc(missing.join(", "))} not set in the runner release.</p>`;
   } else if (unknown.length) {
     target.innerHTML = `<p class="banner unknown">${unknown.length} configuration${
       unknown.length === 1 ? " declares" : "s declare"} no agents, so their models cannot be
@@ -217,8 +217,8 @@ async function renderLaunchReadiness(experiments) {
 // ---------------------------------------------------------------- refresh
 
 async function refresh() {
-  const [releasePayload, experimentPayload, rolloutPayload] = await Promise.all([
-    api("/api/releases"), api("/api/experiments"), api("/api/rollouts"),
+  const [releasePayload, experimentPayload, launchPayload] = await Promise.all([
+    api("/api/releases"), api("/api/experiments"), api("/api/launches"),
   ]);
 
   const releases = releasePayload.releases;
@@ -235,7 +235,7 @@ async function refresh() {
 
   const previous = $("#release").value;
   $("#release").innerHTML = releases
-    .map(release => `<option value="${esc(release.id)}">${esc(release.game_name)} · ${esc(release.source_ref)}</option>`)
+    .map(release => `<option value="${esc(release.id)}">${esc(release.environment_id)} · ${esc(release.source_ref)}</option>`)
     .join("");
   const wanted = selectedEnvironment || previous;
   if (wanted && configsByRelease.has(wanted)) $("#release").value = wanted;
@@ -251,61 +251,61 @@ async function refresh() {
   renderFilterNote($("#launch-filter"), experiments.length, visible.length);
 
   $("#launchable").innerHTML = visible.map(experiment =>
-    `<div class="row"><strong>${esc(experiment.name)}</strong> · ${esc(experiment.game_name)}<br>
+    `<div class="row"><strong>${esc(experiment.name)}</strong> · ${esc(experiment.environment_id)}<br>
      <code>${esc(basename(experiment.yaml_path))}</code><br>
-     <button data-launch="${esc(experiment.id)}" data-name="${esc(experiment.name)}">Launch smoke rollout</button></div>`
-  ).join("") || (selectedEnvironment ? "No experiments for this environment." : "Register an experiment first.");
+     <button data-start-launch="${esc(experiment.id)}" data-name="${esc(experiment.name)}">Launch smoke launch</button></div>`
+  ).join("") || (selectedEnvironment ? "No experiments for this release." : "Register an experiment first.");
 
-  $("#rollouts").innerHTML = rolloutPayload.rollouts.map(rollout => {
-    const experiment = experimentsById.get(rollout.experiment_id);
+  $("#launches").innerHTML = launchPayload.launches.map(launch => {
+    const experiment = experimentsById.get(launch.experiment_id);
     const label = experiment
-      ? `<strong>${esc(experiment.name)}</strong> · ${esc(experiment.game_name)}`
+      ? `<strong>${esc(experiment.name)}</strong> · ${esc(experiment.environment_id)}`
       : `<span class="muted">experiment removed</span>`;
     // Cancelling only means something while work is outstanding.
-    const cancellable = rollout.status === "QUEUED" || rollout.status === "RUNNING";
+    const cancellable = launch.status === "QUEUED" || launch.status === "RUNNING";
     return `<div class="row">
-      <span class="status ${esc(rollout.status)}">${esc(rollout.status)}</span> ${label}<br>
-      <code>${esc(experiment ? basename(experiment.yaml_path) : rollout.experiment_id)}</code><br>
-      <button class="secondary" data-rollout="${esc(rollout.id)}">Details</button>
-      <button class="secondary" data-follow="${esc(rollout.id)}">Episodes</button>
-      ${cancellable ? `<button class="secondary" data-cancel="${esc(rollout.id)}">Cancel</button>` : ""}
+      <span class="status ${esc(launch.status)}">${esc(launch.status)}</span> ${label}<br>
+      <code>${esc(experiment ? basename(experiment.yaml_path) : launch.experiment_id)}</code><br>
+      <button class="secondary" data-launch="${esc(launch.id)}">Details</button>
+      <button class="secondary" data-follow="${esc(launch.id)}">Episodes</button>
+      ${cancellable ? `<button class="secondary" data-cancel="${esc(launch.id)}">Cancel</button>` : ""}
     </div>`;
-  }).join("") || "No rollouts yet.";
+  }).join("") || "No launches yet.";
 
-  document.querySelectorAll("[data-launch]").forEach(button =>
-    button.onclick = () => launch(button.dataset.launch, button.dataset.name));
+  document.querySelectorAll("[data-start-launch]").forEach(button =>
+    button.onclick = () => launch(button.dataset.startLaunch, button.dataset.name));
   document.querySelectorAll("[data-follow]").forEach(button =>
     button.onclick = () => follow(button.dataset.follow));
   document.querySelectorAll("[data-cancel]").forEach(button =>
     button.onclick = () => cancel(button.dataset.cancel));
   document.querySelectorAll("[data-experiment]").forEach(button =>
     button.onclick = () => showExperimentDetails(button.dataset.experiment));
-  document.querySelectorAll("[data-rollout]").forEach(button =>
-    button.onclick = () => showRolloutDetails(button.dataset.rollout));
+  document.querySelectorAll("[data-launch]").forEach(button =>
+    button.onclick = () => showLaunchDetails(button.dataset.launch));
   renderRunModeNote();
   visibleExperiments = visible;
   renderLaunchReadiness(visible).catch(() => {});
 
   // An episode list already on screen must not keep showing a finished
-  // rollout's earlier state.
-  if (!followedRollout && rolloutPayload.rollouts.length) {
-    followedRollout = rolloutPayload.rollouts[0].id;
+  // launch's earlier state.
+  if (!followedLaunch && launchPayload.launches.length) {
+    followedLaunch = launchPayload.launches[0].id;
   }
-  if (followedRollout) renderAttempts(followedRollout).catch(() => {});
+  if (followedLaunch) renderAttempts(followedLaunch).catch(() => {});
 
-  schedulePoll(rolloutPayload.rollouts);
+  schedulePoll(launchPayload.launches);
 }
 
-// Rollout state advances in the runner, not the browser. Without a poll the
+// Launch state advances in the runner, not the browser. Without a poll the
 // list only moves when something else happens to trigger a redraw, so a
-// finished rollout can sit there reading RUNNING indefinitely.
+// finished launch can sit there reading RUNNING indefinitely.
 const POLL_INTERVAL_MS = 3000;
 let pollTimer = null;
 
-function schedulePoll(rollouts) {
-  const outstanding = rollouts.some(
-    rollout => rollout.status === "QUEUED" || rollout.status === "RUNNING"
-      || rollout.status === "CANCELLING");
+function schedulePoll(launches) {
+  const outstanding = launches.some(
+    launch => launch.status === "QUEUED" || launch.status === "RUNNING"
+      || launch.status === "CANCELLING");
   clearTimeout(pollTimer);
   pollTimer = null;
   if (outstanding) {
@@ -319,8 +319,8 @@ async function showExperimentDetails(experimentId) {
   const experiment = experimentsById.get(experimentId);
   if (!experiment) return;
   showDetails(experiment.name, [
-    ["Game", esc(experiment.game_name)],
-    ["Environment", `<code>${esc(experiment.release_id)}</code>`],
+    ["Environment", esc(experiment.environment_id)],
+    ["Release", `<code>${esc(experiment.release_id)}</code>`],
     ["Configuration", `<code>${esc(experiment.yaml_path)}</code>`],
     ["Config sha256", `<code>${esc(experiment.config_sha256)}</code>`],
     ["Registered", esc(experiment.created_at)],
@@ -334,27 +334,27 @@ async function showExperimentDetails(experimentId) {
   }
 }
 
-async function showRolloutDetails(rolloutId) {
-  const detail = await api(`/api/rollouts/${encodeURIComponent(rolloutId)}`);
-  const rollout = detail.rollout;
-  const experiment = experimentsById.get(rollout.experiment_id);
-  const counts = detail.episode_attempts.reduce((totals, attempt) => {
+async function showLaunchDetails(launchId) {
+  const detail = await api(`/api/launches/${encodeURIComponent(launchId)}`);
+  const launch = detail.launch;
+  const experiment = experimentsById.get(launch.experiment_id);
+  const counts = detail.attempts.reduce((totals, attempt) => {
     totals[attempt.status] = (totals[attempt.status] || 0) + 1;
     return totals;
   }, {});
 
-  showDetails(experiment ? experiment.name : "Rollout", [
-    ["Status", `<span class="status ${esc(rollout.status)}">${esc(rollout.status)}</span>`],
-    ["Game", esc(experiment?.game_name ?? "—")],
+  showDetails(experiment ? experiment.name : "Launch", [
+    ["Status", `<span class="status ${esc(launch.status)}">${esc(launch.status)}</span>`],
+    ["Environment", esc(experiment?.environment_id ?? "—")],
     ["Configuration", `<code>${esc(experiment?.yaml_path ?? "—")}</code>`],
-    ["Rollout id", `<code>${esc(rollout.id)}</code>`],
+    ["Launch id", `<code>${esc(launch.id)}</code>`],
     ["Episodes", Object.entries(counts).map(([status, count]) =>
       `<span class="status ${esc(status)}">${esc(status)} ${count}</span>`).join(" · ") || "—"],
-    ["Max parallelism", esc(rollout.max_parallelism)],
-    ["Trace database", `<code>${esc(rollout.trace_database)}</code>`],
-    ["Started", esc(rollout.started_at ?? "—")],
-    ["Ended", esc(rollout.ended_at ?? "—")],
-    ...(rollout.error ? [["Error", esc(rollout.error)]] : []),
+    ["Max parallelism", esc(launch.max_parallelism)],
+    ["Trace database", `<code>${esc(launch.trace_database)}</code>`],
+    ["Started", esc(launch.started_at ?? "—")],
+    ["Ended", esc(launch.ended_at ?? "—")],
+    ...(launch.error ? [["Error", esc(launch.error)]] : []),
   ]);
 }
 
@@ -372,12 +372,12 @@ async function launch(experimentId, experimentName) {
     "incur cost. Smoke mode runs the same wiring for free."
   )) return;
   try {
-    const rollout = await api("/api/rollouts", {method: "POST", body: JSON.stringify({
+    const launch = await api("/api/launches", {method: "POST", body: JSON.stringify({
       experiment_id: experimentId, max_parallelism: 1, smoke_test: !live,
     })});
-    $("#message").textContent = `Launched ${live ? "live" : "smoke"} rollout ${rollout.id}`;
+    $("#message").textContent = `Launched ${live ? "live" : "smoke"} launch ${launch.id}`;
     await refresh();
-    follow(rollout.id);
+    follow(launch.id);
   } catch (error) { $("#message").textContent = error.message; }
 }
 
@@ -388,25 +388,25 @@ function renderRunModeNote() {
   note.textContent = live
     ? "Live runs need provider keys in the repo-root .env before docker compose up."
     : "";
-  document.querySelectorAll("[data-launch]").forEach(button => {
-    button.textContent = live ? "Launch live rollout" : "Launch smoke rollout";
+  document.querySelectorAll("[data-start-launch]").forEach(button => {
+    button.textContent = live ? "Launch live launch" : "Launch smoke launch";
   });
 }
 
-async function cancel(rolloutId) {
-  try { await api(`/api/rollouts/${encodeURIComponent(rolloutId)}/cancel`, {method:"POST", body:"{}"}); await refresh(); }
+async function cancel(launchId) {
+  try { await api(`/api/launches/${encodeURIComponent(launchId)}/cancel`, {method:"POST", body:"{}"}); await refresh(); }
   catch (error) { $("#message").textContent = error.message; }
 }
 
 // ---------------------------------------------------------------- following
 
-function follow(rolloutId) {
+function follow(launchId) {
   activeStream?.close();
-  followedRollout = rolloutId;
+  followedLaunch = launchId;
   $("#events").textContent = "";
-  selectTab("tab-rollouts");
-  renderAttempts(rolloutId).catch(() => {});
-  activeStream = new EventSource(`/api/rollouts/${encodeURIComponent(rolloutId)}/events`);
+  selectTab("tab-launches");
+  renderAttempts(launchId).catch(() => {});
+  activeStream = new EventSource(`/api/launches/${encodeURIComponent(launchId)}/events`);
   // The server sends unnamed frames carrying their kind in the payload, so no
   // client-side whitelist can silently swallow a newly added event kind.
   activeStream.onmessage = event => append(event.data);
@@ -428,28 +428,28 @@ function append(line) {
   } catch { /* keepalives and any non-JSON frame render verbatim */ }
   output.textContent += kind && kind !== "runner.log" ? `${kind}  ${detail}\n` : `${detail}\n`;
   output.scrollTop = output.scrollHeight;
-  if (kind.startsWith("episode.") || kind.startsWith("rollout.")) {
-    renderAttempts(followedRollout).catch(() => {});
-    if (kind === "rollout.completed" || kind === "rollout.failed" || kind === "rollout.cancelled") {
+  if (kind.startsWith("episode.") || kind.startsWith("launch.")) {
+    renderAttempts(followedLaunch).catch(() => {});
+    if (kind === "launch.completed" || kind === "launch.failed" || kind === "launch.cancelled") {
       refresh().catch(() => {});
     }
   }
 }
 
-// A rollout is only useful once a researcher can reach what it produced: the
+// A launch is only useful once a researcher can reach what it produced: the
 // persisted trace and the replayable event stream.
-async function renderAttempts(rolloutId) {
-  if (!rolloutId) return;
-  const detail = await api(`/api/rollouts/${encodeURIComponent(rolloutId)}`);
-  $("#attempts").innerHTML = detail.episode_attempts.map(attempt => {
+async function renderAttempts(launchId) {
+  if (!launchId) return;
+  const detail = await api(`/api/launches/${encodeURIComponent(launchId)}`);
+  $("#attempts").innerHTML = detail.attempts.map(attempt => {
     const stream = encodeURIComponent(attempt.redis_stream);
     const running = attempt.status === "RUNNING";
     const replay = `<a href="/replay.html?stream=${esc(stream)}${running ? "&follow=1" : ""}">`
       + `${running ? "Watch live" : "Replay"}</a>`;
-    const gameId = attempt.trace_uri ? attempt.trace_uri.split("#")[1] : null;
+    const gameId = attempt.episode_uri ? attempt.episode_uri.split("#")[1] : null;
     const trace = gameId
       ? `<a href="/trace.html?trace=${esc(encodeURIComponent(gameId))}">Open trace</a>
-         <br><code>${esc(attempt.trace_uri)}</code>`
+         <br><code>${esc(attempt.episode_uri)}</code>`
       : `<span class="muted">no trace recorded</span>`;
     return `<div class="row"><span class="status ${esc(attempt.status)}">${esc(attempt.status)}</span>
       <strong>${esc(attempt.episode_id)}</strong><br>${trace}

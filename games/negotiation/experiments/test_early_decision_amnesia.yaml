@@ -13,10 +13,10 @@ description: >
     - balance_turn_order: false — keep agent assignment fixed for reproducibility
 
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
 
-batches:
+cells:
   - label: early_decision_amnesia_competitive
     count: 2
     config:

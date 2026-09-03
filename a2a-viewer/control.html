@@ -31,7 +31,7 @@
     .tabs button[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
     [role="tabpanel"][hidden] { display:none; }
 
-    /* An environment row is a filter control, so it has to look like one. */
+    /* An release row is a filter control, so it has to look like one. */
     .env { border-top:1px solid var(--border); padding:10px 0; display:flex; gap:10px; align-items:baseline; cursor:pointer; }
     .env:first-child { border-top:0; }
     .env:hover { background:var(--bg); }
@@ -91,13 +91,13 @@
 <main class="page">
   <p><a href="/">← Trace viewer</a></p>
   <h1>Local experiment control plane</h1>
-  <p class="muted">Choose an installed environment and a checked-in experiment configuration. The browser never uploads code or builds an image.</p>
+  <p class="muted">Choose an installed release and a checked-in experiment configuration. The browser never uploads code or builds an image.</p>
   <p id="message" class="muted"></p>
 
   <div class="tabs" role="tablist">
     <button role="tab" id="tab-configure" aria-controls="panel-configure" aria-selected="true">Environments &amp; configs</button>
     <button role="tab" id="tab-launch" aria-controls="panel-launch" aria-selected="false">Launch &amp; live</button>
-    <button role="tab" id="tab-rollouts" aria-controls="panel-rollouts" aria-selected="false">Rollouts</button>
+    <button role="tab" id="tab-launches" aria-controls="panel-launches" aria-selected="false">Launchs</button>
   </div>
 
   <section role="tabpanel" id="panel-configure" aria-labelledby="tab-configure">
@@ -117,7 +117,7 @@
             One entry per seat, in order. For
             <code>games/buyer-seller/experiments/example.yaml</code>:</p>
 <pre>defaults:
-  game_name: buyer_seller
+  environment_id: buyer_seller
   num_agents: 2
   agents:                      <span class="del"># delete this block…</span>
     - {type: llm, model: gpt-4o-mini}
@@ -157,7 +157,7 @@ agents:
       <section class="panel">
         <h2>Register experiment</h2>
         <form id="experiment-form">
-          <label for="release">Environment</label><select id="release" required></select>
+          <label for="release">Release</label><select id="release" required></select>
           <label for="yaml-path">Experiment configuration</label>
           <select id="yaml-path" required></select>
           <label for="experiment-name">Display name (optional)</label><input id="experiment-name">
@@ -178,7 +178,7 @@ agents:
         <fieldset class="runmode">
           <legend>Run mode</legend>
           <label class="radio"><input type="radio" name="run-mode" value="smoke" checked>
-            <span><strong>Smoke</strong> — scripted agents, one episode per batch. No credentials, no model spend.</span></label>
+            <span><strong>Smoke</strong> — scripted agents, one episode per cell. No credentials, no model spend.</span></label>
           <label class="radio"><input type="radio" name="run-mode" value="live">
             <span><strong>Live</strong> — the full experiment as configured. Calls real providers and spends real money.</span></label>
           <p id="run-mode-note" class="muted"></p>
@@ -189,15 +189,15 @@ agents:
       </section>
       <section class="panel">
         <h2>Live runner events</h2>
-        <pre id="events">Launch or follow a rollout to see its local SSE event feed.</pre>
+        <pre id="events">Launch or follow a launch to see its local SSE event feed.</pre>
       </section>
     </div>
   </section>
 
-  <section role="tabpanel" id="panel-rollouts" aria-labelledby="tab-rollouts" hidden>
+  <section role="tabpanel" id="panel-launches" aria-labelledby="tab-launches" hidden>
     <div class="grid">
-      <section class="panel"><h2>Rollouts</h2><div id="rollouts" class="muted">Loading…</div></section>
-      <section class="panel"><h2>Episode attempts</h2><div id="attempts" class="muted">Select a rollout to see its episodes, traces, and replays.</div></section>
+      <section class="panel"><h2>Launchs</h2><div id="launches" class="muted">Loading…</div></section>
+      <section class="panel"><h2>Episode attempts</h2><div id="attempts" class="muted">Select a launch to see its episodes, episodes, and replays.</div></section>
     </div>
   </section>
 </main>

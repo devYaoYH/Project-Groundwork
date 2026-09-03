@@ -30,7 +30,7 @@ jobs:
         env:
           PYTHONPATH: games/negotiation
       - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
-      - name: Verify every reviewed game runtime release
+      - name: Verify every reviewed environment runtime release
         run: |
           for release in games/*/runtime/release.json; do
             name="$(basename "$(dirname "$(dirname "$release")")")"
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and start the cloud-free viewer
         run: docker compose up --build --detach --wait viewer
-      - name: Run all-game SQLite smoke job
+      - name: Run all-environment SQLite smoke job
         run: docker compose run --rm runner
       - name: Run typed Calendar episode and materialize its post-episode metric
         run: |
@@ -60,7 +60,7 @@ jobs:
             --storage-path /data/a2a_traces.db
           docker compose run --rm runner \
             python scripts/materialize_metrics.py \
-            --database /data/a2a_traces.db --game calendar
+            --database /data/a2a_traces.db --environment calendar
       - name: Verify trace, OTel, artifact, and leaderboard APIs
         run: |
           python - <<'PY'
@@ -70,29 +70,29 @@ jobs:
           base = "http://127.0.0.1:8080"
           health = json.load(urlopen("http://127.0.0.1:8080/api/health"))
           assert health["ok"] is True
-          assert health["trace_count"] >= 5
-          traces = json.load(urlopen(f"{base}/api/traces"))["traces"]
+          assert health["episode_count"] >= 5
+          episodes = json.load(urlopen(f"{base}/api/episodes"))["episodes"]
           calendar = next(
-              trace for trace in traces
-              if trace["environment_id"] == "calendar.tiny-5a3p"
+              trace for trace in episodes
+              if trace["environment_id"] == "calendar"
           )
-          game_id = calendar["game_id"]
-          trace = json.load(urlopen(f"{base}/api/traces/{game_id}"))
-          assert trace["environment"]["content_sha256"]
+          episode_uid = calendar["episode_uid"]
+          trace = json.load(urlopen(f"{base}/api/episodes/{episode_uid}"))
+          assert trace["release"]["content_sha256"]
           assert trace["episode"]["id"]
-          artifacts = json.load(urlopen(f"{base}/api/traces/{game_id}/artifacts"))
+          artifacts = json.load(urlopen(f"{base}/api/episodes/{episode_uid}/artifacts"))
           assert any(
               artifact["kind"] == "derived_metrics.calendar.score_margin"
               for artifact in artifacts["artifacts"]
           )
-          otel = json.load(urlopen(f"{base}/api/traces/{game_id}/observability"))
+          otel = json.load(urlopen(f"{base}/api/episodes/{episode_uid}/observability"))
           assert otel["span_count"] > 0
           board = json.load(urlopen(f"{base}/api/leaderboards/calendar"))
           assert board["metadata"]["source"] == "completed_trace_replay"
           assert board["metadata"]["rating_event_count"] >= 1
           assert board["leaderboard"]
           redis_replay = json.load(urlopen(
-              f"{base}/api/streams/a2a%3Arollout%3Acompose-smoke%3Aepisode%3Aword_guess_example.dog.0"
+              f"{base}/api/streams/a2a%3Alaunch%3Acompose-smoke%3Aepisode%3Aall_games_smoke.word_guess.0"
           ))
           assert redis_replay["available"] is True
           assert redis_replay["events"]

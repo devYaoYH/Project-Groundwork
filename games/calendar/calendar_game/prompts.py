@@ -1,6 +1,6 @@
 """
-Pure prompt-building functions for the calendar scheduling game.
-No side effects. No imports of game state.
+Pure prompt-building functions for the calendar scheduling environment.
+No side effects. No imports of environment state.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ DEFAULT_DSPY_PROMPT_VARIANT = "dspy_optimized_v1.md"
 
 def build_system_prompt(game_config: dict) -> str:
     """
-    Static system prompt delivered once at game start via client.register().
+    Static system prompt delivered once at environment start via client.register().
 
     game_config keys: num_agents, num_slots, agent_id, all_agent_ids,
                       decision_retries
@@ -61,7 +61,7 @@ During CHEAP_TALK, negotiate for a mutually low-displacement slot:
 Cost to reschedule: moving errands and meetings will incur a variable penalty cost.
 
 === TOOLS ===
-You interact with the environment by returning a JSON list of tool-call objects.
+You interact with the release by returning a JSON list of tool-call objects.
 
 ** CHEAP_TALK phase — only the active communication tool(s) are valid: **
 {_cheap_talk_tool_spec(communication_protocol)}
@@ -69,7 +69,7 @@ You interact with the environment by returning a JSON list of tool-call objects.
 ** DECISION phase — only these tools are valid: **
 {{"type": "schedule", "meeting_id": <meeting_id (int)>, "slot": <slot_index (int)>}}
   - Place the meeting marker at the specified slot on YOUR calendar.
-  - The slot must be [FREE] on your calendar after any valid reschedules in the same batch.
+  - The slot must be [FREE] on your calendar after any valid reschedules in the same cell.
   - Never schedule into a slot rendered as "Blocked #..."; blocked slots cannot be used for meetings and will be rejected.
 
 {{"type": "reschedule", "item_id": <item_id (int)>, "from_slot": <int>, "to_slot": <int>, "justification": "<why moving this commitment is necessary for your user>"}}
@@ -93,9 +93,9 @@ Each round has four phases:
    - This is your opportunity to move a shared meeting that a participant needs you to vacate.
 
 3. DECISION
-   - You independently submit your scheduling batch for your own calendar.
+   - You independently submit your scheduling cell for your own calendar.
    - Only "schedule" and "reschedule" tools are valid.
-   - Your batch is resolved atomically — order of operations within the batch does not matter.
+   - Your cell is resolved atomically — order of operations within the cell does not matter.
    - You write ONLY your own calendar. You cannot modify another agent's calendar.
 
 4. RESOLUTION (passive)
@@ -114,7 +114,7 @@ Do NOT include any text outside the JSON object.
 
 === IDENTITY ===
 Your agent ID: {agent_id}
-All agents in this environment ({num_agents} total): {all_ids_str}
+All agents in this release ({num_agents} total): {all_ids_str}
 
 === ENVIRONMENT PARAMETERS ===
 - Number of calendar slots: {num_slots}
@@ -360,10 +360,10 @@ Duration   : {duration} slot(s)
 - Return a JSON object with "thinking" and "actions" keys.
 - "actions" must contain at least one "schedule" tool call for meeting {meeting_id}.
 - Optionally include "reschedule" calls first if you need to move errands to free a slot.
-- The scheduled slot must be [FREE] on your calendar after any valid reschedules in your batch.
+- The scheduled slot must be [FREE] on your calendar after any valid reschedules in your cell.
 - Never schedule meeting {meeting_id} into a slot rendered as "Blocked #...". If CHEAP_TALK converged on your blocked slot, do not schedule there and do not try to move the blocked item; choose a non-blocked feasible slot instead.
 - Every "reschedule" action must include a non-empty "justification" explaining why your human user's existing commitment needs to move. Base this on the coordination context you gathered when possible: why this slot was necessary, why alternatives were worse, or why another agent could not reasonably move instead.
-- Your entire batch is resolved atomically — order within the list does not matter.
+- Your entire cell is resolved atomically — order within the list does not matter.
 - You are writing ONLY your own calendar. Other agents act independently.
 - Choose the slot you agreed on during CHEAP_TALK.
 - If the agreed slot requires rescheduling, only proceed if that was the negotiated outcome; do not add avoidable reschedules when a mutually workable free slot was available.
@@ -401,13 +401,13 @@ Example:
 
 def build_reflection_message(target_agent_id: int, num_slots: int, round_num: int | None = None) -> str:
     """
-    Batched belief-movement prompt. The model emits one signed
+    Celled belief-movement prompt. The model emits one signed
     belief delta for each slot of one target agent.
     """
     slot_indices = ", ".join(str(slot) for slot in range(num_slots))
     if round_num is None:
         header = "=== END-OF-GAME REFLECTION ==="
-        scope = f"your interactions with Agent {target_agent_id} during this game"
+        scope = f"your interactions with Agent {target_agent_id} during this environment"
     else:
         header = f"=== END-OF-ROUND {round_num} REFLECTION ==="
         scope = f"your interactions with Agent {target_agent_id} during round {round_num} only"
@@ -440,15 +440,15 @@ def _meeting_privacy_context(meeting: dict) -> str:
 
 def build_retry_message(attempt: int, max_attempts: int, conflict: str) -> str:
     """
-    User message when a decision batch fails validation.
+    User message when a decision cell fails validation.
     """
     return f"""[RETRY {attempt}/{max_attempts}]
 
-Your previous decision batch was rejected due to the following conflict:
+Your previous decision cell was rejected due to the following conflict:
 
   {conflict}
 
-Please resubmit the ENTIRE batch from scratch, correcting the issue above.
+Please resubmit the ENTIRE cell from scratch, correcting the issue above.
 If you include any "reschedule" action, it must include a non-empty "justification".
 Do not reference your previous attempt — return a complete, valid JSON object with "thinking" and "actions" keys.
 """

@@ -4,7 +4,7 @@ description: >
   model assignments, and dense per-agent calendar densities from the tiny
   varied-density fixture suite.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   task_path: tasks/tiny_varied_density_5a3p.jsonl
   num_agents: 5
   num_slots: 8
@@ -35,7 +35,7 @@ defaults:
       model: meta-llama/llama-3.1-8b-instruct
       temperature: 0.0
       max_tokens: 1024
-batches:
+cells:
   - label: tiny_varied_density_t001
     count: 1
     config:

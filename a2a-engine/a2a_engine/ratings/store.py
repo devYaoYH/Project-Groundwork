@@ -53,7 +53,7 @@ class InMemoryRatingStore:
     def __init__(self, metrics: Sequence[MetricSpec]) -> None:
         self.metrics = list(metrics)
         self.players: dict[str, PlayerRatingState] = {}
-        self.processed_game_ids: set[str] = set()
+        self.processed_episode_uids: set[str] = set()
 
     def get_players(self, player_ids: Sequence[str]) -> dict[str, PlayerRatingState]:
         return {
@@ -62,7 +62,7 @@ class InMemoryRatingStore:
         }
 
     def apply_event(self, event: RatingEvent) -> bool:
-        if event.game_id in self.processed_game_ids:
+        if event.episode_uid in self.processed_episode_uids:
             return False
         player_ids = _participants_player_ids(event)
         current = self.get_players(player_ids)
@@ -70,7 +70,7 @@ class InMemoryRatingStore:
         for player_id, state in updated.items():
             state.version = current[player_id].version + 1
             self.players[player_id] = state
-        self.processed_game_ids.add(event.game_id)
+        self.processed_episode_uids.add(event.episode_uid)
         return True
 
     def leaderboard(self) -> list[dict[str, Any]]:
@@ -119,7 +119,7 @@ class DynamoDBRatingStore:
     - sort key: ``sk`` string
 
     Player rows are stored under ``pk=rating#<leaderboard_id>`` and
-    ``sk=player#<player_id>``. Processed event rows use ``sk=event#<game_id>``.
+    ``sk=player#<player_id>``. Processed event rows use ``sk=event#<episode_uid>``.
     Each event update is a DynamoDB transaction: create the event idempotency row
     and conditionally replace only the participating player rows by version.
     """
@@ -161,8 +161,8 @@ class DynamoDBRatingStore:
         return f"player#{player_id}"
 
     @staticmethod
-    def event_sk(game_id: str) -> str:
-        return f"event#{game_id}"
+    def event_sk(episode_uid: str) -> str:
+        return f"event#{episode_uid}"
 
     def _serialize_item(self, item: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -183,7 +183,7 @@ class DynamoDBRatingStore:
             self._serialize_item({"pk": self.pk, "sk": self.player_sk(player_id)})
             for player_id in sorted(set(player_ids))
         ]
-        response = self.client.batch_get_item(RequestItems={self.table_name: {"Keys": keys}})
+        response = self.client.cell_get_item(RequestItems={self.table_name: {"Keys": keys}})
         items = response.get("Responses", {}).get(self.table_name, [])
         found: dict[str, PlayerRatingState] = {}
         for raw_item in items:
@@ -196,10 +196,10 @@ class DynamoDBRatingStore:
             for player_id in player_ids
         }
 
-    def _event_exists(self, game_id: str) -> bool:
+    def _event_exists(self, episode_uid: str) -> bool:
         response = self.client.get_item(
             TableName=self.table_name,
-            Key=self._serialize_item({"pk": self.pk, "sk": self.event_sk(game_id)}),
+            Key=self._serialize_item({"pk": self.pk, "sk": self.event_sk(episode_uid)}),
             ProjectionExpression="pk",
         )
         return "Item" in response
@@ -207,10 +207,10 @@ class DynamoDBRatingStore:
     def _put_event_txn(self, event: RatingEvent) -> dict[str, Any]:
         item = {
             "pk": self.pk,
-            "sk": self.event_sk(event.game_id),
+            "sk": self.event_sk(event.episode_uid),
             "item_type": "event",
-            "game_id": event.game_id,
-            "game_name": event.game_name,
+            "episode_uid": event.episode_uid,
+            "environment_id": event.environment_id,
             "timestamp": event.timestamp.isoformat(),
             "source_path": event.source_path,
             "participant_player_ids": _participants_player_ids(event),
@@ -268,9 +268,9 @@ class DynamoDBRatingStore:
                 code = getattr(exc, "response", {}).get("Error", {}).get("Code")
                 if code != "TransactionCanceledException":
                     raise
-                if self._event_exists(event.game_id):
+                if self._event_exists(event.episode_uid):
                     return False
-        raise ConcurrentRatingUpdate(f"Could not apply rating event {event.game_id!r} after retries.")
+        raise ConcurrentRatingUpdate(f"Could not apply rating event {event.episode_uid!r} after retries.")
 
     def leaderboard(self) -> list[dict[str, Any]]:
         rows: list[PlayerRatingState] = []

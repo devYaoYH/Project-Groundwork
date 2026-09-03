@@ -9,7 +9,7 @@ export function openDB() {
         req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains(IDB_STORE)) {
-                db.createObjectStore(IDB_STORE, { keyPath: 'game_id' });
+                db.createObjectStore(IDB_STORE, { keyPath: 'episode_uid' });
             }
         };
         req.onsuccess = () => resolve(req.result);

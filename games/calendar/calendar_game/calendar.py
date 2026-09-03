@@ -1,4 +1,4 @@
-"""Calendar data structure and batch validation/application logic."""
+"""Calendar data structure and cell validation/application logic."""
 
 from __future__ import annotations
 
@@ -89,19 +89,19 @@ def _item_matches(slot_value: Slot, item_id: int) -> bool:
     return False
 
 
-def validate_batch(calendar: Calendar, actions: list[dict], require_schedule: bool = True) -> tuple[bool, str]:
+def validate_cell(calendar: Calendar, actions: list[dict], require_schedule: bool = True) -> tuple[bool, str]:
     """
-    Validate a batch of schedule/reschedule actions as a transaction.
+    Validate a cell of schedule/reschedule actions as a transaction.
 
-    Returns (True, "") if the batch is globally consistent, or (False, reason)
+    Returns (True, "") if the cell is globally consistent, or (False, reason)
     if it is not. Nothing is applied.
 
     Validation rules:
     1. Each reschedule from_slot must contain the claimed item_id.
     2. No two actions share the same to_slot target.
     3. All to_slot targets must be free on the calendar OR freed by another
-       reschedule in this batch (i.e. appearing as a from_slot).
-    4. Exactly one "schedule" action is allowed per batch.
+       reschedule in this cell (i.e. appearing as a from_slot).
+    4. Exactly one "schedule" action is allowed per cell.
     5. The schedule slot must be free after all reschedules are applied.
     6. Each reschedule must include a non-empty justification.
     """
@@ -174,14 +174,14 @@ def validate_batch(calendar: Calendar, actions: list[dict], require_schedule: bo
         seen_targets.add(target)
 
     # Rule 3 & 5: each target must be free on the calendar or freed by another
-    # reschedule in this batch
+    # reschedule in this cell
     for action in reschedules:
         target = action["to_slot"]
         if not calendar.is_free(target) and target not in freed_slots:
             return (
                 False,
                 f"Reschedule targets slot {target}, which is occupied by "
-                f"{calendar.get(target)!r} and not freed by this batch.",
+                f"{calendar.get(target)!r} and not freed by this cell.",
             )
 
     if schedule is not None:
@@ -190,19 +190,19 @@ def validate_batch(calendar: Calendar, actions: list[dict], require_schedule: bo
             return (
                 False,
                 f"Schedule targets slot {schedule_slot}, which is occupied by "
-                f"{calendar.get(schedule_slot)!r} and not freed by this batch.",
+                f"{calendar.get(schedule_slot)!r} and not freed by this cell.",
             )
 
     return True, ""
 
 
-def apply_batch(calendar: Calendar, actions: list[dict]) -> None:
+def apply_cell(calendar: Calendar, actions: list[dict]) -> None:
     """
-    Apply a validated batch atomically.
+    Apply a validated cell atomically.
 
-    Caller MUST call validate_batch first and confirm it returned (True, "").
+    Caller MUST call validate_cell first and confirm it returned (True, "").
     All reschedules are cleared first, then all targets are written, then the
-    schedule is applied — this avoids ordering dependencies within the batch.
+    schedule is applied — this avoids ordering dependencies within the cell.
     """
     reschedules = [a for a in actions if a.get("type") == "reschedule"]
     schedules = [a for a in actions if a.get("type") == "schedule"]

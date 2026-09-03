@@ -2,7 +2,7 @@
 LLM-backed Agent Implementations
 
 Configurable to call any OpenAI-compatible API endpoint.
-Maintains a persistent conversation thread across the game.
+Maintains a persistent conversation thread across the environment.
 Agents respond with structured JSON: {"thinking", "speech", "action"}.
 """
 
@@ -35,7 +35,7 @@ from a2a_engine.llm.retry import (
 )
 
 #: Negotiation's production settings, expressed as a shared policy. Agents
-#: degrade to None on exhaustion so the game can substitute a heuristic
+#: degrade to None on exhaustion so the environment can substitute a heuristic
 #: agent and emit an api_failure event rather than losing the whole run.
 NEGOTIATION_RETRY_POLICY = RetryPolicy(
     max_attempts=API_MAX_RETRIES,
@@ -242,7 +242,7 @@ class LLMAgentBase:
         """Call _call_api with the shared retry policy, returning text or None.
 
         The retry/backoff/cooldown mechanics moved to ``a2a_engine.llm.retry``
-        so this game and the engine can no longer drift apart. What stays here
+        so this environment and the engine can no longer drift apart. What stays here
         is the negotiation-specific part: unpacking the result dict into
         ``last_api_meta`` / ``last_reasoning``, and degrading to ``None`` on
         exhaustion so the engine can fall back to a heuristic agent and emit an
@@ -425,9 +425,9 @@ class LLMAgentBase:
     async def reflect(self, agent_id, total_rounds, own_cumulative_reward,
                       opponent_cumulative_reward, visible_opponent_reward=True,
                       theoretical_joint_max=None) -> str:
-        """Request post-game reflection from the agent.
+        """Request post-environment reflection from the agent.
 
-        Called after game completion to leverage cached tokens and extract learnings.
+        Called after environment completion to leverage cached tokens and extract learnings.
         Returns the agent's reflection text, or empty string on failure.
         """
         if not self._initialized:
@@ -443,7 +443,7 @@ class LLMAgentBase:
         self._append_user(prompt)
 
         try:
-            log.info("[%s] calling LLM for post-game reflection", agent_id)
+            log.info("[%s] calling LLM for post-environment reflection", agent_id)
             reply = await self._call_api_with_retries()
             if reply is not None:
                 log.info("[%s] reflection response: %s", agent_id, reply[:200])

@@ -1,13 +1,13 @@
-// One replay shell for every game.
+// One replay shell for every environment.
 //
 // The left panel is the same for all of them — projection status and the raw
-// event log as it arrives — and the stage holds whichever viewer that game
+// event log as it arrives — and the stage holds whichever viewer that environment
 // ships. Games render their own episodes very differently; what a researcher
-// should not have to relearn per game is where the controls and the events are.
+// should not have to relearn per environment is where the controls and the events are.
 
 const $ = id => document.getElementById(id);
 
-// Each game's viewer is its own page, so the stage embeds it rather than
+// Each environment's viewer is its own page, so the stage embeds it rather than
 // splicing foreign markup and stylesheets into this one.
 const VIEWERS = {
   calendar: stream =>
@@ -60,20 +60,20 @@ function appendEvents(events) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
-function mountViewer(game, stream) {
-  const key = `${game}::${stream}`;
+function mountViewer(environment, stream) {
+  const key = `${environment}::${stream}`;
   if (mountedFor === key) return;          // never reload the viewer under the user
-  const build = VIEWERS[game];
+  const build = VIEWERS[environment];
   const stage = $("stage");
   if (!build) {
-    stage.innerHTML = `<div class="empty">No viewer is registered for ${esc(game)}.</div>`;
+    stage.innerHTML = `<div class="empty">No viewer is registered for ${esc(environment)}.</div>`;
     mountedFor = key;
     return;
   }
   stage.innerHTML = "";
   const frame = document.createElement("iframe");
   frame.src = build(stream);
-  frame.title = `${game} viewer`;
+  frame.title = `${environment} viewer`;
   stage.appendChild(frame);
   mountedFor = key;
 }
@@ -87,9 +87,9 @@ async function load(stream, { reset = true } = {}) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
 
-    const game = payload.config?.game_name || "unknown";
-    $("game").textContent = game;
-    document.title = `${game} replay`;
+    const environment = payload.config?.environment_id || "unknown";
+    $("environment").textContent = environment;
+    document.title = `${environment} replay`;
 
     const { partial, event_count } = payload.projection;
     const stat = $("stat");
@@ -99,7 +99,7 @@ async function load(stream, { reset = true } = {}) {
       : `Complete — ${event_count} events.`;
 
     appendEvents(payload.events || []);
-    mountViewer(game, stream);
+    mountViewer(environment, stream);
 
     // Nothing further will arrive once the episode has reached its end.
     if (!partial && $("follow").checked) {

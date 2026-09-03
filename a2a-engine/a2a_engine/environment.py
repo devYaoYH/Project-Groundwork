@@ -1,6 +1,6 @@
-"""Typed, local-first environment and episode configuration.
+"""Typed, local-first release and episode configuration.
 
-``EnvironmentConfig`` is the stable description of a world; ``ExperimentConfig``
+``ReleaseDeclaration`` is the stable description of a world; ``ExperimentConfig``
 selects agents and expands it into concrete episodes.  Both are deliberately
 declarative in v0.  They record adapter intent but do not yet enforce topology
 or transport policy.
@@ -58,9 +58,9 @@ class InputConfig(_StrictModel):
 
 
 class EngineConfig(_StrictModel):
-    """The installed game implementation and its environment-owned defaults."""
+    """The installed environment implementation and its release-owned defaults."""
 
-    game_name: str
+    environment_id: str
     defaults: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -76,22 +76,22 @@ class ResourceConfig(_StrictModel):
     description: str = ""
 
 
-class MetricConfig(_StrictModel):
-    """A declared metric; computation remains game/extractor-owned."""
+class MeasureConfig(_StrictModel):
+    """A declared metric; computation remains environment/extractor-owned."""
 
     name: str
-    producer: Literal["game", "derived"]
+    producer: Literal["environment", "derived"]
     scope: Literal["episode", "participant"] = "episode"
     unit: str = ""
     direction: Literal["maximize", "minimize", "neutral"] = "neutral"
     extractor: str | None = None
 
     @model_validator(mode="after")
-    def _derived_metrics_name_an_extractor(self) -> "MetricConfig":
+    def _derived_metrics_name_an_extractor(self) -> "MeasureConfig":
         if self.producer == "derived" and not self.extractor:
             raise ValueError("a derived metric requires an extractor identifier")
-        if self.producer == "game" and self.extractor is not None:
-            raise ValueError("a game-produced metric must not name an extractor")
+        if self.producer == "environment" and self.extractor is not None:
+            raise ValueError("a environment-produced metric must not name an extractor")
         return self
 
 
@@ -103,29 +103,29 @@ class AdapterBindingsConfig(_StrictModel):
     resources: dict[str, str] = Field(default_factory=dict)
 
 
-class EnvironmentConfig(_StrictModel):
-    """Versioned, declarative coordination environment."""
+class ReleaseDeclaration(_StrictModel):
+    """Versioned, declarative coordination release."""
 
     schema_version: Literal[1] = 1
     id: str
-    revision: str
+    release: str
     description: str = ""
     engine: EngineConfig
     inputs: list[InputConfig] = Field(default_factory=list)
     roles: list[RoleConfig] = Field(default_factory=list)
     resources: list[ResourceConfig] = Field(default_factory=list)
-    metrics: list[MetricConfig] = Field(default_factory=list)
+    metrics: list[MeasureConfig] = Field(default_factory=list)
     adapter_bindings: AdapterBindingsConfig = Field(default_factory=AdapterBindingsConfig)
 
     @field_validator("id")
     @classmethod
     def _environment_id(cls, value: str) -> str:
         if not _ID.fullmatch(value):
-            raise ValueError("environment id must start with a lowercase letter and contain only [a-z0-9_.-]")
+            raise ValueError("release id must start with a lowercase letter and contain only [a-z0-9_.-]")
         return value
 
     @model_validator(mode="after")
-    def _unique_declarations(self) -> "EnvironmentConfig":
+    def _unique_declarations(self) -> "ReleaseDeclaration":
         for name, values in (("input", self.inputs), ("role", self.roles),
                              ("resource", self.resources), ("metric", self.metrics)):
             ids = [item.id if hasattr(item, "id") else item.name for item in values]
@@ -138,7 +138,7 @@ class EnvironmentConfig(_StrictModel):
         return self
 
     def content_sha256(self) -> str:
-        """Digest the declarative environment, including declared input hashes."""
+        """Digest the declarative release, including declared input hashes."""
         blob = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -187,11 +187,11 @@ class ObservabilityConfig(_StrictModel):
 
 
 class ExperimentConfig(_StrictModel):
-    """Configures concrete episodes of one EnvironmentConfig."""
+    """Configures concrete episodes of one ReleaseDeclaration."""
 
     schema_version: Literal[1] = 1
     name: str
-    environment: str
+    release: str
     description: str = ""
     agents: list[AgentConfig] = Field(default_factory=list)
     # Positional logical names resolved against the agent pool. An alternative
@@ -211,12 +211,12 @@ class ExperimentConfig(_StrictModel):
             )
         return self
 
-    @field_validator("environment")
+    @field_validator("release")
     @classmethod
     def _environment_path(cls, value: str) -> str:
         path = Path(value)
         if not value or path.is_absolute() or "://" in value:
-            raise ValueError("v1 environment must be a local relative path")
+            raise ValueError("v1 release must be a local relative path")
         return value
 
 
@@ -236,56 +236,56 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_environment_config(path: str | Path) -> EnvironmentConfig:
-    """Validate an environment file and verify every declared local input."""
+def load_release_declaration(path: str | Path) -> ReleaseDeclaration:
+    """Validate an release file and verify every declared local input."""
     path = Path(path).resolve()
-    config = EnvironmentConfig.model_validate(_read_yaml(path))
+    config = ReleaseDeclaration.model_validate(_read_yaml(path))
     for input_config in config.inputs:
         input_path = (path.parent / input_config.path).resolve()
         if not input_path.is_file():
-            raise FileNotFoundError(f"environment input {input_config.id!r} does not exist: {input_path}")
+            raise FileNotFoundError(f"release input {input_config.id!r} does not exist: {input_path}")
         actual = _sha256_file(input_path)
         if actual != input_config.sha256:
             raise ValueError(
-                f"environment input {input_config.id!r} digest mismatch: "
+                f"release input {input_config.id!r} digest mismatch: "
                 f"expected {input_config.sha256}, got {actual}"
             )
     return config
 
 
-def load_experiment_config(path: str | Path) -> tuple[ExperimentConfig, EnvironmentConfig]:
-    """Validate an experiment and its referenced local environment."""
+def load_experiment_config(path: str | Path) -> tuple[ExperimentConfig, ReleaseDeclaration]:
+    """Validate an experiment and its referenced local release."""
     path = Path(path).resolve()
     experiment = ExperimentConfig.model_validate(_read_yaml(path))
-    environment = load_environment_config(path.parent / experiment.environment)
-    _validate_agent_roles(experiment, environment)
-    return experiment, environment
+    release = load_release_declaration(path.parent / experiment.release)
+    _validate_agent_roles(experiment, release)
+    return experiment, release
 
 
-def _validate_agent_roles(experiment: ExperimentConfig, environment: EnvironmentConfig) -> None:
-    """Keep the typed agent list consistent with the environment's roles.
+def _validate_agent_roles(experiment: ExperimentConfig, release: ReleaseDeclaration) -> None:
+    """Keep the typed agent list consistent with the release's roles.
 
     Legacy experiment YAML can retain its historical loose agent list.  In the
-    v1 pair, roles are part of the portable environment contract: an explicit
-    agent list must name every role instance it configures.  When a game builds
+    v1 pair, roles are part of the portable release contract: an explicit
+    agent list must name every role instance it configures.  When a environment builds
     its own agents (the empty-list case), its ``num_agents`` default must still
     agree with the declared role cardinality.
     """
-    if not environment.roles:
+    if not release.roles:
         return
-    expected = {role.id: role.count for role in environment.roles}
+    expected = {role.id: role.count for role in release.roles}
     if not experiment.agents:
-        configured_count = environment.engine.defaults.get("num_agents")
+        configured_count = release.engine.defaults.get("num_agents")
         if configured_count is not None and configured_count != sum(expected.values()):
             raise ValueError(
-                "environment engine.defaults.num_agents must equal the declared role count "
+                "release engine.defaults.num_agents must equal the declared role count "
                 "when ExperimentConfig.agents is empty"
             )
         return
     missing = [index for index, agent in enumerate(experiment.agents) if not agent.role]
     if missing:
         raise ValueError(
-            "each explicit experiment agent must name an environment role; "
+            "each explicit experiment agent must name an release role; "
             f"missing role at indexes {missing}"
         )
     actual: dict[str, int] = {}
@@ -297,6 +297,6 @@ def _validate_agent_roles(experiment: ExperimentConfig, environment: Environment
         raise ValueError(f"experiment agents reference undeclared roles: {unknown}")
     if actual != expected:
         raise ValueError(
-            "explicit experiment-agent role counts must equal environment role counts: "
+            "explicit experiment-agent role counts must equal release role counts: "
             f"expected {expected}, got {actual}"
         )

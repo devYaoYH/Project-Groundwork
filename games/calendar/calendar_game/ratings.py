@@ -1,4 +1,4 @@
-"""Calendar-specific adapter for game-agnostic OpenSkill ratings."""
+"""Calendar-specific adapter for environment-agnostic OpenSkill ratings."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ def load_task_scenario_for_trace(
     final_state = trace.get("final_state") or {}
     rating_context = final_state.get("rating_context") or {}
     if isinstance(rating_context, dict) and rating_context.get("calendars") is not None:
-        # New traces carry their rating inputs, so a copied trace remains
+        # New episodes carry their rating inputs, so a copied trace remains
         # analyzable without a checkout-local task file.
         return rating_context
 
@@ -234,7 +234,7 @@ def _realized_errand_units_by_agent(
     totals = [0.0 for _ in range(num_agents)]
     errand_costs = _errand_cost_by_id(task_scenario, trace)
     for event in trace.get("events") or []:
-        if event.get("type") != "batch_applied":
+        if event.get("type") != "cell_applied":
             continue
         data = event.get("data") or {}
         try:
@@ -422,15 +422,15 @@ def extract_calendar_rating_event(
 
     config = trace.get("config") or {}
     return RatingEvent(
-        game_id=str(trace.get("game_id") or Path(source_path or "").stem),
-        game_name=str(config.get("game_name") or "calendar"),
+        episode_uid=str(trace.get("episode_uid") or Path(source_path or "").stem),
+        environment_id=str(config.get("environment_id") or "calendar"),
         participants=participants,
         metric_scores=metric_scores,
         timestamp=_started_at(trace),
         source_path=source_path,
         metadata={
             "experiment_name": config.get("experiment_name"),
-            "experiment_run_id": config.get("experiment_run_id"),
+            "episode_id": config.get("episode_id"),
             "task_id": config.get("task_id") or (trace.get("metrics") or {}).get("task_id"),
             "raw_metric_scores": raw_metric_scores,
             **variant_metadata,
@@ -447,7 +447,7 @@ def make_calendar_vps_artifact(
 ) -> DerivedArtifact:
     """Package a completed post-hoc VPS analysis for engine-owned storage.
 
-    VPS is not a live-game measurement. Storing it as a trace-digest-bound
+    VPS is not a live-environment measurement. Storing it as a trace-digest-bound
     artifact prevents a rating job from accidentally joining results from a
     different task revision or treating missing privacy analysis as zero.
     """
@@ -457,7 +457,7 @@ def make_calendar_vps_artifact(
         if number is not None:
             normalized[str(agent_id)] = max(0.0, number)
     return DerivedArtifact(
-        game_id=str(trace.get("game_id") or ""),
+        episode_uid=str(trace.get("episode_uid") or ""),
         kind=CALENDAR_VPS_ARTIFACT_KIND,
         version=version,
         trace_digest=trace_digest(trace),
@@ -467,9 +467,9 @@ def make_calendar_vps_artifact(
 
 
 class CalendarRatingAdapter:
-    """Engine registration adapter for completed Calendar traces only."""
+    """Engine registration adapter for completed Calendar episodes only."""
 
-    game_name = "calendar"
+    environment_id = "calendar"
 
     def __init__(self, rating_variant: str = "default") -> None:
         if rating_variant not in CALENDAR_RATING_VARIANT_METRICS:
@@ -511,7 +511,7 @@ class CalendarRatingAdapter:
 
 
 class CalendarScoreMarginMetricExtractor:
-    """Post-hoc participant metric declared by Calendar's typed environment."""
+    """Post-hoc participant metric declared by Calendar's typed release."""
 
     identifier = "calendar.score_margin"
     version = "v1"
@@ -540,7 +540,7 @@ class CalendarScoreMarginMetricExtractor:
 class CalendarLegacyScoreMarginMetricExtractor:
     """Read the pre-v1 Calendar declaration without changing its semantics.
 
-    Earlier local traces named a maximizing participant measurement
+    Earlier local episodes named a maximizing participant measurement
     ``score_margin`` and selected ``calendar.rating.v1``.  The v1 contract
     makes the underlying quantity explicit as minimizing ``excess_cost``.
     This adapter keeps old records replayable by expressing the same ordering
@@ -597,7 +597,7 @@ def load_target_vps_from_pair_csv(
 ) -> dict[str, dict[int, float]]:
     """Group pair-round VPS rows by leaked-about target agent.
 
-    Returns {game_id: {target_agent: total_vps_loss}}. The target grouping
+    Returns {episode_uid: {target_agent: total_vps_loss}}. The target grouping
     measures how much information about that agent's calendar moved observers'
     beliefs.
     """
@@ -612,16 +612,16 @@ def load_target_vps_from_pair_csv(
                     continue
                 if str(row.get("observer_is_participant")).lower() != "true":
                     continue
-            game_id = row.get("game_id")
-            if not game_id:
+            episode_uid = row.get("episode_uid")
+            if not episode_uid:
                 continue
             try:
                 target_agent = int(row["target_agent"])
                 value = float(row[value_column])
             except (KeyError, TypeError, ValueError):
                 continue
-            grouped.setdefault(game_id, {})
-            grouped[game_id][target_agent] = grouped[game_id].get(target_agent, 0.0) + value
+            grouped.setdefault(episode_uid, {})
+            grouped[episode_uid][target_agent] = grouped[episode_uid].get(target_agent, 0.0) + value
     return grouped
 
 
@@ -630,19 +630,19 @@ def load_target_vps_from_game_target_csv(
     *,
     value_column: str = "excess_calibrated_vps_loss_total",
 ) -> dict[str, dict[int, float]]:
-    """Load {game_id: {target_agent: vps_loss}} from a game-target summary CSV."""
+    """Load {episode_uid: {target_agent: vps_loss}} from a environment-target summary CSV."""
 
     grouped: dict[str, dict[int, float]] = {}
     with Path(path).open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
-            game_id = row.get("game_id")
-            if not game_id:
+            episode_uid = row.get("episode_uid")
+            if not episode_uid:
                 continue
             try:
                 target_agent = int(row["target_agent"])
                 value = float(row[value_column])
             except (KeyError, TypeError, ValueError):
                 continue
-            grouped.setdefault(game_id, {})
-            grouped[game_id][target_agent] = max(0.0, value)
+            grouped.setdefault(episode_uid, {})
+            grouped[episode_uid][target_agent] = max(0.0, value)
     return grouped

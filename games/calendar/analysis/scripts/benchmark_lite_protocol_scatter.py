@@ -95,11 +95,11 @@ def _task_id_from_trace(trace: dict, trace_path: Path) -> str:
     task_id = config.get("task_id")
     if task_id:
         return str(task_id)
-    experiment_run_id = str(config.get("experiment_run_id") or trace_path.parent.name)
-    if "." in experiment_run_id:
-        task_id = experiment_run_id.split(".", 1)[1]
+    episode_id = str(config.get("episode_id") or trace_path.parent.name)
+    if "." in episode_id:
+        task_id = episode_id.split(".", 1)[1]
     else:
-        task_id = experiment_run_id
+        task_id = episode_id
     return re.sub(r"\.\d+$", "", task_id)
 
 
@@ -266,7 +266,7 @@ def collect_data_from_leaderboard(leaderboard: dict, *, vps_metric: str = "unifo
                 "series": _leaderboard_series(kind),
                 "setting": setting,
                 "task_id": "leaderboard_aggregate",
-                "n": int(metrics.get("trace_count") or 0),
+                "n": int(metrics.get("episode_count") or 0),
                 "excess_cost": float(excess_cost),
                 "excess_cost_median": (
                     float(metrics["excess_cost_median"])
@@ -351,7 +351,7 @@ def plot_setting(
     setting: str,
     ax: plt.Axes,
     *,
-    y_label: str = "Uniform VPS privacy loss (mean per game)",
+    y_label: str = "Uniform VPS privacy loss (mean per environment)",
 ) -> None:
     styles = {**PROTOCOL_STYLE, **MODEL_STYLE}
     for client in sorted({r["client"] for r in rows if r["series"] == "model"}):
@@ -436,7 +436,7 @@ def plot_model_setting(
     *,
     x_field: str = "excess_cost",
     x_label: str = "Excess cost (realized - optimal)",
-    y_label: str = "Uniform VPS privacy loss (mean per game)",
+    y_label: str = "Uniform VPS privacy loss (mean per environment)",
 ) -> None:
     model_rows = [r for r in rows if r["series"] == "model" and r.get(x_field) is not None]
     imap_rows = [r for r in rows if r["client"] == "IMAP"]
@@ -546,9 +546,9 @@ def main() -> None:
         )
     output_suffix = "_uniform_vps" if args.vps_metric == "uniform" else ""
     y_label = (
-        "Uniform VPS privacy loss (mean per game)"
+        "Uniform VPS privacy loss (mean per environment)"
         if args.vps_metric == "uniform"
-        else "Cost-weighted VPS privacy loss (mean per game)"
+        else "Cost-weighted VPS privacy loss (mean per environment)"
     )
 
     if args.median_excess_models_only:

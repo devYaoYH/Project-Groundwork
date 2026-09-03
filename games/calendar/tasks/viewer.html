@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calendar Game Trace Viewer</title>
+<title>Calendar Environment Trace Viewer</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -286,7 +286,7 @@
       <span class="font-mono text-sm font-semibold text-term-bright tracking-wide uppercase">CalTrace</span>
     </div>
 
-    <!-- Game info pills -->
+    <!-- Environment info pills -->
     <div id="header-meta" class="flex items-center gap-2 flex-wrap text-xs font-mono text-term-muted">
       <span class="text-term-muted italic">No trace loaded — drag &amp; drop a JSON file or click Load</span>
     </div>
@@ -557,7 +557,7 @@ async function initRunSelector({ skipAutoLoad = false } = {}) {
     runSelect.classList.remove('hidden');
     traceSelect.classList.remove('hidden');
     runSelect.innerHTML = runs.map(run =>
-      `<option value="${escapeAttr(run.run_id)}">${escapeHtml(run.run_id)} (${run.trace_count})</option>`
+      `<option value="${escapeAttr(run.run_id)}">${escapeHtml(run.run_id)} (${run.episode_count})</option>`
     ).join('');
     const url = new URL(location.href);
     const requestedRun = url.searchParams.get('run');
@@ -579,11 +579,11 @@ async function initRunSelector({ skipAutoLoad = false } = {}) {
 
 async function loadRunTraces(runId, { autoLoad = false } = {}) {
   if (!runId) return;
-  const r = await fetch(`/api/runs/${encodeURIComponent(runId)}/traces`);
+  const r = await fetch(`/api/runs/${encodeURIComponent(runId)}/episodes`);
   if (!r.ok) return;
   S.runTraces = await r.json();
   traceSelect.innerHTML = S.runTraces.map(trace => {
-    const label = `${trace.experiment_run_id || trace.relative_key} · ${trace.uploader || ''}`;
+    const label = `${trace.episode_id || trace.relative_key} · ${trace.uploader || ''}`;
     return `<option value="${escapeAttr(trace.relative_key)}">${escapeHtml(label)}</option>`;
   }).join('');
   const url = new URL(location.href);
@@ -614,7 +614,7 @@ function escapeAttr(value) {
 // ============================================================
 function loadTrace(data) {
   S.trace = data;
-  // Add seq (index) and normalize event type casing for traces emitted by
+  // Add seq (index) and normalize event type casing for episodes emitted by
   // different runners/viewer bridges.
   S.events = (data.events || []).map((ev, i) => ({
     ...ev,
@@ -656,7 +656,7 @@ function renderHeaderMeta() {
   const t = S.trace;
   const cfg = t.config || {};
   const metrics = t.metrics || {};
-  const gameId = (t.game_id || '').slice(0,8);
+  const gameId = (t.episode_uid || '').slice(0,8);
   const pills = [
     { label: 'ID',       val: gameId },
     { label: 'SEED',     val: cfg.seed ?? S.events.find(e=>e.type==='game_start')?.data?.scenario_seed ?? '—' },
@@ -759,8 +759,8 @@ const EVENT_TYPE_SHORT = {
   groupchat_sent:   'CHAT',
   decide_start:     'DECIDE',
   decide_end:       'DECIDE_END',
-  batch_applied:    'BATCH_OK',
-  batch_rejected:   'BATCH_REJ',
+  cell_applied:    'BATCH_OK',
+  cell_rejected:   'BATCH_REJ',
   decision_failed:  'FAIL',
   reflection_start: 'REFLECT',
   reflection_end:   'BELIEFS',
@@ -882,8 +882,8 @@ function eventTimelineExtra(ev) {
       return `→${esc(messageRecipientLabel(ev))}: ${esc(String(d.content||'').slice(0,40))}`;
     case 'dm_rejected': return `✗ ${esc(String(d.reason||'').slice(0,40))}`;
     case 'resolution': return `M${d.meeting_id} ${d.coordinated ? '✓ COORD' : '✗ MISS'}`;
-    case 'batch_applied': return `${(d.actions||[]).length} action(s)`;
-    case 'batch_rejected': return `✗ ${esc(String(d.conflict_description||'').slice(0,35))}`;
+    case 'cell_applied': return `${(d.actions||[]).length} action(s)`;
+    case 'cell_rejected': return `✗ ${esc(String(d.conflict_description||'').slice(0,35))}`;
     case 'reflection_start': return `A${d.agent_id ?? '?'} about A${d.target_agent_id ?? '?'} prompt`;
     case 'reflection_end': {
       const s = summarizeBeliefs(d.estimates || []);
@@ -1112,10 +1112,10 @@ function reconstructCalendars(upToSeq) {
     }
   }
 
-  // Replay batch_applied events
+  // Replay cell_applied events
   for (const ev of S.events) {
     if (ev.seq > upToSeq) break;
-    if (ev.type === 'batch_applied') {
+    if (ev.type === 'cell_applied') {
       const d = ev.data || {};
       if (d.agent_id != null && d.calendar_render_after) {
         cals[d.agent_id] = parseCalendarRender(d.calendar_render_after, numSlots);
@@ -1574,14 +1574,14 @@ function renderContextTab() {
     html += collapsible(`Tool Calls (${d.tool_calls.length})`, tcs, false);
   }
 
-  // Batch rejected conflict
+  // Cell rejected conflict
   if (d.conflict_description) {
     html += `<div class="border border-term-red/40 rounded p-3 bg-term-redDim/20">
       <div class="text-[10px] font-mono text-term-red uppercase tracking-wider mb-1">Conflict Description</div>
       <div class="text-xs font-mono text-term-text">${esc(d.conflict_description)}</div>
     </div>`;
   }
-  if (d.actions && ev.type === 'batch_rejected') {
+  if (d.actions && ev.type === 'cell_rejected') {
     html += collapsible('Submitted Actions', `<pre class="text-xs font-mono text-term-text">${esc(JSON.stringify(d.actions, null, 2))}</pre>`, true);
   }
 

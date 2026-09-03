@@ -2,7 +2,7 @@
 
 It purposely implements only the RESP commands this project needs (`XADD` and
 `XRANGE`) so the local runner does not gain a mandatory Redis Python dependency.
-Redis is an operational event log: completed traces and manifests remain the
+Redis is an operational event log: completed episodes and manifests remain the
 canonical research record.
 """
 
@@ -13,11 +13,11 @@ import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event as ThreadEvent, Thread
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from a2a_engine.schemas import GameEvent
+from a2a_engine.schemas import Event
 
 
 def _encode_command(parts: list[str]) -> bytes:
@@ -118,23 +118,23 @@ def _read_reply(reader) -> Any:
 class EventStreamConfig:
     stream: str
     episode_id: str
-    game_name: str
-    rollout_id: str | None = None
+    environment_id: str
+    launch_id: str | None = None
     schema_version: int = 1
 
 
 class RedisEventPublisher:
-    """Background, best-effort publisher that never interrupts game execution."""
+    """Background, best-effort publisher that never interrupts environment execution."""
 
     def __init__(self, redis_url: str, config: EventStreamConfig) -> None:
         self._redis = RedisStreams(redis_url)
         self.config = config
-        self._queue: Queue[GameEvent | None] = Queue()
-        self._stopped = Event()
+        self._queue: Queue[Event | None] = Queue()
+        self._stopped = ThreadEvent()
         self._worker = Thread(target=self._run, name="a2a-redis-event-publisher", daemon=True)
         self._worker.start()
 
-    def publish(self, event: GameEvent) -> None:
+    def publish(self, event: Event) -> None:
         if not self._stopped.is_set():
             self._queue.put(event)
 
@@ -162,8 +162,8 @@ class RedisEventPublisher:
                 self._redis.xadd(self.config.stream, {
                     "schema_version": str(self.config.schema_version),
                     "episode_id": self.config.episode_id,
-                    "rollout_id": self.config.rollout_id or "",
-                    "game_name": self.config.game_name,
+                    "launch_id": self.config.launch_id or "",
+                    "environment_id": self.config.environment_id,
                     "event": json.dumps(payload, separators=(",", ":"), sort_keys=True),
                     "published_at": datetime.now(timezone.utc).isoformat(),
                 })
@@ -186,8 +186,8 @@ def publisher_from_config(config: Any) -> RedisEventPublisher | None:
         return None
     return RedisEventPublisher(url, EventStreamConfig(
         stream=str(stream["stream"]), episode_id=str(stream["episode_id"]),
-        game_name=str(getattr(config, "game_name")),
-        rollout_id=str(stream["rollout_id"]) if stream.get("rollout_id") else None,
+        environment_id=str(getattr(config, "environment_id")),
+        launch_id=str(stream["launch_id"]) if stream.get("launch_id") else None,
     ))
 
 
@@ -196,12 +196,12 @@ def decode_stream_events(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     decoded: list[dict[str, Any]] = []
     for entry in entries:
         try:
-            event = GameEvent.model_validate_json(entry["fields"]["event"])
+            event = Event.model_validate_json(entry["fields"]["event"])
         except Exception:
             continue
         decoded.append({
             "stream_id": entry["id"], "episode_id": entry["fields"].get("episode_id"),
-            "game_name": entry["fields"].get("game_name"),
+            "environment_id": entry["fields"].get("environment_id"),
             "event": event.model_dump(mode="json"),
         })
     return decoded

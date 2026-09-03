@@ -17,8 +17,8 @@ def test_openskill_rater_updates_independent_metrics():
         MetricSpec(name="cost", higher_is_better=False),
     ]
     event = RatingEvent(
-        game_id="g1",
-        game_name="test",
+        episode_uid="g1",
+        environment_id="test",
         participants=[
             RatingParticipant(participant_id="seat0", player_id="model-a"),
             RatingParticipant(participant_id="seat1", player_id="model-b"),
@@ -38,8 +38,8 @@ def test_openskill_rater_updates_independent_metrics():
 def test_duplicate_player_seats_are_aggregated():
     metrics = [MetricSpec(name="coordination", higher_is_better=True)]
     event = RatingEvent(
-        game_id="g1",
-        game_name="test",
+        episode_uid="g1",
+        environment_id="test",
         participants=[
             RatingParticipant(participant_id="seat0", player_id="model-a"),
             RatingParticipant(participant_id="seat1", player_id="model-a"),
@@ -58,8 +58,8 @@ def test_duplicate_player_seats_are_aggregated():
 def test_in_memory_rating_store_applies_event_once():
     metrics = [MetricSpec(name="coordination", higher_is_better=True)]
     event = RatingEvent(
-        game_id="g1",
-        game_name="test",
+        episode_uid="g1",
+        environment_id="test",
         participants=[
             RatingParticipant(participant_id="seat0", player_id="model-a"),
             RatingParticipant(participant_id="seat1", player_id="model-b"),
@@ -86,8 +86,8 @@ def test_ranks_use_margin_from_group_anchor():
 def test_event_metadata_can_override_metric_tie_tolerance():
     metrics = [MetricSpec(name="cost", higher_is_better=False, tie_tolerance=0.0)]
     event = RatingEvent(
-        game_id="g1",
-        game_name="test",
+        episode_uid="g1",
+        environment_id="test",
         participants=[
             RatingParticipant(participant_id="seat0", player_id="model-a"),
             RatingParticipant(participant_id="seat1", player_id="model-b"),

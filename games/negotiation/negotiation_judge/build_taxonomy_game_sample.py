@@ -1,7 +1,7 @@
-"""Build game-level samples for taxonomy labeling runs.
+"""Build environment-level samples for taxonomy labeling runs.
 
 Outputs the same JSON shape consumed by judge.run_taxonomy_game_labeling, with
-all rounds for each selected game. The builder reads local cached traces for
+all rounds for each selected environment. The builder reads local cached episodes for
 cohort membership and local extracted contexts for transcript payloads.
 
 Usage:
@@ -17,7 +17,7 @@ from negotiation_game.backend.defaults import REPO_ROOT
 from negotiation_analysis.data_loader import (
     CACHE_PATH,
     MAIN_COHORT_RUN_IDS,
-    TOMBSTONED_GAME_IDS,
+    TOMBSTONED_EPISODE_UID_PREFIXES,
     load_from_cache,
 )
 from negotiation_analysis.jq_transparency_failure_modes import TRANSPARENCY_RUN_IDS
@@ -35,27 +35,27 @@ def has_agent_talk(extracted_game: dict) -> bool:
     )
 
 
-def load_extracted_game(extracted_dir: Path, game_id: str) -> dict | None:
-    path = extracted_dir / f"{game_id}.json"
+def load_extracted_game(extracted_dir: Path, episode_uid: str) -> dict | None:
+    path = extracted_dir / f"{episode_uid}.json"
     if not path.exists():
         return None
     with open(path) as f:
         return json.load(f)
 
 
-def round_payloads_for_game(game: dict, extracted_game: dict) -> list[dict]:
+def round_payloads_for_game(environment: dict, extracted_game: dict) -> list[dict]:
     rows: list[dict] = []
     for rnd in extracted_game.get("rounds", []):
         rows.append({
-            "game_id": extracted_game["game_id"],
+            "episode_uid": extracted_game["episode_uid"],
             "round_number": int(rnd["round_number"]),
             "model_a": extracted_game.get("model_a"),
             "model_b": extracted_game.get("model_b"),
             "mode": extracted_game.get("mode"),
             "shifting_agent": extracted_game.get("shifting_agent"),
             "mc_ratio": extracted_game.get("mc_ratio"),
-            "experiment_label": game.get("experiment_label"),
-            "experiment_run_id": game.get("experiment_run_id"),
+            "experiment_label": environment.get("experiment_label"),
+            "episode_id": environment.get("episode_id"),
             "round": rnd,
         })
     return rows
@@ -64,27 +64,27 @@ def round_payloads_for_game(game: dict, extracted_game: dict) -> list[dict]:
 def select_games(raw_games: list[dict], cohort: str) -> tuple[list[dict], Path, dict]:
     if cohort == "main720":
         selected = [
-            game for game in raw_games
-            if game.get("experiment_run_id") in MAIN_COHORT_RUN_IDS
-            and game.get("game_id") not in TOMBSTONED_GAME_IDS
+            environment for environment in raw_games
+            if environment.get("episode_id") in MAIN_COHORT_RUN_IDS
+            and environment.get("episode_uid") not in TOMBSTONED_EPISODE_UID_PREFIXES
         ]
         criteria = {
             "cohort": "main_720",
-            "experiment_run_ids": sorted(MAIN_COHORT_RUN_IDS),
-            "excluded_tombstoned_game_ids": sorted(TOMBSTONED_GAME_IDS),
+            "episode_ids": sorted(MAIN_COHORT_RUN_IDS),
+            "excluded_tombstoned_episode_uids": sorted(TOMBSTONED_EPISODE_UID_PREFIXES),
         }
         return selected, DEFAULT_MAIN_EXTRACTED_DIR, criteria
 
     if cohort == "transparency120":
         selected = [
-            game for game in raw_games
-            if game.get("experiment_run_id") in TRANSPARENCY_RUN_IDS
-            and game.get("game_id") not in TOMBSTONED_GAME_IDS
+            environment for environment in raw_games
+            if environment.get("episode_id") in TRANSPARENCY_RUN_IDS
+            and environment.get("episode_uid") not in TOMBSTONED_EPISODE_UID_PREFIXES
         ]
         criteria = {
             "cohort": "full_transparency_120",
-            "experiment_run_ids": sorted(TRANSPARENCY_RUN_IDS),
-            "excluded_tombstoned_game_ids": sorted(TOMBSTONED_GAME_IDS),
+            "episode_ids": sorted(TRANSPARENCY_RUN_IDS),
+            "excluded_tombstoned_episode_uids": sorted(TOMBSTONED_EPISODE_UID_PREFIXES),
         }
         return selected, DEFAULT_TRANSPARENCY_EXTRACTED_DIR, criteria
 
@@ -92,7 +92,7 @@ def select_games(raw_games: list[dict], cohort: str) -> tuple[list[dict], Path, 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build taxonomy game sample JSON for a cohort.")
+    parser = argparse.ArgumentParser(description="Build taxonomy environment sample JSON for a cohort.")
     parser.add_argument("--cohort", choices=["main720", "transparency120"], required=True)
     parser.add_argument("--cache", type=Path, default=CACHE_PATH)
     parser.add_argument("--extracted-dir", type=Path, default=None)
@@ -108,20 +108,20 @@ def main() -> None:
     rounds: list[dict] = []
     missing: list[str] = []
     no_talk: list[str] = []
-    for game in sorted(selected_raw, key=lambda g: g.get("game_id", "")):
-        game_id = game["game_id"]
-        extracted_game = load_extracted_game(extracted_dir, game_id)
+    for environment in sorted(selected_raw, key=lambda g: g.get("episode_uid", "")):
+        episode_uid = environment["episode_uid"]
+        extracted_game = load_extracted_game(extracted_dir, episode_uid)
         if extracted_game is None:
-            missing.append(game_id)
+            missing.append(episode_uid)
             continue
         if not has_agent_talk(extracted_game):
-            no_talk.append(game_id)
+            no_talk.append(episode_uid)
             continue
         games.append({
-            "game_id": game_id,
-            "experiment_label": game.get("experiment_label"),
-            "experiment_run_id": game.get("experiment_run_id"),
-            "schema_version": game.get("schema_version"),
+            "episode_uid": episode_uid,
+            "experiment_label": environment.get("experiment_label"),
+            "episode_id": environment.get("episode_id"),
+            "schema_version": environment.get("schema_version"),
             "model_a": extracted_game.get("model_a"),
             "model_b": extracted_game.get("model_b"),
             "mode": extracted_game.get("mode"),
@@ -129,7 +129,7 @@ def main() -> None:
             "mc_ratio": extracted_game.get("mc_ratio"),
             "num_rounds": len(extracted_game.get("rounds", [])),
         })
-        rounds.extend(round_payloads_for_game(game, extracted_game))
+        rounds.extend(round_payloads_for_game(environment, extracted_game))
 
     payload = {
         "version": 1,
@@ -143,8 +143,8 @@ def main() -> None:
         },
         "games": games,
         "rounds": rounds,
-        "missing_extracted_game_ids": missing,
-        "no_agent_talk_game_ids": no_talk,
+        "missing_extracted_episode_uids": missing,
+        "no_agent_talk_episode_uids": no_talk,
     }
 
     output.parent.mkdir(parents=True, exist_ok=True)

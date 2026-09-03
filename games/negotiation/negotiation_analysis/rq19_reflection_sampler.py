@@ -1,6 +1,6 @@
-"""RQ19 — Post-Game Reflection Sampler
+"""RQ19 — Post-Environment Reflection Sampler
 
-Collects post-game reflections from V7+ games and writes one text file per model,
+Collects post-environment reflections from V7+ games and writes one text file per model,
 each containing a balanced sample of reflections from high-efficiency and
 low-efficiency games. Intended as input for manual Opus-assisted synthesis into
 system-prompt learnings.
@@ -50,7 +50,7 @@ def collect_reflections(dataset, per_model: int, seed: int = 42) -> dict[str, di
         if not reflections:
             continue
 
-        # Game-level mean efficiency across rounds
+        # Environment-level mean efficiency across rounds
         effs = [r.joint_efficiency for r in g.rounds if r.joint_efficiency == r.joint_efficiency]
         if not effs:
             continue
@@ -67,7 +67,7 @@ def collect_reflections(dataset, per_model: int, seed: int = 42) -> dict[str, di
             if model not in buckets:
                 buckets[model] = {"high": [], "low": []}
             buckets[model][bucket].append(
-                f"[game={g.game_id[:8]} mode={g.mode} mc={g.metadata.get('mc_bucket','?')} "
+                f"[environment={g.episode_uid[:8]} mode={g.mode} mc={g.metadata.get('mc_bucket','?')} "
                 f"eff={mean_eff:.2f} agent={agent_id}]\n{text}"
             )
 
@@ -136,7 +136,7 @@ def print_summary(buckets: dict) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RQ19: Post-game reflection sampler")
+    parser = argparse.ArgumentParser(description="RQ19: Post-environment reflection sampler")
     add_common_args(parser)
     parser.add_argument(
         "--per-model", type=int, default=DEFAULT_PER_MODEL,

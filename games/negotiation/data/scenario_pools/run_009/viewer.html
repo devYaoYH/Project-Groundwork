@@ -78,8 +78,8 @@ header .meta span{margin-right:12px}
 .oracle-stats{display:flex;flex-wrap:wrap;gap:8px 20px;margin-bottom:16px;font-size:.8rem;color:var(--tx2)}
 .oracle-stats span b{color:var(--tx);font-weight:600}
 
-/* oracle traces */
-.oracle-traces{display:flex;flex-direction:column;gap:12px}
+/* oracle episodes */
+.oracle-episodes{display:flex;flex-direction:column;gap:12px}
 .trace-model{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .trace-model-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer}
 .trace-model-head .mname{font-weight:600;font-size:.85rem}
@@ -295,7 +295,7 @@ function renderScenarioBody(i) {
       ${s.scenario_synergy ? `<span>Synergy: <b>+${s.scenario_synergy.bonus} if ${s.scenario_synergy.resource} ≥ ${s.scenario_synergy.threshold}</b></span>` : ''}
     </div>
     <h4 style="font-size:.8rem;color:var(--tx3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em">Oracle Traces</h4>
-    <div class="oracle-traces">${tracesHTML}</div>
+    <div class="oracle-episodes">${tracesHTML}</div>
   `;
 }
 

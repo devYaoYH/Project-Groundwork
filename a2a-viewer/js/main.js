@@ -96,19 +96,19 @@ async function loadFile(file) {
 
 async function loadTraceId(gameId) {
   try {
-    const response = await fetch(`/api/traces/${encodeURIComponent(gameId)}`);
+    const response = await fetch(`/api/episodes/${encodeURIComponent(gameId)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const trace = await response.json();
     render(trace);
-    const artifacts = await fetch(`/api/traces/${encodeURIComponent(gameId)}/artifacts`);
+    const artifacts = await fetch(`/api/episodes/${encodeURIComponent(gameId)}/artifacts`);
     renderDerivedMetrics(artifacts.ok ? await artifacts.json() : null);
-    const observability = await fetch(`/api/traces/${encodeURIComponent(gameId)}/observability`);
+    const observability = await fetch(`/api/episodes/${encodeURIComponent(gameId)}/observability`);
     if (observability.ok) {
       renderObservability(await observability.json());
     } else {
       renderObservability(null, "No local OTel projection is available for this trace.");
     }
-    setStatus(`Loaded ${trace.game_id} (${(trace.events ?? []).length} events)`);
+    setStatus(`Loaded ${trace.episode_uid} (${(trace.events ?? []).length} events)`);
   } catch (err) {
     renderObservability(null, "OTel spans are available when this trace is opened from the local stack.");
     setStatus(`Failed to load trace: ${err.message}`, true);
@@ -144,7 +144,7 @@ window.addEventListener("drop", (e) => {
 });
 
 // The hub routes a browser-selected trace through session storage. Compose's
-// local control plane routes persisted SQLite traces through ?trace=<game_id>.
+// local control plane routes persisted SQLite episodes through ?trace=<episode_uid>.
 const params = new URLSearchParams(window.location.search);
 const traceId = params.get("trace");
 if (traceId) {

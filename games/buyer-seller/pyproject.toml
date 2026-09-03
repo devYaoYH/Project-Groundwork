@@ -12,9 +12,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
-# Declaring this entry point is what lets `a2a-run` find the game without the
+# Declaring this entry point is what lets `a2a-run` find the environment without the
 # caller importing it. See a2a_engine.registry.ENTRY_POINT_GROUP.
-[project.entry-points."a2a_engine.games"]
+[project.entry-points."a2a_engine.environments"]
 buyer_seller = "buyer_seller"
 
 [build-system]

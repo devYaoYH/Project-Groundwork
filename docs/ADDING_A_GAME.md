@@ -1,35 +1,35 @@
-# Adding a game
+# Adding a environment
 
-A game is a Python class that produces a `GameTraceBase`. Everything else —
+A environment is a Python class that produces a `EpisodeTrace`. Everything else —
 LLM clients with retries, parallel fan-out, YAML experiments, OTel tracing,
 storage backends, manifests, the dataset layer — is supplied.
 
-The worked reference throughout is `games/buyer-seller/`, the smallest game that
+The worked reference throughout is `games/buyer-seller/`, the smallest environment that
 exercises the full contract. `games/word-guess/` is smaller still if you want the
 absolute minimum.
 
 ## 1. Scaffold it
 
 ```bash
-python scripts/new_game.py my-game
+python scripts/new_game.py my-environment
 ```
 
-That writes a working package — config, game loop, scripted agents, experiment
+That writes a working package — config, environment loop, scripted agents, experiment
 YAML, `run.py`, tests — that passes its smoke test immediately. Install and
 check:
 
 ```bash
-uv pip install -e games/my-game
-a2a-run games/my-game/experiments/example.yaml --smoke-test
+uv pip install -e games/my-environment
+a2a-run games/my-environment/experiments/example.yaml --smoke-test
 ```
 
 Then replace the placeholder logic. The scaffold now creates a typed
-`environments/<game>_tiny_v1.yaml` plus an episode-driven experiment. Add task
+`environments/<environment>_tiny_v1.yaml` plus an episode-driven experiment. Add task
 inputs there with local relative paths and SHA-256s before claiming a portable
-environment. The rest of this document explains what it generated and why.
+release. The rest of this document explains what it generated and why.
 
-For a new environment, prefer the typed `EnvironmentConfig` +
-`ExperimentConfig` pair described in [CONTRACTS.md](CONTRACTS.md#typed-environment-and-experiment-yaml-v1).
+For a new release, prefer the typed `ReleaseDeclaration` +
+`ExperimentConfig` pair described in [CONTRACTS.md](CONTRACTS.md#typed-release-and-experiment-yaml-v1).
 The shipped Calendar reference is
 `games/calendar/environments/calendar_tiny_v1.yaml` plus
 `games/calendar/experiments/typed_local_smoke.yaml`; it pins its task corpus,
@@ -42,11 +42,11 @@ with `uv run python scripts/export_config_schemas.py --output-dir schemas`.
 ```
 games/buyer-seller/
   SPEC.md                    the protocol, in prose — write this first
-  pyproject.toml             package + the a2a_engine.games entry point
+  pyproject.toml             package + the a2a_engine.environments entry point
   run.py                     thin wrapper: load .env, import, defer to the CLI
   buyer_seller/
-    __init__.py              imports game.py, triggering register_game
-    game.py                  config schema + the loop
+    __init__.py              imports environment.py, triggering register_environment
+    environment.py                  config schema + the loop
     agents.py                LLM agents: prompts in, actions out
   environments/
     buyer_seller_tiny_v1.yaml  portable world + pinned inputs + metric contract
@@ -60,15 +60,15 @@ games/buyer-seller/
 
 ### 3.1 Config schema
 
-Subclass `GameConfigBase`; add only what is domain-specific. Generic fields
-(`agents`, `seed`, `num_agents`, `experiment_run_id`) are inherited.
+Subclass `EpisodeConfigBase`; add only what is domain-specific. Generic fields
+(`agents`, `seed`, `num_agents`, `episode_id`) are inherited.
 
 ```python
 from pydantic import Field
-from a2a_engine import GameConfigBase
+from a2a_engine import EpisodeConfigBase
 
-class BuyerSellerConfig(GameConfigBase):
-    game_name: str = "buyer_seller"
+class BuyerSellerConfig(EpisodeConfigBase):
+    environment_id: str = "buyer_seller"
     num_agents: int = 2
     num_items: int = Field(default=3, ge=1)
     seller_cost: float = Field(default=10.0, ge=0)
@@ -77,17 +77,17 @@ class BuyerSellerConfig(GameConfigBase):
 
 **The rule that makes runs reproducible:** anything that changes model behavior
 must be a config field, because the resolved config is what lands in the trace.
-A knob read from an env var or hardcoded in the game is a knob nobody can
+A knob read from an env var or hardcoded in the environment is a knob nobody can
 recover from the record later.
 
-### 3.2 Game class
+### 3.2 Environment class
 
-Two methods: `__init__(config, dry_run)` and `run() -> GameTraceBase`. Use
-`EventLog` rather than building `GameEvent`s by hand — it timestamps for you.
+Two methods: `__init__(config, dry_run)` and `run() -> EpisodeTrace`. Use
+`EventLog` rather than building `Event`s by hand — it timestamps for you.
 
 ```python
 import asyncio, uuid
-from a2a_engine import EventLog, GameTraceBase, register_game
+from a2a_engine import EventLog, EpisodeTrace, register_environment
 
 class BuyerSellerGame:
     def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False):
@@ -96,15 +96,15 @@ class BuyerSellerGame:
         self.dry_run = dry_run
         self.events = EventLog()
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())   # sync entry point; async inside
 
-    async def _run_async(self) -> GameTraceBase:
+    async def _run_async(self) -> EpisodeTrace:
         self.events.append("game_start", data={...})
         # ... loop, calling await agent.act(observation, tools={}) ...
         self.events.append("game_end", data={...})
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),   # the runner overwrites this
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),   # the runner overwrites this
             config=self.config,
             events=self.events.all(),
             final_state={...},           # what the world looked like at the end
@@ -144,7 +144,7 @@ a defined default and setting `parse_failed` lets analysis filter those rounds;
 raising throws away the whole run over a formatting slip.
 
 **Enforce information boundaries in the observation, not the prompt.** If your
-game has private information, build each side's observation explicitly and never
+environment has private information, build each side's observation explicitly and never
 put the other side's secret in it. A prompt instruction is a request; an absent
 dict key is a guarantee.
 
@@ -168,7 +168,7 @@ rather than noise. It is also what lets your tests assert on exact prices.
 ### 3.5 Register
 
 ```python
-register_game(
+register_environment(
     "buyer_seller",
     BuyerSellerGame,
     package="buyer-seller",     # for game_package_version in the manifest
@@ -179,11 +179,11 @@ register_game(
 )
 ```
 
-Then declare the entry point so `a2a-run` finds the game without anyone
+Then declare the entry point so `a2a-run` finds the environment without anyone
 importing it:
 
 ```toml
-[project.entry-points."a2a_engine.games"]
+[project.entry-points."a2a_engine.environments"]
 buyer_seller = "buyer_seller"
 ```
 
@@ -210,9 +210,9 @@ else lands in `to_events_df()` and the viewer's default JSON renderer.
 
 ## 5. Optional: `resolve_config`
 
-If your game derives config from config — sampling a task, running a solver to
+If your environment derives config from config — sampling a task, running a solver to
 generate a scenario — do it in a `resolve_config(config) -> config` hook rather
-than inside the game. The runner calls it **once per batch, before fan-out**, and
+than inside the environment. The runner calls it **once per cell, before fan-out**, and
 merges the output into every run's config, so it lands in the trace.
 
 ```python
@@ -228,16 +228,16 @@ generated artifact is recorded, not just the seed that produced it.
 
 ### 5.1 Optional: trace-derived ratings
 
-If a game belongs on the shared leaderboard, declare an adapter at registration
+If a environment belongs on the shared leaderboard, declare an adapter at registration
 time. The adapter runs only after a trace is complete; never emit a rating from
-inside the game loop. This separation makes backfills repeatable and prevents a
+inside the environment loop. This separation makes backfills repeatable and prevents a
 live model session from skewing reporting.
 
 ```python
 from a2a_engine.ratings import MetricSpec, RatingEvent
 
 class MyRatingAdapter:
-    game_name = "buyer_seller"
+    environment_id = "buyer_seller"
     version = "buyer-seller-rating-v1"
     metrics = [MetricSpec(name="utility", higher_is_better=True)]
 
@@ -245,33 +245,33 @@ class MyRatingAdapter:
         # Read only the completed trace and digest-matched artifacts.
         ...
 
-register_game("buyer_seller", BuyerSellerGame, rating_adapter=MyRatingAdapter())
+register_environment("buyer_seller", BuyerSellerGame, rating_adapter=MyRatingAdapter())
 ```
 
 Put every input needed for future extraction in the final trace. If a score
 needs an expensive offline analysis, write a versioned `DerivedArtifact` tied to
 the trace digest instead of modifying the source trace. The engine replays all
-completed traces to create SQLite rating events and snapshots.
+completed episodes to create SQLite rating events and snapshots.
 
-## 6. Environment and experiments
+## 6. Release and experiments
 
 The primary authoring path is a pair of strict Pydantic-validated YAML files.
-The environment owns the world, roles, input hashes, metric declarations, and
+The release owns the world, roles, input hashes, metric declarations, and
 adapter intent. The experiment owns agent configuration, a concrete episode
 plan, local storage, and observability. Together they contain everything a
-collaborator needs to start the same game; the resolved config, environment
-hash, source revision, and input digests are retained in the completed trace.
+collaborator needs to start the same environment; the resolved config, release
+hash, source version, and input digests are retained in the completed trace.
 
 ```yaml
 # environments/buyer_seller_tiny_v1.yaml
 schema_version: 1
 id: buyer-seller.tiny
-revision: v1
+release: v1
 engine:
-  game_name: buyer_seller
+  environment_id: buyer_seller
   defaults: {num_agents: 2, num_items: 3}
 roles: [{id: buyer, count: 1}, {id: seller, count: 1}]
-metrics: [{name: utility, producer: game, direction: maximize}]
+metrics: [{name: utility, producer: environment, direction: maximize}]
 adapter_bindings: {model: engine.llm, communication: local.in_process}
 ```
 
@@ -279,7 +279,7 @@ adapter_bindings: {model: engine.llm, communication: local.in_process}
 # experiments/example.yaml
 schema_version: 1
 name: buyer_seller_example
-environment: ../environments/buyer_seller_tiny_v1.yaml
+release: ../environments/buyer_seller_tiny_v1.yaml
 agents:
   - {role: buyer, type: llm, model: gpt-4o-mini}
   - {role: seller, type: llm, model: gpt-4o-mini}
@@ -291,13 +291,13 @@ storage:
 observability: {capture_content: true}
 ```
 
-The runner expands each episode into the established batch runner, records a
-typed environment/episode reference in each trace, and writes local OTel JSONL
+The runner expands each episode into the established cell runner, records a
+typed release/episode reference in each trace, and writes local OTel JSONL
 beside the results. See `docs/CONTRACTS.md` for every validated field and
 `docs/STORAGE.md` for named SQLite sinks.
 
-The older `defaults` + `batches` YAML remains supported for existing games,
-but new games should start with `EnvironmentConfig` + `ExperimentConfig`.
+The older `defaults` + `cells` YAML remains supported for existing games,
+but new games should start with `ReleaseDeclaration` + `ExperimentConfig`.
 
 Run it three ways:
 
@@ -328,32 +328,32 @@ assert exact outcomes and run in CI with no keys. From
 ## 8. Checklist
 
 - [ ] `SPEC.md` states the protocol, including any choices the source is silent on
-- [ ] `register_game(...)` runs on package import
-- [ ] `a2a_engine.games` entry point declared in `pyproject.toml`
+- [ ] `register_environment(...)` runs on package import
+- [ ] `a2a_engine.environments` entry point declared in `pyproject.toml`
 - [ ] `dry_run=True` runs with no API keys and is deterministic
 - [ ] Message events carry `{speaker, text}`
 - [ ] `final_state` and `metrics` are populated
-- [ ] `environments/<game>_tiny_v1.yaml` validates, describes roles/resources,
+- [ ] `environments/<environment>_tiny_v1.yaml` validates, describes roles/resources,
   and pins every task input with a SHA-256
-- [ ] `experiments/example.yaml` selects that environment, agents, episodes,
+- [ ] `experiments/example.yaml` selects that release, agents, episodes,
   SQLite storage, and `observability.capture_content: true`
 - [ ] `a2a-run experiments/example.yaml --smoke-test` passes
 - [ ] Protocol tests pass with no keys
 - [ ] Every declared derived metric has a registered deterministic extractor;
-  `scripts/materialize_metrics.py --database ... --game <game>` is idempotent
+  `scripts/materialize_metrics.py --database ... --environment <environment>` is idempotent
 - [ ] Added to `experiments/all_games_smoke.yaml` and `site/games.json`
 
 ## 9. Where things live
 
 | You want to … | Look at |
 |---|---|
-| Write the game loop | `a2a_engine.schemas.GameTraceBase`, `a2a_engine.tracing.EventLog` |
+| Write the environment loop | `a2a_engine.schemas.EpisodeTrace`, `a2a_engine.tracing.EventLog` |
 | Subclass an agent | `a2a_engine.agent.LLMAgent` |
 | Build an LLM client from config | `a2a_engine.llm.factory.make_llm_client` |
-| Choose where traces go | `docs/STORAGE.md` |
-| Analyze traces | `a2a_engine.dataset.GameDataset` |
-| Declare a portable world and episode plan | `a2a_engine.environment.EnvironmentConfig`, `ExperimentConfig` |
+| Choose where episodes go | `docs/STORAGE.md` |
+| Analyze episodes | `a2a_engine.dataset.EpisodeDataset` |
+| Declare a portable world and episode plan | `a2a_engine.environment.ReleaseDeclaration`, `ExperimentConfig` |
 | Add a trace-derived metric | `a2a_engine.derived_metrics.DerivedMetricExtractor` |
 | Add an event renderer to the local viewer | `docs/VIEWER_EXTENSIONS.md` |
 | Understand the contracts | `docs/CONTRACTS.md` |
-| Copy a small complete game | `games/buyer-seller/` |
+| Copy a small complete environment | `games/buyer-seller/` |

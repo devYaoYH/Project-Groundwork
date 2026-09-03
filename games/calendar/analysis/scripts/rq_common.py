@@ -48,7 +48,7 @@ def calendar_root() -> Path:
 
 
 def default_traces_root() -> Path:
-    return repo_root().parent / "shared-traces"
+    return repo_root().parent / "shared-episodes"
 
 
 def resolve_path(raw: str | Path, *, base: Path | None = None) -> Path:
@@ -107,7 +107,7 @@ def trace_setting(path: Path, trace: dict[str, Any]) -> str | None:
         for value in (
             path,
             config.get("experiment_name"),
-            config.get("experiment_run_id"),
+            config.get("episode_id"),
             config.get("task_id"),
             config.get("task_path"),
         )
@@ -132,7 +132,7 @@ def task_id(trace: dict[str, Any], path: Path) -> str:
     config = trace.get("config") or {}
     if config.get("task_id"):
         return str(config["task_id"])
-    run_id = str(config.get("experiment_run_id") or path.parent.name)
+    run_id = str(config.get("episode_id") or path.parent.name)
     return re.sub(r"\.\d+$", "", run_id.split(".", 1)[-1])
 
 
@@ -261,7 +261,7 @@ def slot_is_locally_feasible(item: dict[str, Any] | None) -> bool:
 def action_costs_by_round(trace: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for event in trace.get("events", []):
-        if event.get("type") == "batch_applied":
+        if event.get("type") == "cell_applied":
             data = event.get("data") or {}
             round_idx = int(data.get("round", -1))
             agent_id = int(data.get("agent_id", -1))
@@ -280,7 +280,7 @@ def action_costs_by_round(trace: dict[str, Any]) -> list[dict[str, Any]]:
                         "item_id": action.get("item_id"),
                         "item_type": (item or {}).get("type"),
                         "cost": float((item or {}).get("cost", 0)),
-                        "source": "batch_applied",
+                        "source": "cell_applied",
                     }
                 )
             continue

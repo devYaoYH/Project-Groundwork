@@ -1,4 +1,4 @@
-"""RQ1: estimate privacy-leakage prevalence in calendar game traces.
+"""RQ1: estimate privacy-leakage prevalence in calendar environment episodes.
 
 This script scans calendar trace JSON files and labels each DM with simple,
 transparent string-match indicators:
@@ -9,7 +9,7 @@ transparent string-match indicators:
 
 It also identifies adversarial senders from explicit nosy-agent metadata and
 red-team prompt variants, then aggregates message-level labels into one row per
-game. This is intended as a first-pass prevalence parser, not a semantic judge.
+environment. This is intended as a first-pass prevalence parser, not a semantic judge.
 """
 
 from __future__ import annotations
@@ -261,7 +261,7 @@ def _message_rows_for_trace(
     public_terms: list[MatchTerm],
 ) -> list[dict[str, Any]]:
     trace = _load_json(trace_path)
-    game_id = str(trace.get("game_id") or trace_path.stem)
+    episode_uid = str(trace.get("episode_uid") or trace_path.stem)
     nosy_agent_ids = _nosy_agent_ids(trace)
     red_team_agent_ids = _red_team_agent_ids(trace)
     adversarial_agent_ids = nosy_agent_ids | red_team_agent_ids
@@ -284,7 +284,7 @@ def _message_rows_for_trace(
         to_is_adversarial = _as_int(to_agent) in adversarial_agent_ids
         rows.append({
             "trace_path": str(trace_path),
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "event_index": event_index,
             "timestamp": event.get("timestamp", ""),
             "round": data.get("round"),
@@ -370,9 +370,9 @@ def _red_team_agent_ids(trace: dict[str, Any]) -> set[int]:
 def _game_summary_rows(message_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_game: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in message_rows:
-        by_game.setdefault((row["trace_path"], row["game_id"]), []).append(row)
+        by_game.setdefault((row["trace_path"], row["episode_uid"]), []).append(row)
     summaries: list[dict[str, Any]] = []
-    for (trace_path, game_id), rows in sorted(by_game.items()):
+    for (trace_path, episode_uid), rows in sorted(by_game.items()):
         total = len(rows)
         total_chars = sum(int(row["content_chars"]) for row in rows)
         leakage = sum(1 for row in rows if row["privacy_leakage"])
@@ -386,7 +386,7 @@ def _game_summary_rows(message_rows: list[dict[str, Any]]) -> list[dict[str, Any
         non_adversarial_leakage = sum(1 for row in non_adversarial_rows if row["privacy_leakage"])
         summaries.append({
             "trace_path": trace_path,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "nosy_agent_ids": next((row["nosy_agent_ids"] for row in rows if row["nosy_agent_ids"]), ""),
             "red_team_agent_ids": next((row["red_team_agent_ids"] for row in rows if row["red_team_agent_ids"]), ""),
             "adversarial_agent_ids": next(
@@ -431,7 +431,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def main() -> int:
     root = _calendar_root()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("traces", nargs="+", help="Trace JSON files, directories, or globs.")
+    parser.add_argument("episodes", nargs="+", help="Trace JSON files, directories, or globs.")
     parser.add_argument("--errand-bank", default=str(DEFAULT_ERRAND_BANK))
     parser.add_argument("--meeting-bank", default=str(DEFAULT_MEETING_BANK))
     parser.add_argument("--out-dir", default="analysis/outputs/rq1_privacy_leakage_prevalence")
@@ -441,7 +441,7 @@ def main() -> int:
         _resolve(args.errand_bank, root=root),
         _resolve(args.meeting_bank, root=root),
     )
-    trace_paths = _trace_paths(args.traces, root=root)
+    trace_paths = _trace_paths(args.episodes, root=root)
     message_rows: list[dict[str, Any]] = []
     for trace_path in trace_paths:
         message_rows.extend(_message_rows_for_trace(
@@ -455,7 +455,7 @@ def main() -> int:
     _write_csv(out_dir / "message_labels.csv", message_rows)
     _write_csv(out_dir / "game_summary.csv", game_rows)
     (out_dir / "summary.json").write_text(json.dumps({
-        "trace_count": len(trace_paths),
+        "episode_count": len(trace_paths),
         "game_count": len(game_rows),
         "dm_count": len(message_rows),
         "privacy_leakage_dm_count": sum(1 for row in message_rows if row["privacy_leakage"]),
@@ -488,7 +488,7 @@ def main() -> int:
         "public_term_count": len(public_terms),
     }, indent=2) + "\n", encoding="utf-8")
 
-    print(f"traces: {len(trace_paths)}")
+    print(f"episodes: {len(trace_paths)}")
     print(f"games: {len(game_rows)}")
     print(f"dms: {len(message_rows)}")
     print(f"privacy leakage DMs: {sum(1 for row in message_rows if row['privacy_leakage'])}")

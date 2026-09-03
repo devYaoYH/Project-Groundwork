@@ -11,7 +11,7 @@ accepts included.** The spec's diagram loops back to "S offers again" after a
 sale without saying whether the clock moves. Advancing on accepts is what makes
 the payoff formula ``delta**(t-1)`` well defined per unit — otherwise multiple
 units could settle at the same ``t`` and the discount would stop discriminating
-between fast and slow agreement. It also caps the game at ``T`` exchanges total,
+between fast and slow agreement. It also caps the environment at ``T`` exchanges total,
 which is what the deadline is for.
 
 **Monotonicity violations are clamped and recorded, not rejected.** With
@@ -36,7 +36,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from a2a_engine import EventLog, GameConfigBase, GameTraceBase, register_game
+from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
@@ -48,15 +48,15 @@ SOLD_OUT = "inventory_exhausted"
 DEADLINE = "deadline_reached"
 
 
-class BuyerSellerConfig(GameConfigBase):
-    """Config for the buyer-seller bargaining game.
+class BuyerSellerConfig(EpisodeConfigBase):
+    """Config for the buyer-seller bargaining environment.
 
     ``seller_cost`` and ``buyer_value`` are the private values c and v. They are
     recorded in the trace — the record is not an observation — but never reach
     the opposing agent.
     """
 
-    game_name: str = "buyer_seller"
+    environment_id: str = "buyer_seller"
     num_agents: int = 2
 
     num_items: int = Field(default=3, ge=1, description="k: identical units for sale")
@@ -156,7 +156,7 @@ class _ScriptedBuyer:
 
 
 # ---------------------------------------------------------------------------
-# Game.
+# Environment.
 # ---------------------------------------------------------------------------
 
 
@@ -233,10 +233,10 @@ class BuyerSellerGame:
 
     # --- loop ---
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())
 
-    async def _run_async(self) -> GameTraceBase:
+    async def _run_async(self) -> EpisodeTrace:
         cfg = self.config
         self.events.append("game_start", data={
             "num_items": cfg.num_items,
@@ -318,8 +318,8 @@ class BuyerSellerGame:
             "reason": reason, "units_sold": units_sold, "rounds_used": rounds_used,
         })
 
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),
             config=self.config,
             events=self.events.all(),
             final_state={
@@ -376,7 +376,7 @@ class BuyerSellerGame:
         }
 
 
-register_game(
+register_environment(
     "buyer_seller",
     BuyerSellerGame,
     package="buyer-seller",

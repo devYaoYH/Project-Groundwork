@@ -33,7 +33,7 @@ def main() -> None:
     all_rows.sort(key=lambda r: (
         r.get("experiment_label", ""),
         r.get("label_model", ""),
-        r.get("game_id", ""),
+        r.get("episode_uid", ""),
         int(r.get("round_number") or 0),
     ))
 

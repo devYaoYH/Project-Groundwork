@@ -1,7 +1,7 @@
 {
-  "game_id": "9886f250-bbc0-4e97-b53d-d299c29e885e",
+  "episode_uid": "9886f250-bbc0-4e97-b53d-d299c29e885e",
   "config": {
-    "game_name": "word_guess",
+    "environment_id": "word_guess",
     "num_agents": 2,
     "agents": [
       {
@@ -16,7 +16,7 @@
       }
     ],
     "seed": 1,
-    "experiment_run_id": "word_guess_example.dog.0",
+    "episode_id": "word_guess_example.dog.0",
     "experiment_name": "word_guess_example",
     "git_hash": null,
     "extra": {}

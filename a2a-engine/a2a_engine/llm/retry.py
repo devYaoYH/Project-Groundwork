@@ -52,7 +52,7 @@ class RetryPolicy:
 
     Defaults match negotiation's production settings, which are the
     battle-tested ones: 10 attempts with a 120s cap survives sustained
-    provider-side rate limiting during large self-play sweeps.
+    provider-side rate limiting during large self-play studies.
     """
 
     max_attempts: int = 10
@@ -78,7 +78,7 @@ class RetryPolicy:
 
 
 #: Used by LLMClient when no policy is supplied. Conservative on attempts
-#: because a foreground game turn should not stall for minutes.
+#: because a foreground environment turn should not stall for minutes.
 DEFAULT_POLICY = RetryPolicy(max_attempts=5, backoff_max=60.0)
 
 
@@ -86,8 +86,8 @@ DEFAULT_POLICY = RetryPolicy(max_attempts=5, backoff_max=60.0)
 class FailureInfo:
     """Structured record of an exhausted retry chain.
 
-    Negotiation surfaces this as an ``api_failure`` game event; keeping it typed
-    means every game reports API failures the same way instead of each inventing
+    Negotiation surfaces this as an ``api_failure`` environment event; keeping it typed
+    means every environment reports API failures the same way instead of each inventing
     its own dict.
     """
 
@@ -152,7 +152,7 @@ def is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
     # OSError covers socket-level failures, but not its non-transient
-    # subclasses, which signal a broken environment rather than a blip.
+    # subclasses, which signal a broken release rather than a blip.
     if isinstance(exc, OSError) and not isinstance(
         exc, (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
     ):
@@ -315,7 +315,7 @@ async def acall_with_retry(
     """Async twin of :func:`call_with_retry`.
 
     Sleeps with ``asyncio.sleep`` so a backing-off agent yields the event loop
-    instead of stalling every other agent in the game.
+    instead of stalling every other agent in the environment.
     """
     for attempt in range(policy.max_attempts):
         if limiter is not None:

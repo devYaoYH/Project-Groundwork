@@ -27,7 +27,7 @@ def extract_proposal_for_other(message: str, resource_types: list[str]) -> dict[
 
     Args:
         message: The message text to parse
-        resource_types: List of resource names for this game (e.g., ["plasma", "crystal"])
+        resource_types: List of resource names for this environment (e.g., ["plasma", "crystal"])
     """
     msg = str(message).lower()
     proposals: dict[str, int] = {}
@@ -174,7 +174,7 @@ def extract_first_proposals(transcript: list[dict], resource_types: list[str]) -
 
     Args:
         transcript: Round's cheap talk transcript
-        resource_types: List of resource names for this game
+        resource_types: List of resource names for this environment
 
     Returns dict with agent_a/agent_b proposal info and first_proposer.
     """
@@ -306,7 +306,7 @@ def analyze_first_proposal_deference(dataset: NegotiationDataset) -> dict:
             proposal_would_be_optimal = bool(prop_eff is not None and prop_eff >= 1.0)
 
             rec = {
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "round_number": r.round_number,
                 "is_rotating": g.is_rotating,
                 "mode": g.mode,
@@ -488,11 +488,11 @@ def build_deference_audit_df(dataset: NegotiationDataset) -> pd.DataFrame:
             proposal_turn = fp_data["turn"] if fp_data else ""
 
             records.append({
-                "audit_id": f"{g.game_id}:r{r.round_number}",
-                "game_id": g.game_id,
+                "audit_id": f"{g.episode_uid}:r{r.round_number}",
+                "episode_uid": g.episode_uid,
                 "round_number": r.round_number,
                 "experiment_label": g.label,
-                "experiment_run_id": g.config.get("experiment_run_id"),
+                "episode_id": g.config.get("episode_id"),
                 "schema_version": g.schema_version,
                 "mode": g.mode,
                 "is_rotating": g.is_rotating,
@@ -551,7 +551,7 @@ def sample_deference_audit_rows(
     if not samples:
         return df.iloc[0:0]
     return pd.concat(samples, ignore_index=True).sort_values(
-        ["audit_bucket", "game_id", "round_number"]
+        ["audit_bucket", "episode_uid", "round_number"]
     )
 
 
@@ -702,7 +702,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nDeference by round number:")
         by_round = non_rotating.groupby('round_number').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             resource_match=('opponent_deference_resource_match', 'mean'),
             qty_match=('opponent_deference_qty_match', 'mean'),
             proposal_would_be_optimal=('proposal_would_be_optimal', 'mean'),
@@ -713,7 +713,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nDeference by proposal complexity:")
         by_n_res = non_rotating.groupby('other_proposal_n_resources').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             resource_match=('opponent_deference_resource_match', 'mean'),
             qty_match=('opponent_deference_qty_match', 'mean'),
         )
@@ -721,7 +721,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nDeference by opponent model:")
         by_model = non_rotating.groupby('opponent_model').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             resource_match=('opponent_deference_resource_match', 'mean'),
             qty_match=('opponent_deference_qty_match', 'mean'),
             proposal_would_be_optimal=('proposal_would_be_optimal', 'mean'),
@@ -732,7 +732,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nProposal quality by proposer model (non-rotating):")
         by_proposer = non_rotating.groupby('first_proposer_model').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             proposal_would_be_optimal=('proposal_would_be_optimal', 'mean'),
             deferred_and_optimal=('deferred_and_optimal', 'mean'),
             deferred_suboptimal=('deferred_suboptimal', 'mean'),
@@ -764,7 +764,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nDeference by proposal complexity:")
         by_n_res = rotating.groupby('other_proposal_n_resources').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             resource_match=('opponent_deference_resource_match', 'mean'),
             qty_match=('opponent_deference_qty_match', 'mean'),
         )
@@ -772,7 +772,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nDeference by opponent model:")
         by_model = rotating.groupby('opponent_model').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             resource_match=('opponent_deference_resource_match', 'mean'),
             qty_match=('opponent_deference_qty_match', 'mean'),
             proposal_would_be_optimal=('proposal_would_be_optimal', 'mean'),
@@ -783,7 +783,7 @@ def print_summary(deference_results: dict) -> None:
 
         print(f"\nProposal quality by proposer model (rotating):")
         by_proposer = rotating.groupby('first_proposer_model').agg(
-            n=('game_id', 'count'),
+            n=('episode_uid', 'count'),
             proposal_would_be_optimal=('proposal_would_be_optimal', 'mean'),
             deferred_and_optimal=('deferred_and_optimal', 'mean'),
             deferred_suboptimal=('deferred_suboptimal', 'mean'),

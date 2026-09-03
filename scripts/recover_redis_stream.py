@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stream", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--redis-url", default=os.environ.get("A2A_REDIS_URL"))
-    parser.add_argument("--game-name", help="only needed for legacy streams without game_name")
+    parser.add_argument("--environment-name", help="only needed for legacy streams without environment_id")
     args = parser.parse_args(argv)
     if not args.redis_url:
         parser.error("--redis-url or A2A_REDIS_URL is required")
@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     # One projection serves both the browser viewer and this recovery path, so
     # a recovered artifact and a live replay can never disagree about what the
     # stream said.
-    trace = project_stream_to_trace(decoded, stream=args.stream, game_name=args.game_name)
+    trace = project_stream_to_trace(decoded, stream=args.stream, environment_id=args.environment_id)
     trace.observability["recovery"] = "redis_stream"
     trace.observability["recovered_at"] = datetime.now(UTC).isoformat()
     output = Path(args.output)

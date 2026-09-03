@@ -1,5 +1,5 @@
 """
-Agent implementations for the Negotiation Game.
+Agent implementations for the Negotiation Environment.
 """
 
 from negotiation_game.backend.agents.random_agent import RandomAgent

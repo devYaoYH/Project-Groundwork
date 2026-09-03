@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Scaffold a new game package under games/.
+"""Scaffold a new environment package under games/.
 
-    python scripts/new_game.py my-game
+    python scripts/new_game.py my-environment
 
-Writes a package that already satisfies the game contract and passes
-``a2a-run ... --smoke-test`` before you have written any game logic, so the
+Writes a package that already satisfies the environment contract and passes
+``a2a-run ... --smoke-test`` before you have written any environment logic, so the
 first thing you change is the rules rather than the plumbing.
 
 See docs/ADDING_A_GAME.md for what each generated file is for.
@@ -32,7 +32,7 @@ PYPROJECT = '''\
 [project]
 name = "{dist}"
 version = "0.1.0"
-description = "{title} game for a2a-engine."
+description = "{title} environment for a2a-engine."
 requires-python = ">=3.11"
 dependencies = [
     "a2a-engine",
@@ -43,8 +43,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
-# Lets `a2a-run` discover the game without the caller importing it first.
-[project.entry-points."a2a_engine.games"]
+# Lets `a2a-run` discover the environment without the caller importing it first.
+[project.entry-points."a2a_engine.environments"]
 {snake} = "{snake}"
 
 [build-system]
@@ -60,19 +60,19 @@ expt-runner = {{ path = "../../expt-runner", editable = true }}
 '''
 
 INIT = '''\
-"""{title} game.
+"""{title} environment.
 
-Importing this package registers the game via ``game.py``'s ``register_game``
+Importing this package registers the environment via ``environment.py``'s ``register_environment``
 side effect. See ``SPEC.md`` for the protocol.
 """
 
-from {snake}.game import {cls}Config, {cls}Game
+from {snake}.game import {cls}Config, {cls}Environment
 
-__all__ = ["{cls}Config", "{cls}Game"]
+__all__ = ["{cls}Config", "{cls}Environment"]
 '''
 
 GAME = '''\
-"""{cls}Game — TODO: one line on what this game measures.
+"""{cls}Environment — TODO: one line on what this environment measures.
 
 See ``SPEC.md`` for the protocol. Where the spec is silent on a detail, state the
 choice you made here and why — the next reader needs to know which parts are the
@@ -87,7 +87,7 @@ from typing import Any
 
 from pydantic import Field
 
-from a2a_engine import EventLog, GameConfigBase, GameTraceBase, register_game
+from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
@@ -95,7 +95,7 @@ from a2a_engine.tracing_otel import get_tracer
 from {snake}.agents import {cls}Agent
 
 
-class {cls}Config(GameConfigBase):
+class {cls}Config(EpisodeConfigBase):
     """Config for {snake}.
 
     Every knob that changes model behavior belongs here: the resolved config is
@@ -103,7 +103,7 @@ class {cls}Config(GameConfigBase):
     when someone tries to reproduce the run.
     """
 
-    game_name: str = "{snake}"
+    environment_id: str = "{snake}"
     num_agents: int = 2
     max_turns: int = Field(default=6, ge=1)
 
@@ -129,7 +129,7 @@ class _ScriptedAgent:
             return {{"text": f"{{self.name}} says something on turn {{turn}}."}}
 
 
-class {cls}Game:
+class {cls}Environment:
     """TODO: describe the loop."""
 
     def __init__(self, config: dict | {cls}Config, dry_run: bool = False) -> None:
@@ -155,11 +155,11 @@ class {cls}Game:
             for i in range(self.config.num_agents)
         ]
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         # run() is the sync entry point the runner calls; the loop itself is async.
         return asyncio.run(self._run_async())
 
-    async def _run_async(self) -> GameTraceBase:
+    async def _run_async(self) -> EpisodeTrace:
         self.events.append("game_start", data={{"max_turns": self.config.max_turns}})
 
         history: list[dict[str, str]] = []
@@ -178,8 +178,8 @@ class {cls}Game:
 
         self.events.append("game_end", data={{"turns_used": self.config.max_turns}})
 
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),   # the runner overwrites this
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),   # the runner overwrites this
             config=self.config,
             events=self.events.all(),
             final_state={{"turns_used": self.config.max_turns}},
@@ -190,9 +190,9 @@ class {cls}Game:
         )
 
 
-register_game(
+register_environment(
     "{snake}",
-    {cls}Game,
+    {cls}Environment,
     package="{dist}",
     # The scripted agents above need no keys.
     dry_run_checks_keys=False,
@@ -210,7 +210,7 @@ from typing import Any
 from a2a_engine import LLMAgent
 
 SYSTEM = """\\
-You are an agent in a multi-agent game. TODO: state the role, what this agent
+You are an agent in a multi-agent environment. TODO: state the role, what this agent
 knows, and what it must not be told about the other agents.
 
 Reply with a single short line.\\
@@ -241,10 +241,10 @@ class {cls}Agent(LLMAgent):
 ENVIRONMENT = '''\
 schema_version: 1
 id: {snake}.tiny
-revision: v1
-description: TODO — describe the world, its roles, and its task/input revision.
+release: v1
+description: TODO — describe the world, its roles, and its task/input version.
 engine:
-  game_name: {snake}
+  environment_id: {snake}
   defaults:
     num_agents: 2
     max_turns: 6
@@ -254,7 +254,7 @@ roles:
     count: 2
 metrics:
   - name: turns_used
-    producer: game
+    producer: environment
     direction: minimize
 adapter_bindings:
   model: engine.llm
@@ -265,7 +265,7 @@ EXPERIMENT = '''\
 schema_version: 1
 name: {snake}_example
 description: TODO — what question does this experiment answer?
-environment: ../environments/{snake}_tiny_v1.yaml
+release: ../environments/{snake}_tiny_v1.yaml
 agents:
   - {{role: participant, type: llm, model: gpt-4o-mini}}
   - {{role: participant, type: llm, model: gpt-4o-mini}}
@@ -281,7 +281,7 @@ observability:
 '''
 
 RUN_PY = '''\
-"""Wrapper: imports {snake} (registers the game), then defers to the expt-runner CLI.
+"""Wrapper: imports {snake} (registers the environment), then defers to the expt-runner CLI.
 
 Usage:
 
@@ -309,18 +309,18 @@ TESTS = '''\
 """Protocol tests for {snake}.
 
 Scripted agents mean these need no API keys and can assert exact outcomes.
-Test the rules of the game, not the behavior of a model.
+Test the rules of the environment, not the behavior of a model.
 """
 
 from __future__ import annotations
 
-from {snake}.game import {cls}Config, {cls}Game
+from {snake}.game import {cls}Config, {cls}Environment
 
 
 def run(**overrides):
     cfg = {{"max_turns": 3, "num_agents": 2, "seed": 1}}
     cfg.update(overrides)
-    return {cls}Game({cls}Config(**cfg), dry_run=True).run()
+    return {cls}Environment({cls}Config(**cfg), dry_run=True).run()
 
 
 def test_produces_a_trace_with_events_and_metrics():
@@ -331,10 +331,10 @@ def test_produces_a_trace_with_events_and_metrics():
 
 
 def test_messages_are_transcript_visible():
-    """{{speaker, text}} is what makes GameDataset.to_messages_df work."""
-    from a2a_engine.dataset import GameDataset
+    """{{speaker, text}} is what makes EpisodeDataset.to_messages_df work."""
+    from a2a_engine.dataset import EpisodeDataset
 
-    df = GameDataset.from_traces([run()]).to_messages_df()
+    df = EpisodeDataset.from_traces([run()]).to_messages_df()
     assert not df.empty
     assert set(df["speaker"]) == {{"agent_0", "agent_1"}}
 
@@ -366,7 +366,7 @@ What the engine tracks between turns.
 ## 3. Turn order
 
 Who acts when, and what each side observes when they act. Be explicit about
-information boundaries: state what each agent must NOT be able to see. The game
+information boundaries: state what each agent must NOT be able to see. The environment
 enforces these by constructing observations, not by asking the model nicely.
 
 ## 4. Payoffs
@@ -386,8 +386,8 @@ reasoning here.
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Scaffold a new a2a-comm game.")
-    parser.add_argument("name", help="Game name, e.g. 'my-game' or 'my_game'")
+    parser = argparse.ArgumentParser(description="Scaffold a new a2a-comm environment.")
+    parser.add_argument("name", help="Environment name, e.g. 'my-environment' or 'my_game'")
     parser.add_argument("--games-dir", default=str(REPO_ROOT / "games"))
     args = parser.parse_args(argv)
 
@@ -413,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
         "SPEC.md": SPEC,
         "run.py": RUN_PY,
         f"{snake}/__init__.py": INIT,
-        f"{snake}/game.py": GAME,
+        f"{snake}/environment.py": GAME,
         f"{snake}/agents.py": AGENTS,
         f"environments/{snake}_tiny_v1.yaml": ENVIRONMENT,
         "experiments/example.yaml": EXPERIMENT,
@@ -434,7 +434,7 @@ Next:
   a2a-run {root}/experiments/example.yaml --smoke-test
   pytest {root}/tests
 
-Then replace the placeholder loop in {snake}/game.py and write SPEC.md.
+Then replace the placeholder loop in {snake}/environment.py and write SPEC.md.
 See docs/ADDING_A_GAME.md.""")
     return 0
 

@@ -145,7 +145,7 @@ def analyze_centering(raw_games: list[dict]) -> dict:
 
     for idx, g in enumerate(raw_games):
         if (idx + 1) % 100 == 0:
-            print(f"  Processing game {idx + 1}/{total}...")
+            print(f"  Processing environment {idx + 1}/{total}...")
 
         for r in g["rounds"]:
             ct = r.get("cheap_talk_transcript", [])
@@ -153,7 +153,7 @@ def analyze_centering(raw_games: list[dict]) -> dict:
             tc = result.get("transition_counts", {})
 
             records.append({
-                "game_id": g["game_id"],
+                "episode_uid": g["episode_uid"],
                 "round_number": r["round_number"],
                 "mode": g["mode"],
                 "goal_type": g["goal_type"],

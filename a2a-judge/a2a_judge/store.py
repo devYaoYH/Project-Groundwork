@@ -1,14 +1,14 @@
-"""Game-agnostic judgment storage.
+"""Environment-agnostic judgment storage.
 
 Lifted from ``a2a-negotiation/judge/storage.py``, with the negotiation-specific
 document schema removed. What was worth keeping — and is now shared by every
-game — is the addressing and resume scheme:
+environment — is the addressing and resume scheme:
 
-    document id = {game_id}__{judge_model}__{prompt_version}
+    document id = {episode_uid}__{judge_model}__{prompt_version}
 
 That compound key is what lets several judge models and several prompt
 iterations coexist over the same corpus without overwriting each other, and it
-is what makes ``pending()`` correct: a game is re-judged when the prompt version
+is what makes ``pending()`` correct: a environment is re-judged when the prompt version
 changes, and skipped when it has not.
 
 Backends mirror ``a2a_engine.storage``: local JSONL always works, Firestore is
@@ -31,10 +31,10 @@ log = logging.getLogger("a2a_judge.store")
 UNKNOWN_VERSION = "unknown"
 
 
-def judgment_doc_id(game_id: str, judge_model: str, prompt_version: str) -> str:
+def judgment_doc_id(episode_uid: str, judge_model: str, prompt_version: str) -> str:
     """Compound key. Slashes in model ids (``meta/llama-4``) would nest paths."""
     safe_model = judge_model.replace("/", "_")
-    return f"{game_id}__{safe_model}__{prompt_version}"
+    return f"{episode_uid}__{safe_model}__{prompt_version}"
 
 
 def compress_transcript(text: str) -> str:
@@ -52,11 +52,11 @@ class JudgmentStore(Protocol):
 
     name: str
 
-    def save(self, game_id: str, judgment: dict, *, judge_model: str,
+    def save(self, episode_uid: str, judgment: dict, *, judge_model: str,
              prompt_version: str, input_transcript: str | None = None) -> bool: ...
 
     def completed(self) -> dict[str, set[str]]:
-        """``{game_id: {prompt_version, ...}}`` for everything already judged."""
+        """``{episode_uid: {prompt_version, ...}}`` for everything already judged."""
         ...
 
     def load_all(self) -> list[dict]: ...
@@ -70,16 +70,16 @@ class LocalJudgmentStore:
     def __init__(self, path: str | Path = "./results/judgments.jsonl") -> None:
         self.path = Path(path)
 
-    def save(self, game_id: str, judgment: dict, *, judge_model: str,
+    def save(self, episode_uid: str, judgment: dict, *, judge_model: str,
              prompt_version: str = UNKNOWN_VERSION,
              input_transcript: str | None = None) -> bool:
         record = {
             **judgment,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "judge_model": judge_model,
             "prompt_version": prompt_version,
             "judged_at": datetime.now(timezone.utc).isoformat(),
-            "doc_id": judgment_doc_id(game_id, judge_model, prompt_version),
+            "doc_id": judgment_doc_id(episode_uid, judge_model, prompt_version),
         }
         if input_transcript is not None:
             record["input_transcript_gz"] = compress_transcript(input_transcript)
@@ -102,7 +102,7 @@ class LocalJudgmentStore:
             except json.JSONDecodeError:
                 continue
             key = record.get("doc_id") or judgment_doc_id(
-                record.get("game_id", ""),
+                record.get("episode_uid", ""),
                 record.get("judge_model", ""),
                 record.get("prompt_version", UNKNOWN_VERSION),
             )
@@ -112,7 +112,7 @@ class LocalJudgmentStore:
     def completed(self) -> dict[str, set[str]]:
         out: dict[str, set[str]] = defaultdict(set)
         for record in self.load_all():
-            gid = record.get("game_id")
+            gid = record.get("episode_uid")
             if gid:
                 out[gid].add(record.get("prompt_version", UNKNOWN_VERSION))
         return dict(out)
@@ -144,7 +144,7 @@ class FirestoreJudgmentStore:
                 return None
         return self._client
 
-    def save(self, game_id: str, judgment: dict, *, judge_model: str,
+    def save(self, episode_uid: str, judgment: dict, *, judge_model: str,
              prompt_version: str = UNKNOWN_VERSION,
              input_transcript: str | None = None) -> bool:
         client = self.client
@@ -152,7 +152,7 @@ class FirestoreJudgmentStore:
             return False
         record = {
             **judgment,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "judge_model": judge_model,
             "prompt_version": prompt_version,
             "judged_at": datetime.now(timezone.utc).isoformat(),
@@ -160,11 +160,11 @@ class FirestoreJudgmentStore:
         if input_transcript is not None:
             record["input_transcript_gz"] = compress_transcript(input_transcript)
         try:
-            doc_id = judgment_doc_id(game_id, judge_model, prompt_version)
+            doc_id = judgment_doc_id(episode_uid, judge_model, prompt_version)
             client.collection(self.collection).document(doc_id).set(record)
             return True
         except Exception as exc:
-            log.error("Firestore judgment write failed for %s: %s", game_id, exc)
+            log.error("Firestore judgment write failed for %s: %s", episode_uid, exc)
             return False
 
     def load_all(self) -> list[dict]:
@@ -179,7 +179,7 @@ class FirestoreJudgmentStore:
             return {}
         try:
             docs = client.collection(self.collection).select(
-                ["game_id", "prompt_version"]
+                ["episode_uid", "prompt_version"]
             ).stream()
         except Exception as exc:
             log.error("Firestore judgment list failed: %s", exc)
@@ -187,20 +187,20 @@ class FirestoreJudgmentStore:
         out: dict[str, set[str]] = defaultdict(set)
         for doc in docs:
             data = doc.to_dict() or {}
-            # Legacy documents predate the game_id field; fall back to the id.
-            gid = data.get("game_id") or doc.id
+            # Legacy documents predate the episode_uid field; fall back to the id.
+            gid = data.get("episode_uid") or doc.id
             out[gid].add(data.get("prompt_version", UNKNOWN_VERSION))
         return dict(out)
 
 
 def pending(
-    game_ids: Iterable[str], store: JudgmentStore, prompt_version: str
+    episode_uids: Iterable[str], store: JudgmentStore, prompt_version: str
 ) -> list[str]:
     """Games still needing a judgment at this prompt version.
 
-    Resume is keyed on (game_id, prompt_version), not game_id alone: bumping the
+    Resume is keyed on (episode_uid, prompt_version), not episode_uid alone: bumping the
     prompt is how you force a re-judge, and forgetting that distinction would
     silently mix judgments from two different rubrics in one aggregate.
     """
     done = store.completed()
-    return [gid for gid in game_ids if prompt_version not in done.get(gid, set())]
+    return [gid for gid in episode_uids if prompt_version not in done.get(gid, set())]

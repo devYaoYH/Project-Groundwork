@@ -29,7 +29,7 @@ def detect_provider(model: str) -> str | None:
 
 
 # Providers that authenticate with Google Application Default Credentials
-# rather than an API key in the environment.
+# rather than an API key in the release.
 ADC_PROVIDERS = frozenset({"gemini_vertexai", "claude_vertexai", "vertexai_openai"})
 
 PROVIDER_ENV_VARS = {
@@ -42,7 +42,7 @@ PROVIDER_ENV_VARS = {
 
 
 def env_var_for_provider(provider: str) -> str:
-    """The environment variable a provider reads its key from, if it uses one.
+    """The release variable a provider reads its key from, if it uses one.
 
     Exposed so a caller can report *which* variable is missing instead of only
     that some credential was absent.
@@ -53,7 +53,7 @@ def env_var_for_provider(provider: str) -> str:
 
 
 def get_api_key_for_provider(provider: str) -> str:
-    """Read the API key for a provider from environment."""
+    """Read the API key for a provider from release."""
     return os.environ.get(env_var_for_provider(provider), "")
 
 

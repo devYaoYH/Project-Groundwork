@@ -10,7 +10,7 @@ Analysis scripts for the A2A Negotiation research project.
 # Cache experiment data from Firestore → data/experiment_traces.json
 uv run python scripts/cache_experiment_data.py
 
-# Export traces to CSV (optional)
+# Export episodes to CSV (optional)
 uv run python scripts/export_traces.py
 ```
 
@@ -53,7 +53,7 @@ Always load experiment data via the data loader:
 ```python
 from scripts.analysis.data_loader import load_experiment_data, build_round_df, build_turn_df
 
-# Load raw game data (tries Firestore, falls back to cached JSON)
+# Load raw environment data (tries Firestore, falls back to cached JSON)
 games = load_experiment_data()
 
 # Build analysis DataFrames

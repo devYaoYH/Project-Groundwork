@@ -12,11 +12,11 @@ disagree. Set ``mirror_json: true`` if you want the JSON tree as well.
 
 Schema (one row per run; ``events`` is the trace's event array as JSON):
 
-    traces(game_id PK, game_name, experiment_name, experiment_run_id,
-           batch_label, run_idx, config, events, final_state, metrics, environment, episode,
+    episodes(episode_uid PK, environment_id, experiment_name, episode_id,
+           cell_id, episode_idx, config, events, final_state, metrics, release, episode,
            started_at, ended_at, stopped, manifest, created_at)
 
-``experiment_run_id`` is indexed rather than unique: re-running an experiment
+``episode_id`` is indexed rather than unique: re-running an experiment
 after a crash legitimately produces a second attempt at the same run id, and
 ``--resume`` is what decides whether to skip it.
 """
@@ -33,9 +33,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from a2a_engine.derived import DerivedArtifact
-from a2a_engine.manifest import RunManifest
+from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.ratings.schemas import RatingEvent, RatingSnapshot
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
 from a2a_engine.storage.local import LocalJSONStore
 
@@ -44,18 +44,18 @@ log = logging.getLogger("a2a_engine.storage.sqlite")
 DEFAULT_DB_NAME = "a2a_traces.db"
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS traces (
-    game_id           TEXT PRIMARY KEY,
-    game_name         TEXT,
+CREATE TABLE IF NOT EXISTS episodes (
+    episode_uid           TEXT PRIMARY KEY,
+    environment_id         TEXT,
     experiment_name   TEXT,
-    experiment_run_id TEXT,
-    batch_label       TEXT,
-    run_idx           INTEGER,
+    episode_id TEXT,
+    cell_id       TEXT,
+    episode_idx           INTEGER,
     config            TEXT NOT NULL,
     events            TEXT NOT NULL,
     final_state       TEXT NOT NULL,
     metrics           TEXT NOT NULL,
-    environment       TEXT NOT NULL DEFAULT '{}',
+    release       TEXT NOT NULL DEFAULT '{}',
     episode           TEXT NOT NULL DEFAULT '{}',
     observability     TEXT NOT NULL DEFAULT '{}',
     started_at        TEXT,
@@ -64,57 +64,57 @@ CREATE TABLE IF NOT EXISTS traces (
     manifest          TEXT NOT NULL,
     created_at        TEXT DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_traces_experiment ON traces(experiment_name);
-CREATE INDEX IF NOT EXISTS idx_traces_game_name  ON traces(game_name);
-CREATE INDEX IF NOT EXISTS idx_traces_run_id     ON traces(experiment_run_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_experiment ON episodes(experiment_name);
+CREATE INDEX IF NOT EXISTS idx_episodes_environment ON episodes(environment_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_episode_id ON episodes(episode_id);
 
--- Derived data is intentionally separate from the immutable game trace. Both
--- tables are keyed by game ID plus extractor version, so a new analysis can be
+-- Derived data is intentionally separate from the immutable environment trace. Both
+-- tables are keyed by environment ID plus extractor version, so a new analysis can be
 -- backfilled without mutating the source record or double-counting a result.
 CREATE TABLE IF NOT EXISTS derived_artifacts (
-    game_id      TEXT NOT NULL,
+    episode_uid      TEXT NOT NULL,
     kind         TEXT NOT NULL,
     version      TEXT NOT NULL,
     trace_digest TEXT NOT NULL,
     payload      TEXT NOT NULL,
     metadata     TEXT NOT NULL,
     created_at   TEXT NOT NULL,
-    PRIMARY KEY (game_id, kind, version)
+    PRIMARY KEY (episode_uid, kind, version)
 );
-CREATE INDEX IF NOT EXISTS idx_artifacts_game ON derived_artifacts(game_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_episode ON derived_artifacts(episode_uid);
 
 CREATE TABLE IF NOT EXISTS rating_events (
-    game_id         TEXT NOT NULL,
-    game_name       TEXT NOT NULL,
+    episode_uid         TEXT NOT NULL,
+    environment_id       TEXT NOT NULL,
     adapter_version TEXT NOT NULL,
     trace_digest    TEXT NOT NULL,
     event           TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (game_id, adapter_version)
+    PRIMARY KEY (episode_uid, adapter_version)
 );
-CREATE INDEX IF NOT EXISTS idx_rating_events_game
-    ON rating_events(game_name, adapter_version);
+CREATE INDEX IF NOT EXISTS idx_rating_events_environment
+    ON rating_events(environment_id, adapter_version);
 
 CREATE TABLE IF NOT EXISTS rating_snapshots (
-    game_name       TEXT NOT NULL,
+    environment_id       TEXT NOT NULL,
     adapter_version TEXT NOT NULL,
     snapshot        TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (game_name, adapter_version)
+    PRIMARY KEY (environment_id, adapter_version)
 );
 """
 
-# Columns a caller may filter list_traces() on. Restricting to real columns
+# Columns a caller may filter list_episodes() on. Restricting to real columns
 # keeps the filter clause parameterised and prevents a filter key from being
 # interpolated into SQL.
 _FILTERABLE = {
-    "game_id", "game_name", "experiment_name", "experiment_run_id",
-    "batch_label", "run_idx", "stopped",
+    "episode_uid", "environment_id", "experiment_name", "episode_id",
+    "cell_id", "episode_idx", "stopped",
 }
 
 
-class SQLiteTraceStore:
-    """Persists traces into a single SQLite database file."""
+class SQLiteEpisodeStore:
+    """Persists episodes into a single SQLite database file."""
 
     name = "sqlite"
 
@@ -159,50 +159,50 @@ class SQLiteTraceStore:
         # SQLite's CREATE TABLE IF NOT EXISTS does not migrate a pre-existing
         # local corpus. Keep this migration additive so old trace DBs remain
         # readable after observability provenance was introduced.
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(traces)")}
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(episodes)")}
         if "observability" not in columns:
             conn.execute(
-                "ALTER TABLE traces ADD COLUMN observability TEXT NOT NULL DEFAULT '{}'"
+                "ALTER TABLE episodes ADD COLUMN observability TEXT NOT NULL DEFAULT '{}'"
             )
-        if "environment" not in columns:
+        if "release" not in columns:
             conn.execute(
-                "ALTER TABLE traces ADD COLUMN environment TEXT NOT NULL DEFAULT '{}'"
+                "ALTER TABLE episodes ADD COLUMN release TEXT NOT NULL DEFAULT '{}'"
             )
         if "episode" not in columns:
             conn.execute(
-                "ALTER TABLE traces ADD COLUMN episode TEXT NOT NULL DEFAULT '{}'"
+                "ALTER TABLE episodes ADD COLUMN episode TEXT NOT NULL DEFAULT '{}'"
             )
         conn.commit()
         self._initialised = True
 
-    def uri(self, game_id: str = "") -> str:
+    def uri(self, episode_uid: str = "") -> str:
         base = f"sqlite:///{self.path.resolve()}"
-        return f"{base}#{game_id}" if game_id else base
+        return f"{base}#{episode_uid}" if episode_uid else base
 
     # --- write ---
 
-    def put_trace(self, trace: GameTraceBase, manifest: RunManifest) -> str:
+    def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
         payload = json.loads(trace.model_dump_json())
         events = payload.get("events", [])
 
         if self.local is not None:
             # Mirror first so local_trace_path/trace_size_bytes are populated in
             # the manifest we are about to store.
-            self.local.put_trace(trace, manifest)
+            self.local.put_episode(trace, manifest)
 
         manifest.storage.backend = self.name
         row = (
-            trace.game_id,
-            manifest.game_name or payload.get("config", {}).get("game_name"),
+            trace.episode_uid,
+            manifest.environment_id or payload.get("config", {}).get("environment_id"),
             manifest.experiment_name,
-            manifest.experiment_run_id,
-            manifest.batch_label,
-            manifest.run_idx,
+            manifest.episode_id,
+            manifest.cell_id,
+            manifest.episode_idx,
             json.dumps(payload.get("config", {})),
             json.dumps(events),
             json.dumps(payload.get("final_state", {})),
             json.dumps(payload.get("metrics", {})),
-            json.dumps(payload.get("environment") or {}),
+            json.dumps(payload.get("release") or {}),
             json.dumps(payload.get("episode") or {}),
             json.dumps(payload.get("observability", {})),
             payload.get("started_at"),
@@ -217,27 +217,27 @@ class SQLiteTraceStore:
                     self._ensure_schema(conn)
                     # The manifest is written last and includes the status we are
                     # about to commit, so serialise it after the row is staged.
-                    manifest.storage.uri = self.uri(trace.game_id)
+                    manifest.storage.uri = self.uri(trace.episode_uid)
                     manifest.storage.status = "written"
                     conn.execute(
-                        "INSERT OR REPLACE INTO traces ("
-                        "  game_id, game_name, experiment_name, experiment_run_id,"
-                        "  batch_label, run_idx, config, events, final_state, metrics, environment, episode,"
+                        "INSERT OR REPLACE INTO episodes ("
+                        "  episode_uid, environment_id, experiment_name, episode_id,"
+                        "  cell_id, episode_idx, config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
                         ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
-                    # prior analysis result for this game is no longer valid.
-                    conn.execute("DELETE FROM derived_artifacts WHERE game_id = ?", (trace.game_id,))
-                    conn.execute("DELETE FROM rating_events WHERE game_id = ?", (trace.game_id,))
+                    # prior analysis result for this environment is no longer valid.
+                    conn.execute("DELETE FROM derived_artifacts WHERE episode_uid = ?", (trace.episode_uid,))
+                    conn.execute("DELETE FROM rating_events WHERE episode_uid = ?", (trace.episode_uid,))
                     conn.commit()
                 finally:
                     conn.close()
         except Exception as exc:
             manifest.storage.status = "failed"
             manifest.storage.error = f"{type(exc).__name__}: {exc}"
-            log.error("SQLite write failed for %s: %s", manifest.experiment_run_id, exc)
+            log.error("SQLite write failed for %s: %s", manifest.episode_id, exc)
             if self.local is not None:
                 # The JSON mirror is the surviving copy; hand back that path.
                 self.local.write_manifest(manifest, Path(manifest.local_trace_path))
@@ -246,22 +246,22 @@ class SQLiteTraceStore:
 
         if self.local is not None:
             self.local.write_manifest(manifest, Path(manifest.local_trace_path))
-        return manifest.storage.uri or self.uri(trace.game_id)
+        return manifest.storage.uri or self.uri(trace.episode_uid)
 
     # --- read ---
 
-    def get_trace(self, game_id: str) -> GameTraceBase | None:
+    def get_episode(self, episode_uid: str) -> EpisodeTrace | None:
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             row = conn.execute(
-                "SELECT * FROM traces WHERE game_id = ?", (game_id,)
+                "SELECT * FROM episodes WHERE episode_uid = ?", (episode_uid,)
             ).fetchone()
         finally:
             conn.close()
         return self._row_to_trace(row) if row is not None else None
 
-    def list_traces(
+    def list_episodes(
         self,
         filters: dict[str, Any] | None = None,
         limit: int = 50,
@@ -273,8 +273,8 @@ class SQLiteTraceStore:
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                f"SELECT manifest FROM traces {where} "
-                "ORDER BY created_at, game_id LIMIT ? OFFSET ?",
+                f"SELECT manifest FROM episodes {where} "
+                "ORDER BY created_at, episode_uid LIMIT ? OFFSET ?",
                 (*params, limit + 1, offset),
             ).fetchall()
         finally:
@@ -283,16 +283,16 @@ class SQLiteTraceStore:
         page = [json.loads(r["manifest"]) for r in rows[:limit]]
         return page, str(offset + limit) if has_more else None
 
-    def iter_traces(
+    def iter_episodes(
         self, filters: dict[str, Any] | None = None
-    ) -> Iterator[GameTraceBase]:
-        """Stream every matching trace. Used by ``GameDataset.from_store``."""
+    ) -> Iterator[EpisodeTrace]:
+        """Stream every matching trace. Used by ``EpisodeDataset.from_store``."""
         where, params = self._where(filters)
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             for row in conn.execute(
-                f"SELECT * FROM traces {where} ORDER BY created_at, game_id", params
+                f"SELECT * FROM episodes {where} ORDER BY created_at, episode_uid", params
             ):
                 trace = self._row_to_trace(row)
                 if trace is not None:
@@ -309,15 +309,15 @@ class SQLiteTraceStore:
         return f"WHERE {clause}", tuple(filters.values())
 
     @staticmethod
-    def _row_to_trace(row: sqlite3.Row) -> GameTraceBase | None:
+    def _row_to_trace(row: sqlite3.Row) -> EpisodeTrace | None:
         try:
-            return GameTraceBase.model_validate({
-                "game_id": row["game_id"],
+            return EpisodeTrace.model_validate({
+                "episode_uid": row["episode_uid"],
                 "config": json.loads(row["config"]),
                 "events": json.loads(row["events"]),
                 "final_state": json.loads(row["final_state"]),
                 "metrics": json.loads(row["metrics"]),
-                "environment": json.loads(row["environment"] or "{}") or None,
+                "release": json.loads(row["release"] or "{}") or None,
                 "episode": json.loads(row["episode"] or "{}") or None,
                 "observability": json.loads(row["observability"] or "{}"),
                 "started_at": row["started_at"],
@@ -325,22 +325,22 @@ class SQLiteTraceStore:
                 "stopped": bool(row["stopped"]),
             })
         except Exception as exc:
-            log.warning("Skipping unreadable trace row %s: %s", row["game_id"], exc)
+            log.warning("Skipping unreadable trace row %s: %s", row["episode_uid"], exc)
             return None
 
     # --- resume support ---
 
-    def completed_run_ids(self, experiment_name: str) -> set[str]:
+    def completed_episode_ids(self, experiment_name: str) -> set[str]:
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                "SELECT DISTINCT experiment_run_id FROM traces WHERE experiment_name = ?",
+                "SELECT DISTINCT episode_id FROM episodes WHERE experiment_name = ?",
                 (experiment_name,),
             ).fetchall()
         finally:
             conn.close()
-        return {r["experiment_run_id"] for r in rows if r["experiment_run_id"]}
+        return {r["episode_id"] for r in rows if r["episode_id"]}
 
     # --- derived artifacts and trace-derived ratings ---
 
@@ -352,8 +352,8 @@ class SQLiteTraceStore:
                 self._ensure_schema(conn)
                 existing = conn.execute(
                     "SELECT trace_digest, payload, metadata FROM derived_artifacts "
-                    "WHERE game_id = ? AND kind = ? AND version = ?",
-                    (artifact.game_id, artifact.kind, artifact.version),
+                    "WHERE episode_uid = ? AND kind = ? AND version = ?",
+                    (artifact.episode_uid, artifact.kind, artifact.version),
                 ).fetchone()
                 encoded_payload = json.dumps(artifact.payload, sort_keys=True)
                 encoded_metadata = json.dumps(artifact.metadata, sort_keys=True)
@@ -365,10 +365,10 @@ class SQLiteTraceStore:
                 if not unchanged:
                     conn.execute(
                         "INSERT OR REPLACE INTO derived_artifacts "
-                        "(game_id, kind, version, trace_digest, payload, metadata, created_at) "
+                        "(episode_uid, kind, version, trace_digest, payload, metadata, created_at) "
                         "VALUES (?,?,?,?,?,?,?)",
                         (
-                            artifact.game_id,
+                            artifact.episode_uid,
                             artifact.kind,
                             artifact.version,
                             artifact.trace_digest,
@@ -382,19 +382,19 @@ class SQLiteTraceStore:
             finally:
                 conn.close()
 
-    def get_derived_artifacts(self, game_id: str) -> list[DerivedArtifact]:
+    def get_derived_artifacts(self, episode_uid: str) -> list[DerivedArtifact]:
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                "SELECT * FROM derived_artifacts WHERE game_id = ? ORDER BY kind, version",
-                (game_id,),
+                "SELECT * FROM derived_artifacts WHERE episode_uid = ? ORDER BY kind, version",
+                (episode_uid,),
             ).fetchall()
         finally:
             conn.close()
         return [
             DerivedArtifact.model_validate({
-                "game_id": row["game_id"],
+                "episode_uid": row["episode_uid"],
                 "kind": row["kind"],
                 "version": row["version"],
                 "trace_digest": row["trace_digest"],
@@ -416,8 +416,8 @@ class SQLiteTraceStore:
                 self._ensure_schema(conn)
                 existing = conn.execute(
                     "SELECT trace_digest, event FROM rating_events "
-                    "WHERE game_id = ? AND adapter_version = ?",
-                    (event.game_id, adapter_version),
+                    "WHERE episode_uid = ? AND adapter_version = ?",
+                    (event.episode_uid, adapter_version),
                 ).fetchone()
                 unchanged = bool(existing) and (
                     existing["trace_digest"] == trace_digest and existing["event"] == encoded
@@ -425,8 +425,8 @@ class SQLiteTraceStore:
                 if not unchanged:
                     conn.execute(
                         "INSERT OR REPLACE INTO rating_events "
-                        "(game_id, game_name, adapter_version, trace_digest, event) VALUES (?,?,?,?,?)",
-                        (event.game_id, event.game_name, adapter_version, trace_digest, encoded),
+                        "(episode_uid, environment_id, adapter_version, trace_digest, event) VALUES (?,?,?,?,?)",
+                        (event.episode_uid, event.environment_id, adapter_version, trace_digest, encoded),
                     )
                     conn.commit()
                 return not unchanged
@@ -434,15 +434,15 @@ class SQLiteTraceStore:
                 conn.close()
 
     def iter_rating_events(
-        self, *, game_name: str, adapter_version: str
+        self, *, environment_id: str, adapter_version: str
     ) -> Iterator[RatingEvent]:
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                "SELECT event FROM rating_events WHERE game_name = ? AND adapter_version = ? "
-                "ORDER BY game_id",
-                (game_name, adapter_version),
+                "SELECT event FROM rating_events WHERE environment_id = ? AND adapter_version = ? "
+                "ORDER BY episode_uid",
+                (environment_id, adapter_version),
             ).fetchall()
         finally:
             conn.close()
@@ -450,7 +450,7 @@ class SQLiteTraceStore:
             yield RatingEvent.model_validate_json(row["event"])
 
     def put_rating_snapshot(
-        self, snapshot: RatingSnapshot, *, game_name: str, adapter_version: str
+        self, snapshot: RatingSnapshot, *, environment_id: str, adapter_version: str
     ) -> None:
         with self._write_lock:
             conn = self._connect()
@@ -458,22 +458,22 @@ class SQLiteTraceStore:
                 self._ensure_schema(conn)
                 conn.execute(
                     "INSERT OR REPLACE INTO rating_snapshots "
-                    "(game_name, adapter_version, snapshot) VALUES (?,?,?)",
-                    (game_name, adapter_version, snapshot.model_dump_json()),
+                    "(environment_id, adapter_version, snapshot) VALUES (?,?,?)",
+                    (environment_id, adapter_version, snapshot.model_dump_json()),
                 )
                 conn.commit()
             finally:
                 conn.close()
 
     def get_rating_snapshot(
-        self, *, game_name: str, adapter_version: str
+        self, *, environment_id: str, adapter_version: str
     ) -> RatingSnapshot | None:
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             row = conn.execute(
-                "SELECT snapshot FROM rating_snapshots WHERE game_name = ? AND adapter_version = ?",
-                (game_name, adapter_version),
+                "SELECT snapshot FROM rating_snapshots WHERE environment_id = ? AND adapter_version = ?",
+                (environment_id, adapter_version),
             ).fetchone()
         finally:
             conn.close()
@@ -496,16 +496,16 @@ class SQLiteTraceStore:
                 try:
                     self._ensure_schema(conn)
                     conn.execute(
-                        "INSERT INTO traces (game_id, game_name, experiment_name,"
+                        "INSERT INTO episodes (episode_uid, environment_id, experiment_name,"
                         " config, events, final_state, metrics, manifest)"
                         " VALUES (?,?,?,?,?,?,?,?)",
                         (canary, "__smoke__", "__smoke__", "{}", "[]", "{}", "{}", "{}"),
                     )
                     conn.commit()
                     found = conn.execute(
-                        "SELECT game_id FROM traces WHERE game_id = ?", (canary,)
+                        "SELECT episode_uid FROM episodes WHERE episode_uid = ?", (canary,)
                     ).fetchone()
-                    conn.execute("DELETE FROM traces WHERE game_id = ?", (canary,))
+                    conn.execute("DELETE FROM episodes WHERE episode_uid = ?", (canary,))
                     conn.commit()
                 finally:
                     conn.close()
@@ -528,4 +528,4 @@ class SQLiteTraceStore:
         )
 
 
-register_store("sqlite", SQLiteTraceStore)
+register_store("sqlite", SQLiteEpisodeStore)

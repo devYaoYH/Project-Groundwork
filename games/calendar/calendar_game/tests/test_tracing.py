@@ -1,4 +1,4 @@
-"""Integration tests for event log and tracing in the calendar scheduling game."""
+"""Integration tests for event log and tracing in the calendar scheduling environment."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from calendar_game.calendar import Calendar
 
 def run_dry(seed=42, num_meetings=1, **kwargs):
     config = CalendarGameConfig(seed=seed, num_meetings=num_meetings, **kwargs)
-    game = CalendarGame(config, dry_run=True)
-    return game.run()
+    environment = CalendarGame(config, dry_run=True)
+    return environment.run()
 
 
 def events_of_type(trace, event_type):
@@ -28,7 +28,7 @@ def data_of_type(trace, event_type):
 
 
 def _event_as_dict(event):
-    """Convert a GameEvent (Pydantic model or dict) to a plain dict."""
+    """Convert a Event (Pydantic model or dict) to a plain dict."""
     if isinstance(event, dict):
         return event
     return {"type": event.type, "data": event.data}
@@ -144,7 +144,7 @@ def test_calendar_render_in_turn_start():
 
 
 def test_replay_reconstructs_state():
-    """calendar_render_after in the last batch_applied matches final_state calendars."""
+    """calendar_render_after in the last cell_applied matches final_state calendars."""
     trace = run_dry(seed=42)
     events = _normalize_events(trace)
 
@@ -162,11 +162,11 @@ def test_replay_reconstructs_state():
         cal.meeting_participants = meeting_participants
         expected_render = cal.render()
 
-        # Find last batch_applied or fallback_applied for this agent
+        # Find last cell_applied or fallback_applied for this agent
         # (fallback_applied uses calendar_renders_after[str(agent_id)])
         last_render: str | None = None
         for e in events:
-            if e["type"] == "batch_applied" and e["data"].get("agent_id") == agent_id:
+            if e["type"] == "cell_applied" and e["data"].get("agent_id") == agent_id:
                 last_render = e["data"]["calendar_render_after"]
             elif e["type"] == "fallback_applied":
                 renders = e["data"].get("calendar_renders_after", {})
@@ -179,7 +179,7 @@ def test_replay_reconstructs_state():
 
 
 def test_resolution_event_present():
-    """2-meeting game has exactly 2 resolution events with required fields."""
+    """2-meeting environment has exactly 2 resolution events with required fields."""
     trace = run_dry(seed=42, num_meetings=2)
     events = _normalize_events(trace)
 

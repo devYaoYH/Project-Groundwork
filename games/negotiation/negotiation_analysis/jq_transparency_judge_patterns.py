@@ -1,9 +1,9 @@
 """Judge pattern prevalence comparison: main cohort vs full-transparency subset.
 
 Combines the canonical taxonomy alias index with the transparency-specific label
-mappings to compute LLM-judge pattern rates for two 120-game subsets of the
+mappings to compute LLM-judge pattern rates for two 120-environment subsets of the
 Qwen 3.5 Flash x GPT-5 Mini pair:
-  - Baseline:          main 720-game cohort cross-play slice (run 6cb004cb)
+  - Baseline:          main 720-environment cohort cross-play slice (run 6cb004cb)
   - Full-transparency: both agents receive full project info upfront (runs 56abe7a8,
                        ac21edea), covering all 3 MC ratios x 2 stability x 2 rotation
 
@@ -23,13 +23,13 @@ PREREQUISITES
 -------------
 The following files must exist before running this script:
   1. data/experiment_traces.json
-       Primary game cache. Refresh with: uv run python scripts/cache_experiment_data.py
-  2. judge/output/raw/<game_id>.json  (one per game)
+       Primary environment cache. Refresh with: uv run python scripts/cache_experiment_data.py
+  2. judge/output/raw/<episode_uid>.json  (one per environment)
        Raw MiniMax judge outputs. Produce with:
          uv run python -m judge.run_distributed \
            --provider openrouter --model minimax/minimax-m2.5 \
            --run-ids "56abe7a8" "ac21edea" --cache
-       The 720-game baseline raw files are already present from the main judge run.
+       The 720-environment baseline raw files are already present from the main judge run.
   3. judge/output/taxonomy.json
        Canonical 16-pattern taxonomy. Produced during judge consolidation.
   4. judge/output/taxonomy_full_transparency.json
@@ -87,11 +87,11 @@ def build_combined_lookup(taxonomy, transp_taxonomy_path: Path) -> dict[str, str
 
 
 def compute_pattern_rates(
-    game_ids: set[str],
+    episode_uids: set[str],
     lookup: dict[str, str],
     taxonomy,
 ) -> dict:
-    """Compute per-pattern rates from raw judge output for a set of game IDs.
+    """Compute per-pattern rates from raw judge output for a set of environment IDs.
 
     Returns dict with keys:
         total_rounds, suboptimal_rounds, optimal_rounds,
@@ -102,7 +102,7 @@ def compute_pattern_rates(
     neg_counts: Counter = Counter()
     pos_counts: Counter = Counter()
 
-    for gid in game_ids:
+    for gid in episode_uids:
         path = RAW_DIR / f"{gid}.json"
         if not path.exists():
             continue
@@ -139,12 +139,12 @@ def analyze() -> dict:
 
     games = load_experiment_data()
     transp_ids = {
-        g["game_id"] for g in games
-        if g.get("experiment_run_id") in TRANSPARENCY_RUN_IDS
+        g["episode_uid"] for g in games
+        if g.get("episode_id") in TRANSPARENCY_RUN_IDS
     }
     baseline_ids = {
-        g["game_id"] for g in games
-        if g.get("experiment_run_id") == BASELINE_PAIR_RUN_ID
+        g["episode_uid"] for g in games
+        if g.get("episode_id") == BASELINE_PAIR_RUN_ID
         and (
             "gpt5m-qwen" in g.get("experiment_label", "")
             or "qwen-gpt5m" in g.get("experiment_label", "")

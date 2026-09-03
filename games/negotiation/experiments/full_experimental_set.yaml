@@ -2,13 +2,13 @@ name: full_experimental_configuration
 description: Baseline matched factorial of (stable/shifting) x (collaborative/competitive) x (talk/no-talk)
 
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: default
   agents:
     - {type: llm, model: claude-sonnet-4-5}
     - {type: llm, model: claude-sonnet-4-5}
 
-batches:
+cells:
   - label: stable_collaborative
     count: 4
     config:

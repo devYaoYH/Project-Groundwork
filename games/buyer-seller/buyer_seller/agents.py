@@ -1,8 +1,8 @@
-"""LLM agents for the buyer-seller bargaining game.
+"""LLM agents for the buyer-seller bargaining environment.
 
 Each agent's system prompt states only what that side is entitled to know: the
 seller is told its cost and that the buyer's valuation is unknown, and the buyer
-the reverse. The prompts are the second line of defence — the game's observation
+the reverse. The prompts are the second line of defence — the environment's observation
 builders are the first, and never hand over the other side's private value.
 
 Both parsers are deliberately forgiving. A bargaining trajectory is expensive to
@@ -21,7 +21,7 @@ from typing import Any
 from a2a_engine import LLMAgent
 
 SELLER_SYSTEM = """\
-You are the SELLER in a multi-round bargaining game.
+You are the SELLER in a multi-round bargaining environment.
 
 Your private information:
 - Your cost per unit is {cost:.2f}. Selling below this loses you money.
@@ -29,7 +29,7 @@ Your private information:
 - You do NOT know the buyer's valuation. Infer it from what they accept and reject.
 
 Rules:
-- The game lasts at most {max_rounds} rounds. Each round you name a price and the
+- The environment lasts at most {max_rounds} rounds. Each round you name a price and the
   buyer accepts or rejects.
 - Payoffs are discounted by {discount:.2f} per round elapsed, so a deal now is
   worth more than the same deal later.
@@ -45,7 +45,7 @@ MONOTONIC_RULE = (
 )
 
 BUYER_SYSTEM = """\
-You are the BUYER in a multi-round bargaining game.
+You are the BUYER in a multi-round bargaining environment.
 
 Your private information:
 - Each unit is worth {value:.2f} to you. Paying more than this loses you money.
@@ -53,7 +53,7 @@ Your private information:
 - You do NOT know the seller's cost. Infer it from how their offers move.
 
 Rules:
-- The game lasts at most {max_rounds} rounds. Each round the seller names a price
+- The environment lasts at most {max_rounds} rounds. Each round the seller names a price
   and you accept or reject.
 - Payoffs are discounted by {discount:.2f} per round elapsed, so holding out for a
   better price costs you value. Rejecting to the deadline earns you zero.
@@ -178,7 +178,7 @@ class BuyerAgent(LLMAgent):
         reject = bool(_REJECT_RE.search(body))
         if accept == reject:
             # Ambiguous or empty: reject, which is the status-quo action. It
-            # keeps the game running and never commits the buyer to a trade the
+            # keeps the environment running and never commits the buyer to a trade the
             # model did not clearly ask for.
             return {"accept": False, "text": body.strip()[:280], "parse_failed": True}
         return {"accept": accept, "text": body.strip()[:280], "parse_failed": False}

@@ -2,8 +2,8 @@
 
 Runs the four core failure-mode analyses (stable/shifting gap, stubborn anchoring,
 perfunctory fairness, referential binding) on:
-  - The Qwen×GPT-5 Mini slice of the main 720-game cohort (same pair, fair comparison)
-  - The 120-game full-transparency subset (same pair, all conditions)
+  - The Qwen×GPT-5 Mini slice of the main 720-environment cohort (same pair, fair comparison)
+  - The 120-environment full-transparency subset (same pair, all conditions)
 
 Usage:
     uv run python -m scripts.analysis.jq_transparency_failure_modes
@@ -14,7 +14,7 @@ import pandas as pd
 from negotiation_analysis.data_loader import (
     load_dataset,
     MAIN_COHORT_RUN_IDS,
-    TOMBSTONED_GAME_IDS,
+    TOMBSTONED_EPISODE_UID_PREFIXES,
 )
 from negotiation_analysis.models import NegotiationDataset
 from negotiation_analysis.rq13_anchoring import analyze_anchoring
@@ -34,8 +34,8 @@ BASELINE_PAIR_RUN_ID = "6cb004cb-1097-4c87-9003-679a41343733"
 def _filter_dataset(ds: NegotiationDataset, run_ids: frozenset, pair_substring: str = "") -> NegotiationDataset:
     games = [
         g for g in ds.games
-        if g.config.get("experiment_run_id") in run_ids
-        and g.game_id not in TOMBSTONED_GAME_IDS
+        if g.config.get("episode_id") in run_ids
+        and g.episode_uid not in TOMBSTONED_EPISODE_UID_PREFIXES
         and (pair_substring == "" or pair_substring in g.label)
     ]
     return NegotiationDataset(games)

@@ -3,8 +3,8 @@
 Layout is unchanged from the pre-merge framework so existing tooling and the
 calendar analysis scripts keep working:
 
-    <results_dir>/<experiment_name>/<game_id>.json
-    <results_dir>/<experiment_name>/<game_id>.manifest.json
+    <results_dir>/<experiment_name>/<episode_uid>.json
+    <results_dir>/<experiment_name>/<episode_uid>.manifest.json
     <results_dir>/<experiment_name>/_run_manifest.jsonl
 
 ``.metadata.json`` is still written as a compatibility alias for the manifest,
@@ -20,16 +20,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from a2a_engine.manifest import RunManifest
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
-from a2a_engine.tracing import write_trace
+from a2a_engine.tracing import write_episode
 
 _manifest_lock = threading.Lock()
 
 
 class LocalJSONStore:
-    """Writes traces and manifests to the local filesystem."""
+    """Writes episodes and manifests to the local filesystem."""
 
     name = "local"
 
@@ -38,8 +38,8 @@ class LocalJSONStore:
 
     # --- write ---
 
-    def put_trace(self, trace: GameTraceBase, manifest: RunManifest) -> str:
-        trace_path = write_trace(
+    def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
+        trace_path = write_episode(
             trace, self.results_dir, experiment_name=manifest.experiment_name
         )
         manifest.local_trace_path = str(trace_path)
@@ -53,7 +53,7 @@ class LocalJSONStore:
         self.write_manifest(manifest, trace_path)
         return str(trace_path)
 
-    def write_manifest(self, manifest: RunManifest, trace_path: Path) -> Path:
+    def write_manifest(self, manifest: EpisodeManifest, trace_path: Path) -> Path:
         """Write the sidecar manifest and append to the experiment's JSONL index."""
         blob = manifest.model_dump_json(indent=2)
         manifest_path = trace_path.with_name(f"{trace_path.stem}.manifest.json")
@@ -63,7 +63,7 @@ class LocalJSONStore:
         self._append_index(manifest)
         return manifest_path
 
-    def _append_index(self, manifest: RunManifest) -> None:
+    def _append_index(self, manifest: EpisodeManifest) -> None:
         path = self.results_dir / manifest.experiment_name / "_run_manifest.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with _manifest_lock:
@@ -73,12 +73,12 @@ class LocalJSONStore:
 
     # --- read ---
 
-    def get_trace(self, game_id: str) -> GameTraceBase | None:
-        for path in self.results_dir.rglob(f"{game_id}.json"):
-            return GameTraceBase.model_validate_json(path.read_text())
+    def get_episode(self, episode_uid: str) -> EpisodeTrace | None:
+        for path in self.results_dir.rglob(f"{episode_uid}.json"):
+            return EpisodeTrace.model_validate_json(path.read_text())
         return None
 
-    def list_traces(
+    def list_episodes(
         self,
         filters: dict[str, Any] | None = None,
         limit: int = 50,
@@ -123,11 +123,11 @@ class LocalJSONStore:
 
     # --- resume support ---
 
-    def completed_run_ids(self, experiment_name: str) -> set[str]:
+    def completed_episode_ids(self, experiment_name: str) -> set[str]:
         """Run ids already persisted, for ``--resume``.
 
         Reads the JSONL index first, then falls back to scanning sidecars and
-        traces, so resume still works against results produced before the
+        episodes, so resume still works against results produced before the
         manifest existed.
         """
         base = self.results_dir / experiment_name
@@ -156,17 +156,17 @@ class LocalJSONStore:
             if path.name.endswith((".manifest.json", ".metadata.json")):
                 continue
             try:
-                trace = GameTraceBase.model_validate_json(path.read_text())
+                trace = EpisodeTrace.model_validate_json(path.read_text())
             except Exception:
                 continue
-            if trace.config.experiment_run_id:
-                completed.add(str(trace.config.experiment_run_id))
+            if trace.config.episode_id:
+                completed.add(str(trace.config.episode_id))
         return completed
 
 
 def _add_if_present(completed: set[str], record: dict) -> None:
     """Count a run as complete only if its trace file still exists."""
-    run_id = record.get("experiment_run_id")
+    run_id = record.get("episode_id")
     trace_path = record.get("local_trace_path")
     if run_id and (not trace_path or Path(trace_path).exists()):
         completed.add(str(run_id))

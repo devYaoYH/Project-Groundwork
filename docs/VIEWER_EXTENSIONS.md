@@ -1,11 +1,11 @@
 # Viewer extensions
 
-The local viewer works for every `GameTraceBase` without game code: message
+The local viewer works for every `EpisodeTrace` without environment code: message
 events render as a conversation and all other event payloads have a safe JSON
 fallback. It also shows trace-derived metric artifacts and OTel spans when a
 trace is opened from the local stack.
 
-Add a renderer only when a game benefits from a compact domain-specific view.
+Add a renderer only when a environment benefits from a compact domain-specific view.
 Renderers are browser modules registered by event type; they receive the full
 event and return a DOM node. They are a presentation layer only: analysis must
 continue to work from the durable event payload.
@@ -29,7 +29,7 @@ import "./renderers/my_game.js";
 ```
 
 Use namespaced event types such as `my_game.proposal` when a generic word could
-collide with another game. The renderer registry selects an exact event-type
+collide with another environment. The renderer registry selects an exact event-type
 match, otherwise it uses the default JSON renderer. This intentionally keeps
 the release viewer static and local; a future packaged viewer-adapter boundary
 can load extensions without editing the shared entrypoint.

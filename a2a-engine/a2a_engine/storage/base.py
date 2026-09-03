@@ -1,11 +1,11 @@
-"""TraceStore — pluggable persistence for game traces.
+"""EpisodeStore — pluggable persistence for environment episodes.
 
 Mirrors the ``a2a_engine.ratings.RatingStore`` Protocol pattern already used in
 this codebase: one narrow interface, several backends, chosen by config rather
 than by CLI flag or hardcoded import.
 
 The local JSON store is always the ground truth on disk. Remote backends (S3,
-Firestore) are configured per game/experiment and are best-effort: a remote
+Firestore) are configured per environment/experiment and are best-effort: a remote
 failure is recorded in the manifest and never fails a run, which preserves the
 behavior the calendar benchmark already relied on.
 """
@@ -18,12 +18,12 @@ from typing import Any, Callable, Iterator, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from a2a_engine.manifest import RunManifest
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.schemas import EpisodeTrace
 
 
 class StoreCheck(BaseModel):
-    """Result of a sink reachability probe. See ``TraceStore.check``."""
+    """Result of a sink reachability probe. See ``EpisodeStore.check``."""
 
     backend: str
     ok: bool
@@ -39,20 +39,20 @@ class StoreCheck(BaseModel):
 
 
 @runtime_checkable
-class TraceStore(Protocol):
-    """Persistence interface for game traces."""
+class EpisodeStore(Protocol):
+    """Persistence interface for environment episodes."""
 
     name: str
 
-    def put_trace(self, trace: GameTraceBase, manifest: RunManifest) -> str:
+    def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
         """Persist a trace + its manifest. Returns a URI identifying the record."""
         ...
 
-    def get_trace(self, game_id: str) -> GameTraceBase | None:
-        """Load a single trace by game_id, or None if absent."""
+    def get_episode(self, episode_uid: str) -> EpisodeTrace | None:
+        """Load a single trace by episode_uid, or None if absent."""
         ...
 
-    def list_traces(
+    def list_episodes(
         self,
         filters: dict[str, Any] | None = None,
         limit: int = 50,
@@ -70,7 +70,7 @@ class TraceStore(Protocol):
         preflight never litters a shared bucket or collection.
 
         This is what ``a2a-run --smoke-test`` calls before running anything, so
-        a misconfigured sink surfaces in seconds rather than after a batch has
+        a misconfigured sink surfaces in seconds rather than after a cell has
         burned its budget.
         """
         ...
@@ -104,16 +104,16 @@ def check_store(store: Any) -> StoreCheck:
     return result
 
 
-def iter_traces(store: Any, *, filters: dict[str, Any] | None = None,
-                limit: int | None = None) -> Iterator[GameTraceBase]:
-    """Yield traces from any store by paging ``list_traces`` and hydrating each.
+def iter_episodes(store: Any, *, filters: dict[str, Any] | None = None,
+                limit: int | None = None) -> Iterator[EpisodeTrace]:
+    """Yield episodes from any store by paging ``list_episodes`` and hydrating each.
 
-    Backends may override with something more direct (``SQLiteTraceStore`` reads
+    Backends may override with something more direct (``SQLiteEpisodeStore`` reads
     rows straight out of the table); this generic path exists so that
-    ``GameDataset.from_store`` works against every backend, including ones
+    ``EpisodeDataset.from_store`` works against every backend, including ones
     contributed later.
     """
-    direct = getattr(store, "iter_traces", None)
+    direct = getattr(store, "iter_episodes", None)
     if direct is not None:
         yielded = 0
         for trace in direct(filters=filters):
@@ -126,12 +126,12 @@ def iter_traces(store: Any, *, filters: dict[str, Any] | None = None,
     seen = 0
     cursor: str | None = None
     while True:
-        rows, cursor = store.list_traces(filters, 100, cursor)
+        rows, cursor = store.list_episodes(filters, 100, cursor)
         for row in rows:
-            game_id = row.get("game_id")
-            if not game_id:
+            episode_uid = row.get("episode_uid")
+            if not episode_uid:
                 continue
-            trace = store.get_trace(str(game_id))
+            trace = store.get_episode(str(episode_uid))
             if trace is None:
                 continue
             yield trace
@@ -144,11 +144,11 @@ def iter_traces(store: Any, *, filters: dict[str, Any] | None = None,
 
 # --- backend registry -------------------------------------------------------
 
-_BACKENDS: dict[str, Callable[..., TraceStore]] = {}
+_BACKENDS: dict[str, Callable[..., EpisodeStore]] = {}
 
 
-def register_store(name: str, factory: Callable[..., TraceStore]) -> None:
-    """Register a TraceStore factory under a backend name."""
+def register_store(name: str, factory: Callable[..., EpisodeStore]) -> None:
+    """Register a EpisodeStore factory under a backend name."""
     _BACKENDS[name] = factory
 
 
@@ -156,8 +156,8 @@ def list_stores() -> list[str]:
     return sorted(_BACKENDS)
 
 
-def make_store(spec: dict[str, Any] | None, *, results_dir: str | Path) -> TraceStore:
-    """Build a TraceStore from an experiment's resolved ``storage:`` block.
+def make_store(spec: dict[str, Any] | None, *, results_dir: str | Path) -> EpisodeStore:
+    """Build a EpisodeStore from an experiment's resolved ``storage:`` block.
 
         storage:
           backend: sqlite
@@ -167,8 +167,8 @@ def make_store(spec: dict[str, Any] | None, *, results_dir: str | Path) -> Trace
     interpolation happen in ``a2a_engine.experiment.resolve_storage``, so this
     function only maps a backend name onto its factory.
 
-    An absent or empty spec yields the local JSON store, so a game that declares
-    nothing still gets reproducible on-disk traces.
+    An absent or empty spec yields the local JSON store, so a environment that declares
+    nothing still gets reproducible on-disk episodes.
     """
     spec = dict(spec or {})
     backend = spec.pop("backend", "local")

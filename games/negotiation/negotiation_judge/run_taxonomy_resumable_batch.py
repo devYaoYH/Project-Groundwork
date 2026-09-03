@@ -1,11 +1,11 @@
-"""Resumable game-level taxonomy labeling.
+"""Resumable environment-level taxonomy labeling.
 
-Each API call labels one complete game and writes one raw JSON artifact. This
+Each API call labels one complete environment and writes one raw JSON artifact. This
 keeps concurrent calls from writing to the same file and makes the run safe to
 resume. Consolidation flattens successful raw artifacts into one CSV.
 
 Usage:
-    uv run python -m judge.run_taxonomy_resumable_batch \
+    uv run python -m judge.run_taxonomy_resumable_cell \
       --sample judge/output/main720_taxonomy_v3.json \
       --model publishers/google/models/gemini-3-flash-preview \
       --temperature 0 \
@@ -195,8 +195,8 @@ def call_model_full(
     ), PROVIDER
 
 
-def raw_path_for_game(raw_dir: Path, game_id: str) -> Path:
-    return raw_dir / f"{game_id}.json"
+def raw_path_for_game(raw_dir: Path, episode_uid: str) -> Path:
+    return raw_dir / f"{episode_uid}.json"
 
 
 def load_successful_raw(path: Path, expected_rounds: set[int]) -> dict | None:
@@ -226,7 +226,7 @@ def atomic_write_json(path: Path, payload: dict) -> None:
 
 
 def label_game_sync(
-    game: dict,
+    environment: dict,
     system_prompt: str,
     label_ids: list[str],
     auxiliary_ids: list[str],
@@ -237,15 +237,15 @@ def label_game_sync(
     raw_dir: Path,
     force: bool,
 ) -> str:
-    game_id = game["game_id"]
-    expected_rounds = {int(round_data["round_number"]) for round_data in game["rounds"]}
-    output_path = raw_path_for_game(raw_dir, game_id)
+    episode_uid = environment["episode_uid"]
+    expected_rounds = {int(round_data["round_number"]) for round_data in environment["rounds"]}
+    output_path = raw_path_for_game(raw_dir, episode_uid)
     if not force and load_successful_raw(output_path, expected_rounds) is not None:
         return "skipped"
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": format_game_prompt(game)},
+        {"role": "user", "content": format_game_prompt(environment)},
     ]
 
     last_error: Exception | None = None
@@ -263,7 +263,7 @@ def label_game_sync(
             labels = parse_label_response(result["text"], label_ids, auxiliary_ids, expected_rounds)
             payload = {
                 "status": "success",
-                "game_id": game_id,
+                "episode_uid": episode_uid,
                 "model": model,
                 "provider": provider_name,
                 "temperature": temperature,
@@ -271,7 +271,7 @@ def label_game_sync(
                 "thinking_budget": thinking_budget,
                 "duration_s": result["duration_s"],
                 "created_at_unix": time.time(),
-                "game_metadata": {k: v for k, v in game.items() if k != "rounds"},
+                "game_metadata": {k: v for k, v in environment.items() if k != "rounds"},
                 "expected_rounds": sorted(expected_rounds),
                 "labels_by_round": {str(k): v for k, v in labels.items()},
                 "response_text": result["text"],
@@ -282,7 +282,7 @@ def label_game_sync(
             stale_error_path = output_path.with_suffix(".error.json")
             if stale_error_path.exists():
                 stale_error_path.unlink()
-            log.info("%s success: %d chars in %.1fs", game_id, len(result["text"]), result["duration_s"])
+            log.info("%s success: %d chars in %.1fs", episode_uid, len(result["text"]), result["duration_s"])
             return "success"
         except urllib.error.HTTPError as err:
             last_error = err
@@ -292,19 +292,19 @@ def label_game_sync(
             last_error = err
 
         wait = min(API_BACKOFF_BASE * (2 ** attempt), API_BACKOFF_MAX)
-        log.warning("%s failed attempt %d/%d: %s; sleeping %.1fs", game_id, attempt + 1, API_MAX_RETRIES, last_error, wait)
+        log.warning("%s failed attempt %d/%d: %s; sleeping %.1fs", episode_uid, attempt + 1, API_MAX_RETRIES, last_error, wait)
         time.sleep(wait)
 
     error_payload = {
         "status": "error",
-        "game_id": game_id,
+        "episode_uid": episode_uid,
         "model": model,
         "provider": ANTHROPIC_VERTEX_PROVIDER if model.startswith("claude-") else PROVIDER,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "thinking_budget": thinking_budget,
         "created_at_unix": time.time(),
-        "game_metadata": {k: v for k, v in game.items() if k != "rounds"},
+        "game_metadata": {k: v for k, v in environment.items() if k != "rounds"},
         "error": repr(last_error),
         "response_text": last_result.get("text") if last_result else None,
         "thinking": last_result.get("thinking") if last_result else None,
@@ -312,10 +312,10 @@ def label_game_sync(
         "response_metadata": last_result.get("response") if last_result else None,
     }
     atomic_write_json(output_path.with_suffix(".error.json"), error_payload)
-    raise RuntimeError(f"{game_id} failed after {API_MAX_RETRIES} attempts: {last_error}")
+    raise RuntimeError(f"{episode_uid} failed after {API_MAX_RETRIES} attempts: {last_error}")
 
 
-async def run_batch(
+async def run_cell(
     games: list[dict],
     system_prompt: str,
     label_ids: list[str],
@@ -331,12 +331,12 @@ async def run_batch(
     semaphore = asyncio.Semaphore(max_parallelism)
     loop = asyncio.get_event_loop()
 
-    async def run_one(game: dict) -> str:
+    async def run_one(environment: dict) -> str:
         async with semaphore:
             return await loop.run_in_executor(
                 None,
                 lambda: label_game_sync(
-                    game=game,
+                    environment=environment,
                     system_prompt=system_prompt,
                     label_ids=label_ids,
                     auxiliary_ids=auxiliary_ids,
@@ -349,15 +349,15 @@ async def run_batch(
                 ),
             )
 
-    results = await asyncio.gather(*(run_one(game) for game in games), return_exceptions=True)
+    results = await asyncio.gather(*(run_one(environment) for environment in games), return_exceptions=True)
     errors = [result for result in results if isinstance(result, Exception)]
     statuses = [result for result in results if isinstance(result, str)]
     counts = {status: statuses.count(status) for status in sorted(set(statuses))}
-    log.info("Batch complete: %s", counts)
+    log.info("Cell complete: %s", counts)
     if errors:
         for err in errors[:10]:
-            log.error("Batch item failed: %r", err)
-        raise RuntimeError(f"{len(errors)} game(s) failed; rerun the same command to resume after fixing transient issues.")
+            log.error("Cell item failed: %r", err)
+        raise RuntimeError(f"{len(errors)} environment(s) failed; rerun the same command to resume after fixing transient issues.")
 
 
 def consolidate(
@@ -369,27 +369,27 @@ def consolidate(
 ) -> None:
     rows: list[dict] = []
     missing: list[str] = []
-    by_game = {game["game_id"]: game for game in games}
-    for game_id, game in sorted(by_game.items()):
-        raw_path = raw_path_for_game(raw_dir, game_id)
-        expected_rounds = {int(round_data["round_number"]) for round_data in game["rounds"]}
+    by_game = {environment["episode_uid"]: environment for environment in games}
+    for episode_uid, environment in sorted(by_game.items()):
+        raw_path = raw_path_for_game(raw_dir, episode_uid)
+        expected_rounds = {int(round_data["round_number"]) for round_data in environment["rounds"]}
         raw = load_successful_raw(raw_path, expected_rounds)
         if raw is None:
-            missing.append(game_id)
+            missing.append(episode_uid)
             continue
         labels = {int(k): v for k, v in raw["labels_by_round"].items()}
-        for row in rows_for_game(game, labels, label_ids, auxiliary_ids):
+        for row in rows_for_game(environment, labels, label_ids, auxiliary_ids):
             row.update({
                 "label_model": raw.get("model"),
                 "label_provider": raw.get("provider"),
                 "label_temperature": raw.get("temperature"),
                 "api_duration_s": raw.get("duration_s"),
-                "experiment_label": game.get("experiment_label"),
-                "experiment_run_id": game.get("experiment_run_id"),
-                "model_a": game.get("model_a"),
-                "model_b": game.get("model_b"),
-                "mode": game.get("mode"),
-                "mc_ratio": game.get("mc_ratio"),
+                "experiment_label": environment.get("experiment_label"),
+                "episode_id": environment.get("episode_id"),
+                "model_a": environment.get("model_a"),
+                "model_b": environment.get("model_b"),
+                "mode": environment.get("mode"),
+                "mc_ratio": environment.get("mc_ratio"),
             })
             rows.append(row)
 
@@ -397,10 +397,10 @@ def consolidate(
         raise RuntimeError(f"Cannot consolidate; missing/invalid raw outputs for {len(missing)} games. First: {missing[:10]}")
 
     fieldnames = [
-        "game_id",
+        "episode_uid",
         "round_number",
         "experiment_label",
-        "experiment_run_id",
+        "episode_id",
         "model_a",
         "model_b",
         "mode",
@@ -414,7 +414,7 @@ def consolidate(
         *label_ids,
         *auxiliary_columns(auxiliary_ids),
     ]
-    rows.sort(key=lambda r: (r["game_id"], int(r["round_number"])))
+    rows.sort(key=lambda r: (r["episode_uid"], int(r["round_number"])))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -424,7 +424,7 @@ def consolidate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run resumable taxonomy labels one game per raw output file.")
+    parser = argparse.ArgumentParser(description="Run resumable taxonomy labels one environment per raw output file.")
     parser.add_argument("--taxonomy", type=Path, default=DEFAULT_TAXONOMY)
     parser.add_argument("--sample", type=Path, required=True)
     parser.add_argument("--model", required=True)
@@ -454,7 +454,7 @@ def main() -> None:
     log.info("Raw dir: %s", raw_dir)
 
     if not args.consolidate_only:
-        asyncio.run(run_batch(
+        asyncio.run(run_cell(
             games=games,
             system_prompt=system_prompt,
             label_ids=label_ids,

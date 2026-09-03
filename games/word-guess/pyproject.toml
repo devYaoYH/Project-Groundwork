@@ -1,7 +1,7 @@
 [project]
 name = "word-guess"
 version = "0.1.0"
-description = "Word-guessing example game for a2a-engine."
+description = "Word-guessing example environment for a2a-engine."
 requires-python = ">=3.11"
 dependencies = [
     "a2a-engine",
@@ -13,8 +13,8 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Lets `a2a-run` discover the game without the caller importing it first.
-[project.entry-points."a2a_engine.games"]
+# Lets `a2a-run` discover the environment without the caller importing it first.
+[project.entry-points."a2a_engine.environments"]
 word_guess = "word_guess"
 
 [tool.hatch.build.targets.wheel]

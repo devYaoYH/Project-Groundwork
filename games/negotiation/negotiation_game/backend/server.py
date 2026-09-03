@@ -1,5 +1,5 @@
 """
-HTTP server for the Negotiation Game.
+HTTP server for the Negotiation Environment.
 
 Uses http.server for REST endpoints. Event delivery via polling.
 No external dependencies required.
@@ -37,7 +37,7 @@ from negotiation_game.backend.agents import make_agent
 from negotiation_game.backend.agents.human import HumanAgent
 from negotiation_game.backend.storage import (
     save_game, load_all_games, save_to_firestore, firestore_available,
-    list_traces, get_trace, save_visitor_signup, update_visitor_result,
+    list_episodes, get_episode, save_visitor_signup, update_visitor_result,
 )
 
 from pathlib import Path
@@ -51,12 +51,12 @@ _ALLOWED_POOL_DIR = _PROJECT_ROOT / "data" / "scenario_pools"
 
 games = load_all_games()
 game_events = {}
-game_configs: dict[str, dict] = {}  # game_id -> raw config payload (for Firestore)
-game_consent: dict[str, bool] = {}  # game_id -> consent flag
-human_agents: dict[str, dict[str, HumanAgent]] = {}  # game_id -> agent_id -> HumanAgent
-game_engines: dict[str, GameEngine] = {}  # game_id -> engine (for stop)
-batch_swaps: dict[str, bool] = {}  # game_id -> whether turn order was swapped
-game_visitors: dict[str, str] = {}  # game_id -> visitor email (demo signups)
+game_configs: dict[str, dict] = {}  # episode_uid -> raw config payload (for Firestore)
+game_consent: dict[str, bool] = {}  # episode_uid -> consent flag
+human_agents: dict[str, dict[str, HumanAgent]] = {}  # episode_uid -> agent_id -> HumanAgent
+game_engines: dict[str, GameEngine] = {}  # episode_uid -> engine (for stop)
+cell_swaps: dict[str, bool] = {}  # episode_uid -> whether turn order was swapped
+game_visitors: dict[str, str] = {}  # episode_uid -> visitor email (demo signups)
 
 # M/C ratios sampled when a request asks for target_mc_ratio: "random".
 # Matches the competitive / mixed / collaborative cells from the paper.
@@ -64,7 +64,7 @@ RANDOM_MC_CHOICES = (0.5, 0.8, 1.0)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# --- Async game runner ---
+# --- Async environment runner ---
 _loop = None
 
 
@@ -78,7 +78,7 @@ def get_loop():
 
 def run_game_async(config, agent_a, agent_b, agents_cfg, consent, experiment_label="", visitor_email=""):
     engine = GameEngine(config, agent_a, agent_b)
-    gid = config.game_id
+    gid = config.episode_uid
 
     # Build firestore config AFTER engine init (pool may update config fields)
     firestore_cfg = _build_firestore_cfg(config, agents_cfg, experiment_label)
@@ -112,7 +112,7 @@ def run_game_async(config, agent_a, agent_b, agents_cfg, consent, experiment_lab
     engine.on_event(on_event)
 
     async def run():
-        log.info("[%s] game starting (%s)", gid[:8], config.mode.value)
+        log.info("[%s] environment starting (%s)", gid[:8], config.mode.value)
         try:
             result = await engine.run_game()
             games[gid] = result
@@ -130,12 +130,12 @@ def run_game_async(config, agent_a, agent_b, agents_cfg, consent, experiment_lab
                 game_visitors.pop(gid, None)
             human_agents.pop(gid, None)
             game_engines.pop(gid, None)
-            log.info("[%s] game complete — A=%.1f B=%.1f",
+            log.info("[%s] environment complete — A=%.1f B=%.1f",
                      gid[:8], result["agent_a_cumulative_reward"],
                      result["agent_b_cumulative_reward"])
         except Exception as e:
             traceback.print_exc()
-            log.error("[%s] game error: %s", gid[:8], e)
+            log.error("[%s] environment error: %s", gid[:8], e)
             ev = {"type": "error", "data": {"message": str(e)}}
             game_events[gid].append(ev)
             game_engines.pop(gid, None)
@@ -207,7 +207,7 @@ def _build_firestore_cfg(config: GameConfig, agents_cfg: list[dict], experiment_
         "full_transparency": config.full_transparency,
         "named_projects": config.named_projects,
         "experiment_label": experiment_label,
-        "experiment_run_id": config.experiment_run_id,
+        "episode_id": config.episode_id,
         "experiment_name": config.experiment_name,
         "git_hash": config.git_hash,
     }
@@ -238,7 +238,7 @@ def _validate_visitor_email(normalized: dict) -> str:
     is_demo = normalized.get("experiment_label") == "poster_demo"
     if not email:
         if is_demo:
-            raise ValueError("visitor_email is required to play the demo — enter your email to try the game")
+            raise ValueError("visitor_email is required to play the demo — enter your email to try the environment")
         return ""
     if not _EMAIL_RE.match(email) or len(email) > 254:
         raise ValueError(f"visitor_email does not look like a valid email address: {email!r}")
@@ -246,8 +246,8 @@ def _validate_visitor_email(normalized: dict) -> str:
 
 
 def _start_single_game(body: dict) -> dict:
-    """Create and launch a single game from a normalized config body.
-    Returns {"game_id": ..., "status": "started"}.
+    """Create and launch a single environment from a normalized config body.
+    Returns {"episode_uid": ..., "status": "started"}.
     """
     normalized = _normalize_config(body)
     if normalized.get("scenario_pool_path"):
@@ -286,7 +286,7 @@ def _start_single_game(body: dict) -> dict:
         scenario_pool_path=normalized.get("scenario_pool_path"),
         target_mc_ratio=_resolve_target_mc(normalized.get("target_mc_ratio") or normalized.get("mc_ratio")),
         rotate_projects=normalized.get("rotate_projects", False),
-        experiment_run_id=normalized.get("experiment_run_id"),
+        episode_id=normalized.get("episode_id"),
         experiment_name=normalized.get("experiment_name"),
         git_hash=normalized.get("git_hash"),
     )
@@ -303,10 +303,10 @@ def _start_single_game(body: dict) -> dict:
     if isinstance(agent_b_impl, HumanAgent):
         human_agents_for_game["agent_b"] = agent_b_impl
     if human_agents_for_game:
-        human_agents[config.game_id] = human_agents_for_game
+        human_agents[config.episode_uid] = human_agents_for_game
 
-    log.info("[%s] game start — agents: %s vs %s (first_speaker=%d, seed=%s, swapped=%s)",
-             config.game_id[:8],
+    log.info("[%s] environment start — agents: %s vs %s (first_speaker=%d, seed=%s, swapped=%s)",
+             config.episode_uid[:8],
              agents_cfg[0].get("type", "random"),
              agents_cfg[1].get("type", "random"),
              fs, config.seed, config.swapped)
@@ -314,7 +314,7 @@ def _start_single_game(body: dict) -> dict:
     run_game_async(config, agent_a_impl, agent_b_impl, agents_cfg, consent,
                    experiment_label=normalized.get("experiment_label", ""),
                    visitor_email=visitor_email)
-    return {"game_id": config.game_id, "status": "started"}
+    return {"episode_uid": config.episode_uid, "status": "started"}
 
 
 # --- Static file serving ---
@@ -371,7 +371,7 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
             results = []
             for gid, data in games.items():
                 results.append({
-                    "game_id": gid,
+                    "episode_uid": gid,
                     "mode": data.get("mode", "?"),
                     "num_rounds": data.get("num_rounds", 0),
                     "agent_a_reward": data.get("agent_a_cumulative_reward", 0),
@@ -379,24 +379,24 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 })
             for gid in game_events:
                 if gid not in games:
-                    results.append({"game_id": gid, "mode": "in_progress",
+                    results.append({"episode_uid": gid, "mode": "in_progress",
                                     "num_rounds": 0, "agent_a_reward": 0, "agent_b_reward": 0})
             return self._json(results)
 
-        # Batch status: /api/batch/status?ids=id1,id2,id3
-        if path == "/api/batch/status":
+        # Cell status: /api/cell/status?ids=id1,id2,id3
+        if path == "/api/cell/status":
             ids_str = self._parse_query("ids")
             if not ids_str:
                 return self._json({"error": "Missing 'ids' query parameter"}, 400)
-            game_ids = [gid.strip() for gid in ids_str.split(",") if gid.strip()]
+            episode_uids = [gid.strip() for gid in ids_str.split(",") if gid.strip()]
             result_games = []
             all_done = True
-            for gid in game_ids:
+            for gid in episode_uids:
                 done = gid in games
                 if not done:
                     all_done = False
-                swapped = batch_swaps.get(gid, False)
-                entry = {"game_id": gid, "done": done, "swapped": swapped}
+                swapped = cell_swaps.get(gid, False)
+                entry = {"episode_uid": gid, "done": done, "swapped": swapped}
                 if done:
                     g = games[gid]
                     a_reward = g.get("agent_a_cumulative_reward", 0)
@@ -409,8 +409,8 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 result_games.append(entry)
             return self._json({"games": result_games, "all_done": all_done})
 
-        # Event polling: /api/game/{id}/events?after=N
-        if path.startswith("/api/game/") and path.endswith("/events"):
+        # Event polling: /api/environment/{id}/events?after=N
+        if path.startswith("/api/environment/") and path.endswith("/events"):
             gid = path.split("/")[3]
             after = int(self._parse_query("after") or "0")
             evts = game_events.get(gid, [])
@@ -420,22 +420,22 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 "done": gid in games,
             })
 
-        if path.startswith("/api/game/"):
+        if path.startswith("/api/environment/"):
             gid = path.split("/")[3]
             if gid in games:
                 return self._json(games[gid])
             if gid in game_events:
-                return self._json({"game_id": gid, "status": "in_progress",
+                return self._json({"episode_uid": gid, "status": "in_progress",
                                     "events_so_far": len(game_events[gid])})
             return self._json({"error": "Not found"}, 404)
 
-        # Dataset traces from Firestore
-        if path == "/api/traces":
+        # Dataset episodes from Firestore
+        if path == "/api/episodes":
             limit = int(self._parse_query("limit") or "50")
             start_after = self._parse_query("start_after") or None
             offset = int(self._parse_query("offset") or "0")
-            traces, total = list_traces(limit=min(limit, 200), start_after=start_after, offset=offset)
-            return self._json({"traces": traces, "count": len(traces), "total": total})
+            episodes, total = list_episodes(limit=min(limit, 200), start_after=start_after, offset=offset)
+            return self._json({"episodes": episodes, "count": len(episodes), "total": total})
 
         if path.startswith("/api/judge/"):
             from judge.storage import (
@@ -446,13 +446,13 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 return self._json({"error": "Judge Firestore not available"}, 503)
 
             parts = path.split("/")
-            # /api/judge/<game_id>/versions
+            # /api/judge/<episode_uid>/versions
             if len(parts) >= 5 and parts[4] == "versions":
-                game_id = parts[3]
-                versions = list_judgment_versions(game_id)
+                episode_uid = parts[3]
+                versions = list_judgment_versions(episode_uid)
                 return self._json({"versions": versions})
 
-            # /api/judge/<game_id>/version/<doc_id>  (doc_id may contain __)
+            # /api/judge/<episode_uid>/version/<doc_id>  (doc_id may contain __)
             if len(parts) >= 5 and parts[4] == "version":
                 doc_id = "/".join(parts[5:])
                 judgment = get_judgment_by_doc_id(doc_id)
@@ -460,16 +460,16 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                     return self._json(_decompress_judgment_transcript(judgment))
                 return self._json({"error": "No judgment found"}, 404)
 
-            # /api/judge/<game_id>  — latest version
-            game_id = parts[3]
-            judgment = get_judgment(game_id)
+            # /api/judge/<episode_uid>  — latest version
+            episode_uid = parts[3]
+            judgment = get_judgment(episode_uid)
             if judgment:
                 return self._json(_decompress_judgment_transcript(judgment))
             return self._json({"error": "No judgment found"}, 404)
 
-        if path.startswith("/api/traces/"):
+        if path.startswith("/api/episodes/"):
             trace_id = path.split("/")[3]
-            trace = get_trace(trace_id)
+            trace = get_episode(trace_id)
             if trace:
                 # Reconstruct transcript from events for V2+ schemas
                 schema_version = trace.get("schema_version", 1)
@@ -519,15 +519,15 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/")
 
-        # Guard all game-launching endpoints with LAUNCH_SECRET
-        _launch_paths = {"/api/game/start", "/api/batch/start",
+        # Guard all environment-launching endpoints with LAUNCH_SECRET
+        _launch_paths = {"/api/environment/start", "/api/cell/start",
                          "/api/scenario/generate", "/api/scenario/oracle-solve",
                          "/api/scenario/name-projects"}
         if path in _launch_paths and not self._check_launch_secret():
             return self._json({"error": "Unauthorized: missing or invalid X-Launch-Secret header"}, 401)
 
-        # Single game start (backward compatible)
-        if path == "/api/game/start":
+        # Single environment start (backward compatible)
+        if path == "/api/environment/start":
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             try:
@@ -536,8 +536,8 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             return self._json(result)
 
-        # Batch start
-        if path == "/api/batch/start":
+        # Cell start
+        if path == "/api/cell/start":
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
 
@@ -549,20 +549,20 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
             balance = body.get("balance_turn_order", False)
             experiment_label = body.get("experiment_label", "")
 
-            # Reject human agents in batch
+            # Reject human agents in cell
             agents_cfg = config.get("agents", [
                 config.get("agent_a", {"type": "random"}),
                 config.get("agent_b", {"type": "random"}),
             ])
             for ac in agents_cfg:
                 if ac.get("type") == "human":
-                    return self._json({"error": "Human agents are not supported in batch mode"}, 400)
+                    return self._json({"error": "Human agents are not supported in cell mode"}, 400)
 
-            # Batch-level seed for deterministic per-game seed generation
-            batch_seed = body.get("seed")
-            rng = random.Random(batch_seed)
+            # Cell-level seed for deterministic per-environment seed generation
+            cell_seed = body.get("seed")
+            rng = random.Random(cell_seed)
 
-            game_ids = []
+            episode_uids = []
             swapped_flags = []
             last_pair_seed = None
 
@@ -577,7 +577,7 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                         last_pair_seed = rng.randint(0, 2**31 - 1)
                         game_config["seed"] = last_pair_seed
                     else:
-                        # Odd index: reuse seed from previous (non-swapped) game
+                        # Odd index: reuse seed from previous (non-swapped) environment
                         game_config["seed"] = last_pair_seed
                 else:
                     game_config["seed"] = rng.randint(0, 2**31 - 1)
@@ -595,16 +595,16 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     result = _start_single_game(game_config)
                 except ValueError as e:
-                    return self._json({"error": str(e), "started_game_ids": game_ids}, 400)
-                gid = result["game_id"]
-                game_ids.append(gid)
+                    return self._json({"error": str(e), "started_episode_uids": episode_uids}, 400)
+                gid = result["episode_uid"]
+                episode_uids.append(gid)
                 swapped_flags.append(swapped)
-                batch_swaps[gid] = swapped
+                cell_swaps[gid] = swapped
 
-            log.info("Batch started: %d games (balance=%s, seed=%s)", count, balance, batch_seed)
+            log.info("Cell started: %d games (balance=%s, seed=%s)", count, balance, cell_seed)
             return self._json({
-                "batch_size": count,
-                "game_ids": game_ids,
+                "cell_size": count,
+                "episode_uids": episode_uids,
                 "swapped": swapped_flags,
                 "status": "started",
             })
@@ -665,7 +665,7 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 return self._json({"agent_projects": body.get("agent_projects", [])})
 
         # Human player input
-        if path.startswith("/api/game/") and path.endswith("/input"):
+        if path.startswith("/api/environment/") and path.endswith("/input"):
             gid = path.split("/")[3]
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -683,17 +683,17 @@ class GameHandler(http.server.BaseHTTPRequestHandler):
                 )
                 ha.submit_input(body.get("text", ""))
                 return self._json({"ok": True})
-            return self._json({"error": "No human agent for this game"}, 404)
+            return self._json({"error": "No human agent for this environment"}, 404)
 
-        # Stop a running game: POST /api/game/{id}/stop
-        if path.startswith("/api/game/") and path.endswith("/stop"):
+        # Stop a running environment: POST /api/environment/{id}/stop
+        if path.startswith("/api/environment/") and path.endswith("/stop"):
             gid = path.split("/")[3]
             engine = game_engines.get(gid)
             if engine:
                 log.info("[%s] stop requested", gid[:8])
                 engine.stop()
-                return self._json({"ok": True, "game_id": gid})
-            return self._json({"error": "No running game with that ID"}, 404)
+                return self._json({"ok": True, "episode_uid": gid})
+            return self._json({"error": "No running environment with that ID"}, 404)
 
         self.send_error(404)
 
@@ -726,7 +726,7 @@ def _print_startup_banner(port: int):
     git_hash = _git_hash()
     schema_version = FirestoreDocumentSchema.model_fields['schema_version'].default
     log.info("=" * 56)
-    log.info("Negotiation Game Server")
+    log.info("Negotiation Environment Server")
     log.info("  url:       http://localhost:%d", port)
     log.info("  git:       %s", git_hash)
     log.info("  schema:    v%d", schema_version)

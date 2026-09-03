@@ -74,7 +74,7 @@ def test_timeouts_and_connection_errors_are_retryable():
 
 
 def test_non_transient_oserrors_are_not_retryable():
-    """A missing ADC file is a broken environment, not a blip."""
+    """A missing ADC file is a broken release, not a blip."""
     assert not is_retryable(FileNotFoundError("adc.json missing"))
     assert not is_retryable(PermissionError("denied"))
 

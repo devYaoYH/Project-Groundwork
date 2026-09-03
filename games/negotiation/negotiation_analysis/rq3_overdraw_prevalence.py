@@ -18,9 +18,9 @@ def analyze_overdraw_prevalence(dataset: NegotiationDataset) -> dict:
     """Compute overdraw rates across conditions."""
     round_df = dataset.to_round_df()
 
-    # Per-game overdraw rate
+    # Per-environment overdraw rate
     game_od = (
-        round_df.groupby(["game_id", "mode"])
+        round_df.groupby(["episode_uid", "mode"])
         .agg(
             n_rounds=pd.NamedAgg(column="round_number", aggfunc="count"),
             n_overdrawn=pd.NamedAgg(column="overdrawn", aggfunc="sum"),
@@ -38,14 +38,14 @@ def analyze_overdraw_prevalence(dataset: NegotiationDataset) -> dict:
 
     # Overdraw rate by round × mode (multi-round games only)
     multi_round_ids = set(
-        round_df[round_df["num_game_rounds"] >= 2]["game_id"]
+        round_df[round_df["num_game_rounds"] >= 2]["episode_uid"]
     )
-    mr_rounds = round_df[round_df["game_id"].isin(multi_round_ids)]
+    mr_rounds = round_df[round_df["episode_uid"].isin(multi_round_ids)]
     od_by_round_cond = (
         mr_rounds.groupby(["mode", "round_number"])
         .agg(
             overdraw_rate=pd.NamedAgg(column="overdrawn", aggfunc="mean"),
-            n=pd.NamedAgg(column="game_id", aggfunc="count"),
+            n=pd.NamedAgg(column="episode_uid", aggfunc="count"),
         )
         .reset_index()
     )
