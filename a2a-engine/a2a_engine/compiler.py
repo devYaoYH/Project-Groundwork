@@ -145,7 +145,7 @@ def compile(
 
     for axis_levels in _cell_levels(design):
         levels = {**pinned, **axis_levels}
-        cell_id = _cell_id(levels)
+        cell_id = _cell_id(experiment_id, levels)
         pool = _pool(bank.items, _item_levels(design, parameters), axis_levels, parameters)
         episodes: list[CompiledEpisode] = []
         for episode_idx in range(design.units.episodes_per_cell):
@@ -408,8 +408,13 @@ def _trace_release(declaration: ReleaseDeclaration, release_id: str) -> dict[str
     }
 
 
-def _cell_id(levels: dict[str, Any]) -> str:
-    blob = json.dumps(levels, sort_keys=True, separators=(",", ":"), default=str)
+def _cell_id(experiment_id: str, levels: dict[str, Any]) -> str:
+    blob = json.dumps(
+        {"experiment_id": experiment_id, "levels": levels},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     return f"cell-{hashlib.sha256(blob.encode('utf-8')).hexdigest()[:12]}"
 
 

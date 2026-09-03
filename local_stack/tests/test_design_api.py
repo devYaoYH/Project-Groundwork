@@ -67,6 +67,18 @@ def test_design_create_validate_lock_and_smoke_launch_through_http(tmp_path):
         assert status == 200
         assert locked["locked_at"]
 
+        status, fork = _request(base, f"/api/experiments/{experiment['id']}/design", {
+            "design_text": DESIGN,
+        })
+        assert status == 201
+        assert fork["forked_from"] == experiment["id"]
+
+        status, fork_locked = _request(base, f"/api/experiments/{fork['id']}/lock", {
+            "design_sha256": fork["design_sha256"],
+        })
+        assert status == 200
+        assert fork_locked["locked_at"]
+
         status, launch = _request(base, "/api/launches", {
             "experiment_id": experiment["id"], "mode": "smoke",
         })
