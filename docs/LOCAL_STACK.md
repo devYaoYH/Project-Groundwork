@@ -145,7 +145,8 @@ configuration with a shared backend when that integration is ready.
 | `POST /api/designs/validate` | validate and compile a draft without storing it |
 | `GET`/`POST /api/experiments` | the experiment library; create from a design or a checked-in YAML |
 | `GET /api/experiments/<id>` | cells, roster, launches, progress by cell |
-| `POST /api/experiments/<id>/design` | save a draft, or fork a locked preregistration |
+| `POST /api/experiments/<id>/design` | save an editable design draft |
+| `POST /api/experiments/<id>/fork` | fork a locked preregistration into an editable draft |
 | `POST /api/experiments/<id>/lock` | preregister (409 on digest mismatch) |
 | `GET`/`POST /api/launches` | launch list; start one (409 for `live` on an unlocked design) |
 | `GET /api/launches/<id>` | one launch and its progress |

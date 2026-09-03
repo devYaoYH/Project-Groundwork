@@ -76,20 +76,25 @@ def test_lock_stores_verbatim_text_and_full_fixed_plan(tmp_path):
     assert '"item_attributes"' in config
 
 
-def test_editing_a_locked_design_forks_instead_of_amending(tmp_path):
+def test_locked_design_requires_an_explicit_fork_before_editing(tmp_path):
     plane = control(tmp_path)
     experiment = create(plane)
     locked = plane.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
 
-    fork = plane.update_experiment_design(
-        locked.id,
-        design_text=DESIGN.replace(
-            "seller_cost: {randomize: true}", "seller_cost: {pin: 8}"
-        ),
-    )
+    with pytest.raises(ValueError, match="fork it before editing"):
+        plane.update_experiment_design(
+            locked.id,
+            design_text=DESIGN.replace(
+                "seller_cost: {randomize: true}", "seller_cost: {pin: 8}"
+            ),
+        )
+
+    fork = plane.fork_experiment_design(locked.id)
 
     assert fork.id != locked.id
     assert fork.forked_from == locked.id
+    assert fork.locked_at is None
+    assert fork.design_text == DESIGN
     assert plane.experiment(locked.id).design_text == DESIGN
 
 

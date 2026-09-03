@@ -730,16 +730,30 @@ class ControlPlane:
         except DesignValidationError as exc:
             return {"valid": False, "errors": [error.as_dict() for error in exc.errors], "plan": None}
 
+    def fork_experiment_design(self, experiment_id: str) -> Experiment:
+        """Fork a locked preregistration into an editable draft.
+
+        Forking is deliberately its own operation.  A browser must never turn a
+        save into a new study behind the researcher's back, especially when the
+        page is showing an immutable preregistration.
+        """
+        experiment = self.experiment(experiment_id)
+        if experiment.design_text is None:
+            raise ValueError("a legacy YAML experiment has no design document to fork")
+        if experiment.locked_at is None:
+            raise ValueError("only a locked preregistration can be forked")
+        return self.create_experiment(
+            name=f"{experiment.name} fork", release_id=experiment.release_id,
+            design_text=experiment.design_text, forked_from=experiment.id,
+        )
+
     def update_experiment_design(self, experiment_id: str, *, design_text: str) -> Experiment:
-        """Save a draft or fork a locked preregistration; never amend a lock."""
+        """Save an editable design draft; locked preregistrations are immutable."""
         experiment = self.experiment(experiment_id)
         if experiment.design_text is None:
             raise ValueError("a legacy YAML experiment has no design document to edit")
         if experiment.locked_at is not None:
-            return self.create_experiment(
-                name=f"{experiment.name} fork", release_id=experiment.release_id,
-                design_text=design_text, forked_from=experiment.id,
-            )
+            raise ValueError("this preregistration is locked; fork it before editing")
         design = parse_design_text(design_text)
         release = self._release_by_id(experiment.release_id)
         errors = validate_design(

@@ -10,6 +10,7 @@ import {
   DesignValidation,
   EnvironmentDetail,
   Experiment,
+  forkDesign,
   getEnvironment,
   getExperiment,
   launchExperiment,
@@ -35,6 +36,7 @@ export function DesignEditor() {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [forking, setForking] = useState(false);
   const savingRef = useRef(false);
 
   useEffect(() => {
@@ -78,9 +80,10 @@ export function DesignEditor() {
   const errors = [...clientErrors, ...(serverResult?.errors ?? [])];
   const plan = serverResult?.plan;
   const canLock = Boolean(experiment && serverResult?.valid && clientErrors.length === 0 && !experiment.locked_at);
+  const locked = Boolean(experiment?.locked_at);
 
   async function saveDraft() {
-    if (!experiment || !dirty || busy || savingRef.current) return;
+    if (!experiment || locked || !dirty || busy || savingRef.current) return;
     savingRef.current = true;
     setSavingDraft(true);
     setBusy(true);
@@ -114,7 +117,7 @@ export function DesignEditor() {
   });
 
   async function saveAndLock() {
-    if (!experiment) return;
+    if (!experiment || locked) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -133,6 +136,19 @@ export function DesignEditor() {
       setMessage(reason instanceof Error ? reason.message : "Unable to lock design");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function fork() {
+    if (!experiment || !locked || busy || forking) return;
+    setForking(true);
+    setMessage(null);
+    try {
+      const forked = await forkDesign(experiment.id);
+      window.location.assign(`/design/?id=${encodeURIComponent(forked.id)}`);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Unable to fork design");
+      setForking(false);
     }
   }
 
@@ -157,20 +173,23 @@ export function DesignEditor() {
     <>
       <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: experiment.name, href: `/experiment/?id=${encodeURIComponent(experiment.id)}` }, { label: "design" }]} />
       <header className="page-heading page-heading-split">
-        <div><h1>{experiment.name}</h1><p>The authored document compiles to disposable episode configs. {experiment.locked_at ? "Editing will fork this preregistration." : "Lock before a live launch."}</p></div>
-        <Link className="button" href={`/experiment/?id=${encodeURIComponent(experiment.id)}`}>Experiment</Link>
+        <div><h1>{experiment.name}</h1><p>The authored document compiles to disposable episode configs. {locked ? "This preregistration is locked. Fork it to make an editable draft." : "Lock before a live launch."}</p></div>
+        <div className="launch-actions">
+          {locked ? <button className="button button-primary" onClick={fork} disabled={busy || forking}>{forking ? "Forking..." : "Fork design"}</button> : null}
+          <Link className="button" href={`/experiment/?id=${encodeURIComponent(experiment.id)}`}>Experiment</Link>
+        </div>
       </header>
       {message ? <p className={message === "Draft saved." || message.includes("locked") ? "notice notice-good" : "notice notice-error"}>{message}</p> : null}
       <section className="design-layout">
         <div className="design-column">
-          <section className="card design-card"><div className="section-heading"><div><h2>Design</h2><p className={savingDraft ? "notice notice-muted" : dirty ? "notice notice-error" : "notice notice-good"}>{savingDraft ? "Saving draft..." : dirty ? "Unsaved changes" : "Saved draft"}</p></div><div className="launch-actions"><p className="mono">{experiment.design_sha256 ?? "draft"}</p><button onClick={saveDraft} disabled={busy || !dirty}>Save draft</button></div></div><textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} disabled={busy} /></section>
+          <section className="card design-card"><div className="section-heading"><div><h2>Design</h2><p className={locked ? "notice notice-muted" : savingDraft ? "notice notice-muted" : dirty ? "notice notice-error" : "notice notice-good"}>{locked ? "Locked — fork to edit" : savingDraft ? "Saving draft..." : dirty ? "Unsaved changes" : "Saved draft"}</p></div><div className="launch-actions"><p className="mono">{experiment.design_sha256 ?? "draft"}</p>{locked ? null : <button onClick={saveDraft} disabled={busy || !dirty}>Save draft</button>}</div></div>{locked ? <p className="locked-design-note">This design is read-only. Fork it first to create a new draft, then edit and lock that fork.</p> : null}<textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} disabled={locked || busy} /></section>
           <section className="card section-card">
             <div className="section-heading">
               <div>
                 <h2>Checks</h2>
                 <p>Client checks use the pinned parameter projection; the server remains authoritative. Checks run once typing pauses.</p>
               </div>
-              <button onClick={() => setSettledText(text)} disabled={!pending}>{pending ? "Validate now" : "Up to date"}</button>
+              <button onClick={() => setSettledText(text)} disabled={locked || !pending}>{pending ? "Validate now" : "Up to date"}</button>
             </div>
             {pending ? <p className="notice notice-muted">Waiting for you to finish typing...</p>
               : errors.length ? <div className="check-list">{errors.map((error, index) => <p className="notice notice-error" key={`${error.path}-${index}`}><code>{error.path}</code> {error.message}</p>)}</div>
@@ -179,7 +198,7 @@ export function DesignEditor() {
         </div>
         <div className="design-column">
           <section className="card section-card"><div className="section-heading"><h2>Compiles to</h2><p>One cell per combination of factored levels.</p></div><div className="metric-grid"><div className="metric"><span>cells</span><strong>{plan?.cells.length ?? "-"}</strong></div><div className="metric"><span>episodes</span><strong>{plan?.episodes_planned ?? "-"}</strong></div></div>{plan?.preview_episode_config ? <ConfigDisclosure value={JSON.stringify(plan.preview_episode_config, null, 2)} /> : null}</section>
-          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>Smoke and dry-run inspect a draft. Live execution requires its lock.</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{experiment.locked_at ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !experiment.locked_at}>Launch live</button></div></section>
+          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>Smoke and dry-run inspect a draft. Live execution requires its lock.</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
         </div>
       </section>
     </>

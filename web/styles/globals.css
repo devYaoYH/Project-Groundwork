@@ -88,6 +88,9 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
 .design-column { display: grid; gap: 14px; min-width: 0; }
 .design-card { padding: 15px 16px; }
 .design-card textarea { background: var(--sunk); border: 1px solid var(--rule); border-radius: 5px; color: var(--ink); font-family: var(--font-data); font-size: 12px; line-height: 1.65; margin-top: 10px; min-height: 35rem; padding: 12px; resize: vertical; width: 100%; }
+.locked-design-note { color: var(--muted); font-size: 12px; margin: 0; }
+.agent-credential { align-items: center; display: flex; flex-wrap: wrap; gap: 5px; }
+.agent-config-paths { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
 .check-list { display: grid; gap: 7px; }
 .check-list .notice { margin: 0; }
 .notice-good { border-left-color: var(--good); color: var(--good); }

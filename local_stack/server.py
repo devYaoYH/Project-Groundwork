@@ -200,6 +200,12 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     experiment_id, design_sha256=str(body.get("design_sha256") or "")
                 )
                 return self._json(experiment.__dict__)
+            if parsed.path.startswith("/api/experiments/") and parsed.path.endswith("/fork"):
+                experiment_id = unquote(
+                    parsed.path.removeprefix("/api/experiments/").removesuffix("/fork").rstrip("/")
+                )
+                experiment = self._control().fork_experiment_design(experiment_id)
+                return self._json(experiment.__dict__, 201)
             if parsed.path.startswith("/api/experiments/") and parsed.path.endswith("/design"):
                 experiment_id = unquote(
                     parsed.path.removeprefix("/api/experiments/").removesuffix("/design").rstrip("/")
@@ -207,7 +213,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 experiment = self._control().update_experiment_design(
                     experiment_id, design_text=str(body.get("design_text") or "")
                 )
-                return self._json(experiment.__dict__, 201 if experiment.forked_from else 200)
+                return self._json(experiment.__dict__)
             if parsed.path == "/api/launches":
                 launch = self._control().launch_experiment(
                     str(body.get("experiment_id") or ""),

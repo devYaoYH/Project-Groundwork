@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getEnvironment, getItems, runOracle, saveDesign } from "./api.ts";
+import { forkDesign, getEnvironment, getItems, runOracle, saveDesign } from "./api.ts";
 
 test("Word-Guess environment navigation preserves its API identifier", async () => {
   const originalFetch = globalThis.fetch;
@@ -70,4 +70,28 @@ test("saveDesign sends the draft text to its experiment endpoint", async () => {
   assert.equal(path, "/api/experiments/experiment%20id/design");
   assert.equal(init?.method, "POST");
   assert.equal(init?.body, JSON.stringify({ design_text: "schema_version: 1\n" }));
+});
+
+test("forkDesign uses the explicit fork endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let path = "";
+  let init: RequestInit | undefined;
+  globalThis.fetch = async (input, requestInit) => {
+    path = String(input);
+    init = requestInit;
+    return new Response(JSON.stringify({ id: "fork id" }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    await forkDesign("experiment id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(path, "/api/experiments/experiment%20id/fork");
+  assert.equal(init?.method, "POST");
+  assert.equal(init?.body, "{}");
 });
