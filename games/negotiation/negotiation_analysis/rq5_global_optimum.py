@@ -111,7 +111,7 @@ def analyze_optimum_convergence(dataset: NegotiationDataset) -> dict:
             opt_reward = oracle.get("collab_max", 0) if oracle else 0
             actual = 0 if r.overdrawn else r.joint_reward
             records.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "mode": g.mode,
                 "model_a": g.model_a,
                 "model_b": g.model_b,
@@ -146,7 +146,7 @@ def analyze_optimum_convergence(dataset: NegotiationDataset) -> dict:
         for r in g.rounds:
             actual = 0 if r.overdrawn else r.joint_reward
             records.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "mode": g.mode,
                 "model_a": "legacy",
                 "model_b": "legacy",
@@ -165,10 +165,10 @@ def analyze_optimum_convergence(dataset: NegotiationDataset) -> dict:
     # Rounds to first reach threshold
     threshold = 0.9
     rounds_to_opt = []
-    for gid, grp in opt_df.sort_values("round_number").groupby("game_id"):
+    for gid, grp in opt_df.sort_values("round_number").groupby("episode_uid"):
         first_good = grp[grp["optimality_ratio"] >= threshold]["round_number"]
         rounds_to_opt.append({
-            "game_id": gid,
+            "episode_uid": gid,
             "round_to_optimal": first_good.iloc[0] if len(first_good) > 0 else np.nan,
             "mode": grp["mode"].iloc[0],
         })

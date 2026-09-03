@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute cheap-talk message volume from completed calendar traces."""
+"""Compute cheap-talk message volume from completed calendar episodes."""
 
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def _summarize_trace(path: Path, root: Path) -> tuple[dict[str, Any], list[dict[
         volume, mode, normalized = _message_volume(data.get("content"))
         rows.append({
             "trace_path": rel,
-            "game_id": trace.get("game_id") or path.stem,
+            "episode_uid": trace.get("episode_uid") or path.stem,
             "event_index": event_index,
             "event_type": event.get("type"),
             "round": data.get("round"),
@@ -153,7 +153,7 @@ def _summarize_trace(path: Path, root: Path) -> tuple[dict[str, Any], list[dict[
     volumes = [int(row["message_volume_chars"]) for row in rows]
     summary = {
         "trace_path": rel,
-        "game_id": trace.get("game_id") or path.stem,
+        "episode_uid": trace.get("episode_uid") or path.stem,
         "setting": _setting(trace, path),
         "message_volume_count": len(volumes),
         "dm_message_count": sum(1 for row in rows if row["event_type"] == "dm_sent"),
@@ -204,7 +204,7 @@ def main() -> int:
         summaries,
         [
             "trace_path",
-            "game_id",
+            "episode_uid",
             "setting",
             "message_volume_count",
             "dm_message_count",
@@ -224,7 +224,7 @@ def main() -> int:
         messages,
         [
             "trace_path",
-            "game_id",
+            "episode_uid",
             "event_index",
             "event_type",
             "round",
@@ -247,7 +247,7 @@ def main() -> int:
         "metric": "message_volume",
         "message_scope": "cheap_talk",
         "metric_direction": "lower_is_better",
-        "trace_count": len(summaries),
+        "episode_count": len(summaries),
         "message_count": len(messages),
         "message_volume_chars_mean": _mean([int(row["message_volume_chars"]) for row in messages]),
         "message_volume_chars_median": _median([int(row["message_volume_chars"]) for row in messages]),
@@ -272,7 +272,7 @@ def main() -> int:
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print(out_dir)
-    print(f"traces={len(summaries)} messages={len(messages)}")
+    print(f"episodes={len(summaries)} messages={len(messages)}")
     return 0
 
 

@@ -28,7 +28,7 @@ def extract_intentions(
 
     Args:
         message: The chat message to parse.
-        resource_types: List of resource names for this game (e.g. ["pixie_dust",
+        resource_types: List of resource names for this environment (e.g. ["pixie_dust",
             "moonstone", "ruby"]). Falls back to default RESOURCES if not provided.
 
     Returns a dict mapping resource -> quantity (or -1 for focus without qty).
@@ -115,7 +115,7 @@ def extract_project_mentions(
 def analyze_stated_vs_actual(raw_games: list[dict]) -> dict:
     """Compare stated intentions with actual allocations.
 
-    Uses each game's resource_types (for V5+ themed resources) instead of
+    Uses each environment's resource_types (for V5+ themed resources) instead of
     hardcoded defaults. Also computes project mention frequency.
     """
     records = []
@@ -124,7 +124,7 @@ def analyze_stated_vs_actual(raw_games: list[dict]) -> dict:
 
     for g in raw_games:
         resource_types = g.get("resource_types", RESOURCES)
-        # Collect project names from game config
+        # Collect project names from environment config
         projects = g.get("game_config", {}).get("projects") or g.get("projects")
         project_names = list(projects.keys()) if isinstance(projects, dict) else None
 
@@ -167,7 +167,7 @@ def analyze_stated_vs_actual(raw_games: list[dict]) -> dict:
                                 qty_matches += 1
 
                     rec = {
-                        "game_id": g["game_id"],
+                        "episode_uid": g["episode_uid"],
                         "round_number": r["round_number"],
                         "agent": agent,
                         "mode": g.get("mode", ""),
@@ -206,7 +206,7 @@ def analyze_stated_vs_actual(raw_games: list[dict]) -> dict:
                             total_project_mentions[p] = total_project_mentions.get(p, 0) + c
 
                 project_records.append({
-                    "game_id": g["game_id"],
+                    "episode_uid": g["episode_uid"],
                     "round_number": r["round_number"],
                     "agent": agent,
                     "mode": g.get("mode", ""),
@@ -271,7 +271,7 @@ def print_summary(results: dict) -> None:
     if results["divergence_examples"]:
         print("\nDivergence examples (stated != actual):")
         for ex in results["divergence_examples"][:5]:
-            print(f"  Game {ex['game_id'][:8]} R{ex['round_number']} [{ex['agent']}]:")
+            print(f"  Environment {ex['episode_uid'][:8]} R{ex['round_number']} [{ex['agent']}]:")
             print(f"    Stated: {ex['stated']}, Actual: {ex['actual']}")
             print(f"    Last msg: {ex['last_message'][:120]}")
 

@@ -1,6 +1,6 @@
 # Adding a New Client
 
-A client drives one agent through the game loop. The game engine calls the client's methods at each phase; the client decides what tool calls to return. To add a new client, subclass `BaseClient` from `calendar_game.agents`.
+A client drives one agent through the environment loop. The environment engine calls the client's methods at each phase; the client decides what tool calls to return. To add a new client, subclass `BaseClient` from `calendar_game.agents`.
 
 ## The Interface
 
@@ -9,7 +9,7 @@ from calendar_game.agents import BaseClient, DecideResult, GameConfig, TurnResul
 
 class MyClient(BaseClient):
     def register(self, agent_id: int, game_config: GameConfig) -> None:
-        """Called once at game start. Store agent_id and any config you need."""
+        """Called once at environment start. Store agent_id and any config you need."""
 
     def start_round(self, meeting: dict, calendar_render: str, round_num: int) -> None:
         """Called at the start of each round the agent participates in.
@@ -39,7 +39,7 @@ class MyClient(BaseClient):
 
     # Optional — default is a no-op pass
     def retry_decide(self, attempt: int, max_attempts: int, conflict: str) -> DecideResult:
-        """Called when decide() returned an invalid batch. attempt is 1-indexed."""
+        """Called when decide() returned an invalid cell. attempt is 1-indexed."""
 
     # Optional — default is a no-op pass
     def voluntary_decide(self, meeting: dict, calendar_render: str) -> DecideResult:
@@ -96,7 +96,7 @@ within the current meeting participants.
 
 A CHEAP_TALK response may contain multiple communication actions. If the active
 protocol enables both private DMs and groupchat, the client can return both in
-the same `tool_calls` list and the game will deliver them in order.
+the same `tool_calls` list and the environment will deliver them in order.
 
 ## Minimal Example
 
@@ -143,7 +143,7 @@ Then export it from `__init__.py`:
 from calendar_game.clients.always_free import AlwaysFreeClient
 ```
 
-## Using Custom Clients in a Game
+## Using Custom Clients in a Environment
 
 ### Inject clients directly (for testing or scripted experiments)
 
@@ -154,8 +154,8 @@ from calendar_game.calendar import Calendar
 from calendar_game.clients.always_free import AlwaysFreeClient
 
 config = CalendarGameConfig(seed=42, num_agents=2, num_meetings=1)
-game = CalendarGame(config)
-scenario = game.generate_scenario()
+environment = CalendarGame(config)
+scenario = environment.generate_scenario()
 
 agents = []
 for agent_id in range(config.num_agents):
@@ -165,7 +165,7 @@ for agent_id in range(config.num_agents):
     agent.calendar = cal
     agents.append(agent)
 
-trace = game._run_with_agents(agents, scenario)
+trace = environment._run_with_agents(agents, scenario)
 ```
 
 ### Mix client types across agents
@@ -186,8 +186,8 @@ clients = [
 Setting `dry_run=True` on `CalendarGame` replaces every agent with `ScriptedClient` automatically — no API keys needed.
 
 ```python
-game = CalendarGame(config, dry_run=True)
-trace = game.run()
+environment = CalendarGame(config, dry_run=True)
+trace = environment.run()
 ```
 
 ### LLM agents via experiment YAML
@@ -196,7 +196,7 @@ When running through `run.py`, each agent spec maps to an `LLMClient` wrapping t
 
 ```yaml
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 2
   communication_protocol: all
   agents:
@@ -204,7 +204,7 @@ defaults:
     - {type: llm, model: claude-sonnet-4-6}
 ```
 
-Provider credentials are read from the environment unless `api_key` is set
+Provider credentials are read from the release unless `api_key` is set
 directly on the agent spec:
 
 | Provider | Detection | Credential |

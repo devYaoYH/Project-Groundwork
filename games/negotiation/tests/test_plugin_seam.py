@@ -2,7 +2,7 @@
 
 This is the riskiest conversion in the merge. Negotiation previously ran through
 an HTTP server and persisted a bespoke Firestore document; it now runs in-process
-and emits a GameTraceBase. These tests pin the translation layer — the config
+and emits a EpisodeTrace. These tests pin the translation layer — the config
 projection, the event adapter, and the reproducibility of generated scenarios —
 without needing API keys, a server, or a cloud backend.
 """
@@ -11,9 +11,9 @@ import asyncio
 
 import pytest
 
-import negotiation_game  # noqa: F401  (registers the game)
-from a2a_engine import GameTraceBase, get_game_spec
-from a2a_engine.dataset import GameDataset
+import negotiation_game  # noqa: F401  (registers the environment)
+from a2a_engine import EpisodeTrace, get_environment_spec
+from a2a_engine.dataset import EpisodeDataset
 from negotiation_game.backend.engine import GameConfig, GameMode
 from negotiation_game.game import (
     ENGINE_PINNED_FIELDS,
@@ -24,7 +24,7 @@ from negotiation_game.game import (
 
 
 HEURISTIC = {
-    "game_name": "negotiation",
+    "environment_id": "negotiation",
     "num_rounds": 2,
     "cheap_talk_turns": 2,
     "agents": [{"type": "heuristic"}, {"type": "heuristic"}],
@@ -35,7 +35,7 @@ HEURISTIC = {
 
 
 def test_game_registers_with_its_declarations():
-    spec = get_game_spec("negotiation")
+    spec = get_environment_spec("negotiation")
     assert spec.cls is NegotiationGame
     assert spec.storage == {"backend": "sqlite"}
     assert spec.resolve_config is not None
@@ -47,9 +47,9 @@ def test_game_registers_with_its_declarations():
 
 
 def test_every_shared_field_reaches_the_engine_config():
-    """The projection is mechanical; a field silently dropped here changes the game."""
+    """The projection is mechanical; a field silently dropped here changes the environment."""
     cfg = NegotiationConfig(
-        game_name="negotiation",
+        environment_id="negotiation",
         num_rounds=7,
         cheap_talk_turns=4,
         enable_cheap_talk=False,
@@ -74,7 +74,7 @@ def test_shared_fields_are_not_silently_lost():
     """Guards against drift: any field on both sides must actually be copied."""
     shared = set(NegotiationConfig.model_fields) & set(GameConfig.__dataclass_fields__)
 
-    cfg = NegotiationConfig(game_name="negotiation")
+    cfg = NegotiationConfig(environment_id="negotiation")
     engine_cfg = _to_engine_config(cfg)
     for field in shared:
         if field == "mode":
@@ -88,16 +88,16 @@ def test_engine_pinned_fields_are_reflected_back_into_the_trace_config():
     """GameConfig.__post_init__ overrides these no matter what the YAML says.
 
     If the trace recorded the *requested* value it would misreport the
-    conditions the game ran under — exactly the reproducibility failure the
-    manifest contract is meant to prevent. So the game syncs them back.
+    conditions the environment ran under — exactly the reproducibility failure the
+    manifest contract is meant to prevent. So the environment syncs them back.
     """
-    game = NegotiationGame(
+    environment = NegotiationGame(
         config={**HEURISTIC, "visible_opponent_reward": True, "visible_utilities": False}
     )
-    game.run()
+    environment.run()
 
-    assert game.config.visible_opponent_reward is False
-    assert game.config.visible_utilities is True
+    assert environment.config.visible_opponent_reward is False
+    assert environment.config.visible_utilities is True
 
 
 def test_mode_string_becomes_the_engine_enum():
@@ -108,7 +108,7 @@ def test_mode_string_becomes_the_engine_enum():
 def test_unknown_engine_fields_are_dropped_not_crashed():
     """Experiment YAML carries runner-only keys the engine dataclass rejects."""
     cfg = NegotiationConfig(
-        game_name="negotiation", experiment_name="e", experiment_run_id="e.b.0", extra={"x": 1}
+        environment_id="negotiation", experiment_name="e", episode_id="e.b.0", extra={"x": 1}
     )
     _to_engine_config(cfg)  # must not raise
 
@@ -117,37 +117,37 @@ def test_unknown_engine_fields_are_dropped_not_crashed():
 
 
 def test_cheap_talk_is_normalized_to_speaker_text():
-    """The judge and GameDataset key off {speaker, text}; the engine emits {speaker, message}."""
-    game = NegotiationGame(config=HEURISTIC)
-    game._record("cheap_talk", {"speaker": "agent_a", "message": "hello", "turn": 1})
+    """The judge and EpisodeDataset key off {speaker, text}; the engine emits {speaker, message}."""
+    environment = NegotiationGame(config=HEURISTIC)
+    environment._record("cheap_talk", {"speaker": "agent_a", "message": "hello", "turn": 1})
 
-    event = game.events[0]
+    event = environment.events[0]
     assert event.data["speaker"] == "agent_a"
     assert event.data["text"] == "hello"
-    # The original payload is preserved for game-specific analysis.
+    # The original payload is preserved for environment-specific analysis.
     assert event.data["message"] == "hello"
     assert event.data["turn"] == 1
 
 
 def test_non_message_events_are_passed_through_untouched():
-    game = NegotiationGame(config=HEURISTIC)
-    game._record("round_complete", {"round": 1, "overdrawn": True})
-    assert game.events[0].data == {"round": 1, "overdrawn": True}
-    assert "text" not in game.events[0].data
+    environment = NegotiationGame(config=HEURISTIC)
+    environment._record("round_complete", {"round": 1, "overdrawn": True})
+    assert environment.events[0].data == {"round": 1, "overdrawn": True}
+    assert "text" not in environment.events[0].data
 
 
 def test_message_event_without_text_is_not_fabricated():
-    game = NegotiationGame(config=HEURISTIC)
-    game._record("cheap_talk", {"speaker": "system", "turn": 2})
-    assert "text" not in game.events[0].data
+    environment = NegotiationGame(config=HEURISTIC)
+    environment._record("cheap_talk", {"speaker": "system", "turn": 2})
+    assert "text" not in environment.events[0].data
 
 
 def test_engine_callback_signature_matches_the_adapter():
     """The engine calls cb(event_type, data) positionally, not cb(dict)."""
-    game = NegotiationGame(config=HEURISTIC)
-    asyncio.run(game._on_engine_event("phase_start", {"phase": "decision"}))
-    assert game.events[0].type == "phase_start"
-    assert game.events[0].data == {"phase": "decision"}
+    environment = NegotiationGame(config=HEURISTIC)
+    asyncio.run(environment._on_engine_event("phase_start", {"phase": "decision"}))
+    assert environment.events[0].type == "phase_start"
+    assert environment.events[0].data == {"phase": "decision"}
 
 
 # --- end to end (heuristic agents, no API keys) ------------------------------
@@ -159,9 +159,9 @@ def trace():
 
 
 def test_run_returns_a_valid_game_trace(trace):
-    assert isinstance(trace, GameTraceBase)
+    assert isinstance(trace, EpisodeTrace)
     assert trace.started_at and trace.ended_at
-    assert trace.config.game_name == "negotiation"
+    assert trace.config.environment_id == "negotiation"
 
 
 def test_trace_contains_lifecycle_and_talk_events(trace):
@@ -202,14 +202,14 @@ def test_metrics_read_the_engines_actual_result_keys():
 
 
 def test_trace_is_readable_by_the_shared_dataset_layer(tmp_path, trace):
-    """Cross-game analysis is the point of the merge: one loader, both games."""
-    from a2a_engine.tracing import write_trace
+    """Cross-environment analysis is the point of the merge: one loader, both games."""
+    from a2a_engine.tracing import write_episode
 
-    trace.game_id = "neg-1"
-    write_trace(trace, tmp_path, experiment_name="e")
+    trace.episode_uid = "neg-1"
+    write_episode(trace, tmp_path, experiment_name="e")
 
-    ds = GameDataset.from_dir(tmp_path / "e")
-    assert ds.to_games_df().shape[0] == 1
+    ds = EpisodeDataset.from_dir(tmp_path / "e")
+    assert ds.to_episodes_df().shape[0] == 1
     messages = ds.to_messages_df()
     assert not messages.empty, "cheap talk must surface as messages"
     assert set(messages["speaker"]) <= {"agent_a", "agent_b", "system"}
@@ -229,7 +229,7 @@ def test_scenario_pool_config_renames_mc_ratio_without_solving():
 def test_resolve_is_a_noop_without_mc_ratio():
     from negotiation_game.resolve import resolve_config
 
-    cfg = {"game_name": "negotiation", "num_rounds": 5}
+    cfg = {"environment_id": "negotiation", "num_rounds": 5}
     assert resolve_config(cfg) == cfg
 
 
@@ -271,15 +271,15 @@ def test_shared_judge_prompt_builds_from_a_negotiation_trace(tmp_path, trace):
     """The payoff of the merge: one judge prompt builder, both games.
 
     This only works because the event adapter normalizes cheap talk to
-    {speaker, text} — the shape the game-agnostic transcript renderer reads.
+    {speaker, text} — the shape the environment-agnostic transcript renderer reads.
     """
     from a2a_judge import build_transcript_prompt
-    from a2a_engine.tracing import write_trace
+    from a2a_engine.tracing import write_episode
 
-    trace.game_id = "neg-judge-1"
-    write_trace(trace, tmp_path, experiment_name="e")
+    trace.episode_uid = "neg-judge-1"
+    write_episode(trace, tmp_path, experiment_name="e")
 
-    ds = GameDataset.from_dir(tmp_path / "e")
+    ds = EpisodeDataset.from_dir(tmp_path / "e")
     messages = build_transcript_prompt(next(iter(ds)))
 
     assert messages and messages[0]["role"] == "system"

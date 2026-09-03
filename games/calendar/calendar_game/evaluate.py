@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from calendar_game.dataset import CalendarGameDataset
+from calendar_game.dataset import CalendarEpisodeDataset
 
 
 SUMMARY_COLUMNS = [
@@ -99,16 +99,16 @@ def summarize_game_df(game_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Summarize CalBench JSON traces.")
+    parser = argparse.ArgumentParser(description="Summarize CalBench JSON episodes.")
     parser.add_argument("trace_dir", help="Trace directory, usually results/<experiment_name>")
-    parser.add_argument("--game-csv", help="Optional path for one-row-per-game CSV output.")
+    parser.add_argument("--environment-csv", help="Optional path for one-row-per-environment CSV output.")
     parser.add_argument("--round-csv", help="Optional path for one-row-per-round CSV output.")
     parser.add_argument("--agent-csv", help="Optional path for one-row-per-agent CSV output.")
     parser.add_argument("--message-csv", help="Optional path for one-row-per-DM CSV output.")
     parser.add_argument("--summary-csv", help="Optional path for grouped summary CSV output.")
     args = parser.parse_args(argv)
 
-    ds = CalendarGameDataset.from_dir(args.trace_dir)
+    ds = CalendarEpisodeDataset.from_dir(args.trace_dir)
     game_df = ds.to_game_df()
     summary_df = summarize_game_df(game_df)
 
@@ -129,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         summary_df.to_csv(args.summary_csv, index=False)
 
     if summary_df.empty:
-        print(f"No traces found under {args.trace_dir}")
+        print(f"No episodes found under {args.trace_dir}")
     else:
         print(summary_df.to_string(index=False, float_format=lambda value: f"{value:.3f}"))
     return 0

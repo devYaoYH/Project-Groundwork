@@ -1,15 +1,15 @@
-"""Structured abstraction over calendar game traces.
+"""Structured abstraction over calendar environment episodes.
 
 Mirrors the NegotiationDataset interface from a2a-llm-judge.
 
 Usage::
 
-    from calendar_game.dataset import CalendarGameDataset
+    from calendar_game.dataset import CalendarEpisodeDataset
 
-    ds = CalendarGameDataset.from_dir("shared-traces")
-    game_df  = ds.to_game_df()   # one row per game
-    round_df = ds.to_round_df()  # one row per (game, round)
-    agent_df = ds.to_agent_df()  # one row per (game, round, agent)
+    ds = CalendarEpisodeDataset.from_dir("shared-episodes")
+    game_df  = ds.to_game_df()   # one row per environment
+    round_df = ds.to_round_df()  # one row per (environment, round)
+    agent_df = ds.to_agent_df()  # one row per (environment, round, agent)
     msg_df   = ds.to_message_df() # one row per cheap-talk message sent
 
 Research questions surfaced:
@@ -103,12 +103,12 @@ class CalendarEvent:
 class CalendarRound:
     """Data and metrics for a single scheduling round (one meeting)."""
 
-    def __init__(self, game: "CalendarGame", round_idx: int):
-        self.game = game
+    def __init__(self, environment: "CalendarGame", round_idx: int):
+        self.environment = environment
         self.round_idx = round_idx  # 0-based
         self._outcome: dict[str, Any] = (
-            game.raw["final_state"]["round_outcomes"][round_idx]
-            if round_idx < len(game.raw["final_state"]["round_outcomes"])
+            environment.raw["final_state"]["round_outcomes"][round_idx]
+            if round_idx < len(environment.raw["final_state"]["round_outcomes"])
             else {}
         )
 
@@ -144,7 +144,7 @@ class CalendarRound:
 
     @property
     def events(self) -> list[CalendarEvent]:
-        return [e for e in self.game.events if e.round == self.round_idx]
+        return [e for e in self.environment.events if e.round == self.round_idx]
 
     @property
     def dms(self) -> list[CalendarEvent]:
@@ -174,22 +174,22 @@ class CalendarRound:
                 continue
             for tc in e.tool_calls:
                 if tc.get("type") == "reschedule":
-                    # Cost is not in the tool call itself; we rely on game-level accounting
+                    # Cost is not in the tool call itself; we rely on environment-level accounting
                     costs[e.agent_id] = costs.get(e.agent_id, 0.0)
         return costs
 
 
 # ---------------------------------------------------------------------------
-# Game wrapper
+# Environment wrapper
 # ---------------------------------------------------------------------------
 
 class CalendarGame:
-    """A full calendar game trace."""
+    """A full calendar environment trace."""
 
     def __init__(self, raw: dict[str, Any], path: Optional[Path] = None):
         self.raw = raw
         self.path = path
-        self.game_id: str = raw.get("game_id", "")
+        self.episode_uid: str = raw.get("episode_uid", "")
         self._events: Optional[list[CalendarEvent]] = None
 
     # --- Config accessors ---
@@ -203,8 +203,8 @@ class CalendarGame:
         return self.config.get("experiment_name", "")
 
     @property
-    def experiment_run_id(self) -> str:
-        return self.config.get("experiment_run_id", "")
+    def episode_id(self) -> str:
+        return self.config.get("episode_id", "")
 
     @property
     def seed(self) -> Optional[int]:
@@ -268,7 +268,7 @@ class CalendarGame:
     def greedy_cost(self) -> float:
         return self._game_start_data.get("greedy_cost", float("nan"))
 
-    # --- Metrics (pre-computed by game engine) ---
+    # --- Metrics (pre-computed by environment engine) ---
 
     @property
     def metrics(self) -> dict[str, Any]:
@@ -435,7 +435,7 @@ class CalendarGame:
 
     def __repr__(self) -> str:
         return (
-            f"CalendarGame(id={self.game_id[:8]}, model={self.model_label}, "
+            f"CalendarGame(id={self.episode_uid[:8]}, model={self.model_label}, "
             f"meetings={self.meetings_scheduled}, cost={self.realized_cost})"
         )
 
@@ -444,14 +444,14 @@ class CalendarGame:
 # Dataset
 # ---------------------------------------------------------------------------
 
-class CalendarGameDataset:
-    """A collection of CalendarGame traces with DataFrame export methods."""
+class CalendarEpisodeDataset:
+    """A collection of CalendarGame episodes with DataFrame export methods."""
 
     def __init__(self, games: list[CalendarGame]):
         self.games = games
 
     @classmethod
-    def from_dir(cls, root: str | Path) -> "CalendarGameDataset":
+    def from_dir(cls, root: str | Path) -> "CalendarEpisodeDataset":
         """Load all *.json trace files (excluding *.metadata.json) under root."""
         root = Path(root)
         paths = sorted(
@@ -470,15 +470,15 @@ class CalendarGameDataset:
         return cls(games)
 
     @classmethod
-    def from_traces(cls, traces: list[dict[str, Any]]) -> "CalendarGameDataset":
-        return cls([CalendarGame(t) for t in traces])
+    def from_traces(cls, episodes: list[dict[str, Any]]) -> "CalendarEpisodeDataset":
+        return cls([CalendarGame(t) for t in episodes])
 
     # ------------------------------------------------------------------
     # DataFrame builders
     # ------------------------------------------------------------------
 
     def to_game_df(self) -> pd.DataFrame:
-        """One row per game.
+        """One row per environment.
 
         Key columns for RQs:
             msgs_per_meeting  — RQ2: communication efficiency
@@ -489,9 +489,9 @@ class CalendarGameDataset:
         rows = []
         for g in self.games:
             rows.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "experiment_name": g.experiment_name,
-                "experiment_run_id": g.experiment_run_id,
+                "episode_id": g.episode_id,
                 "seed": g.seed,
                 "model_label": g.model_label,
                 "team_model_counts": g.team_model_counts,
@@ -569,7 +569,7 @@ class CalendarGameDataset:
         return pd.DataFrame(rows)
 
     def to_round_df(self) -> pd.DataFrame:
-        """One row per (game, round)."""
+        """One row per (environment, round)."""
         rows = []
         for g in self.games:
             game_meta = self._game_meta(g)
@@ -586,11 +586,11 @@ class CalendarGameDataset:
         return pd.DataFrame(rows)
 
     def to_agent_df(self) -> pd.DataFrame:
-        """One row per (game, agent).
+        """One row per (environment, agent).
 
         Key columns for RQ4:
             cost          — absolute cost incurred by this agent
-            cost_share    — fraction of total game cost borne by this agent
+            cost_share    — fraction of total environment cost borne by this agent
         """
         rows = []
         for g in self.games:
@@ -717,7 +717,7 @@ class CalendarGameDataset:
         agent_type: Optional[str] = None,
         min_meetings: Optional[int] = None,
         exclude_stopped: bool = False,
-    ) -> "CalendarGameDataset":
+    ) -> "CalendarEpisodeDataset":
         games = self.games
         if experiment_name is not None:
             games = [g for g in games if g.experiment_name == experiment_name]
@@ -729,7 +729,7 @@ class CalendarGameDataset:
             games = [g for g in games if g.meetings_scheduled >= min_meetings]
         if exclude_stopped:
             games = [g for g in games if not g.stopped]
-        return CalendarGameDataset(games)
+        return CalendarEpisodeDataset(games)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -737,9 +737,9 @@ class CalendarGameDataset:
 
     def _game_meta(self, g: CalendarGame) -> dict[str, Any]:
         return {
-            "game_id": g.game_id,
+            "episode_uid": g.episode_uid,
             "experiment_name": g.experiment_name,
-            "experiment_run_id": g.experiment_run_id,
+            "episode_id": g.episode_id,
             "seed": g.seed,
             "model_label": g.model_label,
             "num_agents": g.num_agents,
@@ -749,4 +749,4 @@ class CalendarGameDataset:
         return len(self.games)
 
     def __repr__(self) -> str:
-        return f"CalendarGameDataset({len(self.games)} games)"
+        return f"CalendarEpisodeDataset({len(self.games)} games)"

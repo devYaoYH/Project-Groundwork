@@ -1,4 +1,4 @@
-// --- Live game ---
+// --- Live environment ---
 
 import { escapeHtml, renderAlloc, renderApiMeta } from './utils.js';
 import { idbSaveGame } from './storage.js';
@@ -28,23 +28,23 @@ export async function launchGame(payloadOverride = null) {
     currentGamePayload = payload;
 
     try {
-        const resp = await fetch('/api/game/start', {
+        const resp = await fetch('/api/environment/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
         const data = await resp.json();
-        if (!resp.ok || !data.game_id) {
+        if (!resp.ok || !data.episode_uid) {
             throw new Error(data.error || `server returned ${resp.status}`);
         }
-        openLiveView(data.game_id, payload.mode);
+        openLiveView(data.episode_uid, payload.mode);
     } catch (e) {
-        alert('Failed to start game: ' + e.message);
+        alert('Failed to start environment: ' + e.message);
     }
 
     if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Launch Game';
+        btn.textContent = 'Launch Environment';
     }
 }
 
@@ -79,7 +79,7 @@ export function openLiveView(gameId, mode) {
     const stopBtn = document.getElementById('stopBtn');
     stopBtn.style.display = 'inline-block';
     stopBtn.disabled = false;
-    stopBtn.textContent = 'Stop Game';
+    stopBtn.textContent = 'Stop Environment';
     updateThinkingTraceUi();
 
     stopLiveConnection();
@@ -101,7 +101,7 @@ export async function stopGame() {
     btn.disabled = true;
     btn.textContent = 'Stopping...';
     try {
-        await fetch(`/api/game/${currentGameId}/stop`, { method: 'POST' });
+        await fetch(`/api/environment/${currentGameId}/stop`, { method: 'POST' });
     } catch (e) {
         console.error('Stop failed:', e);
     }
@@ -122,7 +122,7 @@ async function pollEvents(gameId) {
     if (_pollInFlight) return;
     _pollInFlight = true;
     try {
-        const resp = await fetch(`/api/game/${gameId}/events?after=${eventCursor}`);
+        const resp = await fetch(`/api/environment/${gameId}/events?after=${eventCursor}`);
         const data = await resp.json();
         if (currentGameId !== gameId) return;
         for (const ev of data.events) {
@@ -144,10 +144,10 @@ async function pollEvents(gameId) {
 
 async function saveCompletedGameToIDB(gameId) {
     try {
-        const resp = await fetch(`/api/game/${gameId}`);
+        const resp = await fetch(`/api/environment/${gameId}`);
         const result = await resp.json();
         const gameData = {
-            game_id: gameId,
+            episode_uid: gameId,
             game_config: currentGamePayload || {},
             result: result,
             events: _allLiveEvents.slice(),
@@ -155,13 +155,13 @@ async function saveCompletedGameToIDB(gameId) {
         };
         await idbSaveGame(gameData);
     } catch (e) {
-        console.error('Failed to save game to IndexedDB:', e);
+        console.error('Failed to save environment to IndexedDB:', e);
     }
 }
 
 // Exported so a replay surface can drive the same renderer from a recorded
 // event stream instead of the live polling loop. The function is unchanged:
-// replay and live must not diverge into two visualisations of one game.
+// replay and live must not diverge into two visualisations of one environment.
 export function handleEvent(event) {
     const logEl = document.getElementById('eventLog');
     if (!logEl) return;
@@ -171,7 +171,7 @@ export function handleEvent(event) {
     switch (event.type) {
         case 'game_start':
             currentLiveConfig = event.data.config || null;
-            evDiv.innerHTML = `<span class="ev-type">[start]</span> Game ${event.data.game_id} — ${event.data.config?.mode || '?'} mode, ${event.data.config?.num_rounds || '?'} rounds`;
+            evDiv.innerHTML = `<span class="ev-type">[start]</span> Environment ${event.data.episode_uid} — ${event.data.config?.mode || '?'} mode, ${event.data.config?.num_rounds || '?'} rounds`;
             break;
 
         case 'phase_start':
@@ -247,14 +247,14 @@ export function handleEvent(event) {
             break;
 
         case 'game_stopped':
-            evDiv.innerHTML = `<span class="ev-type">[stopped]</span> Game stopped by user after round ${event.data.after_round}`;
+            evDiv.innerHTML = `<span class="ev-type">[stopped]</span> Environment stopped by user after round ${event.data.after_round}`;
             document.getElementById('liveStatus').innerHTML = 'Stopped';
             document.getElementById('stopBtn').style.display = 'none';
             break;
 
         case 'game_complete':
-            evDiv.innerHTML = `<span class="ev-type">[done]</span> Game complete — A: ${Number(event.data.agent_a_cumulative_reward).toFixed(1)}, B: ${Number(event.data.agent_b_cumulative_reward).toFixed(1)}`;
-            document.getElementById('liveStatus').innerHTML = event.data.stopped ? 'Stopped' : 'Game Complete';
+            evDiv.innerHTML = `<span class="ev-type">[done]</span> Environment complete — A: ${Number(event.data.agent_a_cumulative_reward).toFixed(1)}, B: ${Number(event.data.agent_b_cumulative_reward).toFixed(1)}`;
+            document.getElementById('liveStatus').innerHTML = event.data.stopped ? 'Stopped' : 'Environment Complete';
             document.getElementById('stopBtn').style.display = 'none';
             break;
 
@@ -587,7 +587,7 @@ export function sendHumanInput() {
 
 function _postHumanInput(text) {
     if (!currentGameId) return;
-    fetch(`/api/game/${currentGameId}/input`, {
+    fetch(`/api/environment/${currentGameId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: _currentHumanAgent, text }),
@@ -984,7 +984,7 @@ function showProjectInstructionsPanel(agent, prompt) {
 export function exportGameLog() {
     if (!currentGameId || _allLiveEvents.length === 0) return;
     const lines = [
-        JSON.stringify({ type: 'game_config', data: { game_id: currentGameId, config: currentGamePayload } }),
+        JSON.stringify({ type: 'game_config', data: { episode_uid: currentGameId, config: currentGamePayload } }),
         ..._allLiveEvents.map(e => JSON.stringify(e)),
     ];
     const blob = new Blob([lines.join('\n') + '\n'], { type: 'application/x-ndjson' });

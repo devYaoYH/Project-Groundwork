@@ -1,6 +1,6 @@
 """LLM provider presets and HTTP retry/backoff settings.
 
-Game-agnostic: reuse from any benchmark built on a2a-engine.
+Environment-agnostic: reuse from any benchmark built on a2a-engine.
 """
 
 import os

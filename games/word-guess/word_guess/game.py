@@ -1,4 +1,4 @@
-"""WordGuessGame: a two-agent yes/no word-guessing game."""
+"""WordGuessGame: a two-agent yes/no word-guessing environment."""
 
 import asyncio
 import random
@@ -10,23 +10,24 @@ from pydantic import Field
 
 from a2a_engine import (
     EventLog,
-    GameConfigBase,
-    GameTraceBase,
-    register_game,
+    EpisodeConfigBase,
+    EpisodeTrace,
+    register_environment,
 )
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
 
 from word_guess.agents import GuesserAgent, HostAgent
+from word_guess.declaration import DECLARATION
 
 DEFAULT_POOL = ["dog", "apple", "car", "piano", "river", "book"]
 
 
-class WordGuessConfig(GameConfigBase):
-    """Config for the word-guess game."""
+class WordGuessConfig(EpisodeConfigBase):
+    """Config for the word-guess environment."""
 
-    game_name: str = "word_guess"
+    environment_id: str = "word_guess"
     num_agents: int = 2
     secret_word: str | None = None
     word_pool: list[str] = Field(default_factory=lambda: list(DEFAULT_POOL))
@@ -100,7 +101,7 @@ class _ScriptedHost:
 
 
 # ---------------------------------------------------------------------------
-# Game.
+# Environment.
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +115,7 @@ def _extract_guess(text: str) -> str | None:
 
 
 class WordGuessGame:
-    """Round-robin word-guessing game."""
+    """Round-robin word-guessing environment."""
 
     def __init__(self, config: dict | WordGuessConfig, dry_run: bool = False) -> None:
         self.config = config if isinstance(config, WordGuessConfig) else WordGuessConfig(**config)
@@ -135,10 +136,10 @@ class WordGuessGame:
         self.guesser = GuesserAgent(make_llm_client(guesser_cfg))
         self.host = HostAgent(make_llm_client(host_cfg), self.secret_word)
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())
 
-    async def _run_async(self) -> GameTraceBase:
+    async def _run_async(self) -> EpisodeTrace:
         self.events.append(
             "game_start",
             data={"max_turns": self.config.max_turns, "word_pool_size": len(self.config.word_pool)},
@@ -174,8 +175,8 @@ class WordGuessGame:
             data={"won": won, "turns_used": turns_used},
         )
 
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),
             config=self.config,
             events=self.events.all(),
             final_state={
@@ -192,9 +193,10 @@ class WordGuessGame:
         )
 
 
-register_game(
+register_environment(
     "word_guess",
     WordGuessGame,
+    declaration=DECLARATION,
     package="word-guess",
     # Dry runs use the scripted agents above, so no API keys are involved.
     dry_run_checks_keys=False,

@@ -1,22 +1,24 @@
-"""Negotiation game plugin for a2a-engine.
+"""Negotiation environment plugin for a2a-engine.
 
-Importing this package registers the game, its batch-level config resolver, and
+Importing this package registers the environment, its cell-level config resolver, and
 its local-first default trace store.
 """
 
-from a2a_engine import register_game
+from a2a_engine import register_environment
 
 from negotiation_game.game import NegotiationConfig, NegotiationGame
+from negotiation_game.declaration import DECLARATION
 from negotiation_game.resolve import resolve_config
 
-register_game(
+register_environment(
     "negotiation",
     NegotiationGame,
+    declaration=DECLARATION,
     resolve_config=resolve_config,
-    # A single-game experiment must work with no account or cloud SDK. Firestore
+    # A single-environment experiment must work with no account or cloud SDK. Firestore
     # remains an explicit optional sink for importing or mirroring legacy data.
     storage={"backend": "sqlite"},
-    package="negotiation-game",
+    package="negotiation-environment",
     # A negotiation dry run swaps in heuristic agents, so it needs no API keys.
     dry_run_checks_keys=False,
 )

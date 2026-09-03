@@ -1,18 +1,18 @@
-// --- Batch launch ---
+// --- Cell launch ---
 
 import { buildGameConfig } from './config.js';
 
-let _batchPollTimer = null;
+let _cellPollTimer = null;
 
-export async function launchBatch() {
-    const btn = document.getElementById('batchLaunchBtn');
+export async function launchCell() {
+    const btn = document.getElementById('cellLaunchBtn');
     btn.disabled = true;
     btn.textContent = 'Starting...';
 
-    const count = parseInt(document.getElementById('batchCount').value);
-    const seedInput = document.getElementById('batchSeed').value;
-    const balance = document.getElementById('batchBalance').checked;
-    const experimentLabel = document.getElementById('batchLabel').value.trim();
+    const count = parseInt(document.getElementById('cellCount').value);
+    const seedInput = document.getElementById('cellSeed').value;
+    const balance = document.getElementById('cellBalance').checked;
+    const experimentLabel = document.getElementById('cellLabel').value.trim();
 
     const payload = {
         count,
@@ -23,57 +23,57 @@ export async function launchBatch() {
     if (experimentLabel) payload.experiment_label = experimentLabel;
 
     try {
-        const resp = await fetch('/api/batch/start', {
+        const resp = await fetch('/api/cell/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
         const data = await resp.json();
         if (data.error) {
-            alert('Batch error: ' + data.error);
+            alert('Cell error: ' + data.error);
             btn.disabled = false;
-            btn.textContent = 'Launch Batch';
+            btn.textContent = 'Launch Cell';
             return;
         }
-        startBatchPolling(data.game_ids, data.swapped);
+        startCellPolling(data.episode_uids, data.swapped);
     } catch (e) {
-        alert('Failed to start batch: ' + e.message);
+        alert('Failed to start cell: ' + e.message);
     }
 
     btn.disabled = false;
-    btn.textContent = 'Launch Batch';
+    btn.textContent = 'Launch Cell';
 }
 
-function startBatchPolling(gameIds, swappedFlags) {
-    const progress = document.getElementById('batchProgress');
+function startCellPolling(gameIds, swappedFlags) {
+    const progress = document.getElementById('cellProgress');
     progress.style.display = 'block';
 
-    const listEl = document.getElementById('batchGameList');
+    const listEl = document.getElementById('cellGameList');
     listEl.innerHTML = gameIds.map((gid, i) =>
-        `<div class="batch-game-row" id="batch-row-${gid}">
-            <span class="batch-game-id">${gid.substring(0, 8)}</span>
-            <span class="batch-game-swap">${swappedFlags[i] ? 'swapped' : ''}</span>
-            <span class="batch-game-status" id="batch-status-${gid}"><span class="spinner"></span></span>
-            <span class="batch-game-rewards" id="batch-rewards-${gid}"></span>
+        `<div class="cell-environment-row" id="cell-row-${gid}">
+            <span class="cell-environment-id">${gid.substring(0, 8)}</span>
+            <span class="cell-environment-swap">${swappedFlags[i] ? 'swapped' : ''}</span>
+            <span class="cell-environment-status" id="cell-status-${gid}"><span class="spinner"></span></span>
+            <span class="cell-environment-rewards" id="cell-rewards-${gid}"></span>
         </div>`
     ).join('');
 
-    updateBatchProgress(0, gameIds.length);
+    updateCellProgress(0, gameIds.length);
 
-    if (_batchPollTimer) clearInterval(_batchPollTimer);
-    _batchPollTimer = setInterval(() => pollBatchStatus(gameIds), 2000);
-    pollBatchStatus(gameIds);
+    if (_cellPollTimer) clearInterval(_cellPollTimer);
+    _cellPollTimer = setInterval(() => pollCellStatus(gameIds), 2000);
+    pollCellStatus(gameIds);
 }
 
-async function pollBatchStatus(gameIds) {
+async function pollCellStatus(gameIds) {
     try {
-        const resp = await fetch(`/api/batch/status?ids=${gameIds.join(',')}`);
+        const resp = await fetch(`/api/cell/status?ids=${gameIds.join(',')}`);
         const data = await resp.json();
 
         let doneCount = 0;
         for (const g of data.games) {
-            const statusEl = document.getElementById(`batch-status-${g.game_id}`);
-            const rewardsEl = document.getElementById(`batch-rewards-${g.game_id}`);
+            const statusEl = document.getElementById(`cell-status-${g.episode_uid}`);
+            const rewardsEl = document.getElementById(`cell-rewards-${g.episode_uid}`);
             if (g.done) {
                 doneCount++;
                 if (statusEl) statusEl.innerHTML = '<span style="color:var(--green)">done</span>';
@@ -81,19 +81,19 @@ async function pollBatchStatus(gameIds) {
             }
         }
 
-        updateBatchProgress(doneCount, gameIds.length);
+        updateCellProgress(doneCount, gameIds.length);
 
-        if (data.all_done && _batchPollTimer) {
-            clearInterval(_batchPollTimer);
-            _batchPollTimer = null;
+        if (data.all_done && _cellPollTimer) {
+            clearInterval(_cellPollTimer);
+            _cellPollTimer = null;
         }
     } catch (e) {
-        console.error('Batch poll failed:', e);
+        console.error('Cell poll failed:', e);
     }
 }
 
-function updateBatchProgress(done, total) {
-    document.getElementById('batchProgressText').textContent = `${done} / ${total} complete`;
+function updateCellProgress(done, total) {
+    document.getElementById('cellProgressText').textContent = `${done} / ${total} complete`;
     const pct = total > 0 ? (done / total) * 100 : 0;
-    document.getElementById('batchProgressFill').style.width = `${pct}%`;
+    document.getElementById('cellProgressFill').style.width = `${pct}%`;
 }

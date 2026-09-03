@@ -36,7 +36,7 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
 
     Returns dict with:
         - error_df: one row per error event with context
-        - game_df: per-game error counts
+        - game_df: per-environment error counts
         - by_model: error rates per model
         - summary: aggregate stats
     """
@@ -47,7 +47,7 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
         if g.schema_version < 5:
             continue
         model_map = {"agent_a": g.model_a, "agent_b": g.model_b}
-        game_id = g.game_id
+        episode_uid = g.episode_uid
         num_rounds = g.num_rounds
         events = g.all_events
 
@@ -63,7 +63,7 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
             model = model_map.get(agent, "unknown")
 
             error_records.append({
-                "game_id": game_id,
+                "episode_uid": episode_uid,
                 "event_type": etype,
                 "agent": agent,
                 "model": model,
@@ -79,7 +79,7 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
 
         total_errors = sum(game_error_counts.values())
         game_records.append({
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "model_a": g.model_a,
             "model_b": g.model_b,
             "pair": g.pair_name,
@@ -98,20 +98,20 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
         return {"error_df": error_df, "game_df": game_df,
                 "by_model": pd.DataFrame(), "samples": [], "summary": {}}
 
-    # Per-model error rate (melt: each game → 2 agent rows)
+    # Per-model error rate (melt: each environment → 2 agent rows)
     model_rows = []
     for _, row in game_df.iterrows():
         model_rows.append({
             "model": row["model_a"], "errors": row["agent_a_errors"],
-            "rounds": row["num_rounds"], "game_id": row["game_id"],
+            "rounds": row["num_rounds"], "episode_uid": row["episode_uid"],
         })
         model_rows.append({
             "model": row["model_b"], "errors": row["agent_b_errors"],
-            "rounds": row["num_rounds"], "game_id": row["game_id"],
+            "rounds": row["num_rounds"], "episode_uid": row["episode_uid"],
         })
     model_melt = pd.DataFrame(model_rows)
     by_model = model_melt.groupby("model").agg(
-        n_games=pd.NamedAgg(column="game_id", aggfunc="count"),
+        n_games=pd.NamedAgg(column="episode_uid", aggfunc="count"),
         total_errors=pd.NamedAgg(column="errors", aggfunc="sum"),
         total_rounds=pd.NamedAgg(column="rounds", aggfunc="sum"),
         games_with_errors=pd.NamedAgg(column="errors", aggfunc=lambda x: (x > 0).sum()),
@@ -144,7 +144,7 @@ def analyze_agent_errors(dataset: NegotiationDataset) -> dict:
     if not error_df.empty:
         for _, row in error_df.iterrows():
             samples.append({
-                "game_id": row["game_id"],
+                "episode_uid": row["episode_uid"],
                 "event_type": row["event_type"],
                 "agent": row["agent"],
                 "model": row["model"],
@@ -181,7 +181,7 @@ def print_summary(results: dict) -> None:
     print(f"\nGames analyzed: {s['n_games']}")
     print(f"Games with errors: {s['games_with_errors']} ({s['pct_games_with_errors']:.1%})")
     print(f"Total error events: {s['total_errors']}")
-    print(f"Error rate per game: {s['error_rate_per_game']:.2f}")
+    print(f"Error rate per environment: {s['error_rate_per_game']:.2f}")
 
     if s["error_type_counts"]:
         print("\nBy error type:")
@@ -198,7 +198,7 @@ def print_summary(results: dict) -> None:
         print(f"\nSample errors ({min(len(samples), 10)}/{len(samples)}):")
         for s in samples[:10]:
             msg = s["error"] or s["warning"] or s["reason"]
-            print(f"  {s['game_id'][:8]} [{s['model']}] {s['event_type']}: {msg[:120]}")
+            print(f"  {s['episode_uid'][:8]} [{s['model']}] {s['event_type']}: {msg[:120]}")
 
 
 if __name__ == "__main__":

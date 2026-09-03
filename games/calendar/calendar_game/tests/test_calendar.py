@@ -1,8 +1,8 @@
-"""Unit tests for Calendar and batch validation/application logic."""
+"""Unit tests for Calendar and cell validation/application logic."""
 
 import pytest
 
-from calendar_game.calendar import Calendar, apply_batch, validate_batch
+from calendar_game.calendar import Calendar, apply_cell, validate_cell
 
 
 # ---------------------------------------------------------------------------
@@ -110,10 +110,10 @@ def test_render_meeting_participants_when_known():
 
 
 # ---------------------------------------------------------------------------
-# Atomic batch — valid case
+# Atomic cell — valid case
 # ---------------------------------------------------------------------------
 
-def test_atomic_batch_valid():
+def test_atomic_cell_valid():
     """
     Reschedule errand from slot 3 to slot 5 (free), then schedule meeting at
     slot 3 (freed by the reschedule). Assert both changes are applied.
@@ -127,10 +127,10 @@ def test_atomic_batch_valid():
         {"type": "schedule", "meeting_id": 2, "slot": 3, "cost": 1},
     ]
 
-    ok, reason = validate_batch(cal, actions)
+    ok, reason = validate_cell(cal, actions)
     assert ok, reason
 
-    apply_batch(cal, actions)
+    apply_cell(cal, actions)
 
     assert cal.get(3) == meeting(2, 1)
     assert cal.get(5) == {"errand_id": 7, "cost": 4}
@@ -140,9 +140,9 @@ def test_atomic_batch_valid():
 # Order irrelevance
 # ---------------------------------------------------------------------------
 
-def test_atomic_batch_order_irrelevant():
+def test_atomic_cell_order_irrelevant():
     """
-    Submitting the same batch in reversed order must produce identical results.
+    Submitting the same cell in reversed order must produce identical results.
     """
     def build_cal():
         cal = make_calendar(8)
@@ -157,12 +157,12 @@ def test_atomic_batch_order_irrelevant():
     cal_a = build_cal()
     cal_b = build_cal()
 
-    ok_a, _ = validate_batch(cal_a, actions)
-    ok_b, _ = validate_batch(cal_b, list(reversed(actions)))
+    ok_a, _ = validate_cell(cal_a, actions)
+    ok_b, _ = validate_cell(cal_b, list(reversed(actions)))
     assert ok_a and ok_b
 
-    apply_batch(cal_a, actions)
-    apply_batch(cal_b, list(reversed(actions)))
+    apply_cell(cal_a, actions)
+    apply_cell(cal_b, list(reversed(actions)))
 
     assert cal_a.slots == cal_b.slots
 
@@ -171,7 +171,7 @@ def test_atomic_batch_order_irrelevant():
 # Conflict: two actions targeting the same slot
 # ---------------------------------------------------------------------------
 
-def test_atomic_batch_conflict_two_targets():
+def test_atomic_cell_conflict_two_targets():
     """Two actions both targeting slot 5 must cause validation to fail."""
     cal = make_calendar(8)
     cal.place(1, errand(1, 1))
@@ -184,7 +184,7 @@ def test_atomic_batch_conflict_two_targets():
         {"type": "schedule", "meeting_id": 3, "slot": 0, "cost": 1},
     ]
 
-    ok, reason = validate_batch(cal, actions)
+    ok, reason = validate_cell(cal, actions)
     assert not ok
     assert "5" in reason  # conflict message should mention slot 5
 
@@ -193,7 +193,7 @@ def test_atomic_batch_conflict_two_targets():
 # Wrong item_id in reschedule
 # ---------------------------------------------------------------------------
 
-def test_atomic_batch_wrong_item_id():
+def test_atomic_cell_wrong_item_id():
     """
     A reschedule claiming an item_id that doesn't match from_slot contents
     must fail validation.
@@ -207,17 +207,17 @@ def test_atomic_batch_wrong_item_id():
         {"type": "schedule", "meeting_id": 2, "slot": 3, "cost": 1},
     ]
 
-    ok, reason = validate_batch(cal, actions)
+    ok, reason = validate_cell(cal, actions)
     assert not ok
     assert "99" in reason or "3" in reason  # should mention the mismatch
 
 
-def test_validate_batch_rejects_blocked_reschedule():
+def test_validate_cell_rejects_blocked_reschedule():
     """Blocked errands are hard stops and cannot be moved by a reschedule."""
     cal = make_calendar(4)
     cal.place(1, {"errand_id": 7, "cost": 1, "blocked": True})
 
-    ok, reason = validate_batch(cal, [
+    ok, reason = validate_cell(cal, [
         reschedule(7, 1, 2),
         {"type": "schedule", "meeting_id": 1, "slot": 1, "cost": 1},
     ])
@@ -226,28 +226,28 @@ def test_validate_batch_rejects_blocked_reschedule():
     assert "blocked" in reason
 
 
-def test_validate_batch_rejects_malformed_actions():
+def test_validate_cell_rejects_malformed_actions():
     """Malformed model actions should be rejected, not crash validation."""
     cal = make_calendar(4)
     cal.place(1, errand(10, 1))
 
-    ok, reason = validate_batch(cal, [None])  # type: ignore[list-item]
+    ok, reason = validate_cell(cal, [None])  # type: ignore[list-item]
     assert not ok
     assert "not an object" in reason
 
-    ok, reason = validate_batch(cal, [{"type": "schedule", "meeting_id": 1}])
+    ok, reason = validate_cell(cal, [{"type": "schedule", "meeting_id": 1}])
     assert not ok
     assert "missing required field 'slot'" in reason
 
-    ok, reason = validate_batch(cal, [{"type": "reschedule", "item_id": 10, "from_slot": 1}])
+    ok, reason = validate_cell(cal, [{"type": "reschedule", "item_id": 10, "from_slot": 1}])
     assert not ok
     assert "missing required field 'to_slot'" in reason
 
-    ok, reason = validate_batch(cal, [{"type": "reschedule", "item_id": 10, "from_slot": 1, "to_slot": 2}])
+    ok, reason = validate_cell(cal, [{"type": "reschedule", "item_id": 10, "from_slot": 1, "to_slot": 2}])
     assert not ok
     assert "missing required field 'justification'" in reason
 
-    ok, reason = validate_batch(cal, [
+    ok, reason = validate_cell(cal, [
         {"type": "reschedule", "item_id": 10, "from_slot": 1, "to_slot": 2, "justification": "  "}
     ])
     assert not ok
@@ -258,9 +258,9 @@ def test_validate_batch_rejects_malformed_actions():
 # Chain reschedule
 # ---------------------------------------------------------------------------
 
-def test_atomic_batch_chain():
+def test_atomic_cell_chain():
     """
-    Reschedule A→B and reschedule C→A in the same batch.
+    Reschedule A→B and reschedule C→A in the same cell.
     A is freed by the first reschedule, so C→A should be valid.
     """
     cal = make_calendar(8)
@@ -274,10 +274,10 @@ def test_atomic_batch_chain():
         {"type": "schedule", "meeting_id": 5, "slot": 0, "cost": 2},
     ]
 
-    ok, reason = validate_batch(cal, actions)
+    ok, reason = validate_cell(cal, actions)
     assert ok, reason
 
-    apply_batch(cal, actions)
+    apply_cell(cal, actions)
 
     assert cal.get(0) == meeting(5, 2)
     assert cal.get(1) == {"errand_id": 20, "cost": 2}
@@ -286,13 +286,13 @@ def test_atomic_batch_chain():
 
 
 # ---------------------------------------------------------------------------
-# No partial application on invalid batch
+# No partial application on invalid cell
 # ---------------------------------------------------------------------------
 
-def test_apply_batch_no_partial():
+def test_apply_cell_no_partial():
     """
-    An invalid batch must leave the calendar in an identical state.
-    validate_batch alone must not mutate the calendar.
+    An invalid cell must leave the calendar in an identical state.
+    validate_cell alone must not mutate the calendar.
     """
     cal = make_calendar(8)
     cal.place(1, errand(1, 1))
@@ -307,8 +307,8 @@ def test_apply_batch_no_partial():
         {"type": "schedule", "meeting_id": 3, "slot": 0, "cost": 1},
     ]
 
-    ok, _ = validate_batch(cal, actions)
+    ok, _ = validate_cell(cal, actions)
     assert not ok
 
-    # Calendar must be completely unchanged after a failed validate_batch call
+    # Calendar must be completely unchanged after a failed validate_cell call
     assert cal.slots == original_slots

@@ -1,0 +1,18 @@
+schema_version: 1
+release: buyer_seller@v1
+parameters:
+  seller_cost: {randomize: true}
+  buyer_value: {pin: 30}
+  num_items: {pin: 3}
+  discount_factor: {factor: [0.5, 1.0]}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: seller
+    kind: scripted
+    binding: seller-baseline
+  - id: buyer
+    kind: scripted
+    binding: buyer-baseline
+seed:
+  root: 41

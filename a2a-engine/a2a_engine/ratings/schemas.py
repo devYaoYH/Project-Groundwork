@@ -1,4 +1,4 @@
-"""Serializable schemas for game-agnostic player ratings."""
+"""Serializable schemas for environment-agnostic player ratings."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class MetricSpec(BaseModel):
-    """One independently-rated metric in a game."""
+    """One independently-rated metric in a environment."""
 
     name: str
     higher_is_better: bool = True
@@ -26,10 +26,10 @@ class RatingParticipant(BaseModel):
 
 
 class RatingEvent(BaseModel):
-    """A single free-for-all rating event extracted from a game trace."""
+    """A single free-for-all rating event extracted from a environment trace."""
 
-    game_id: str
-    game_name: str
+    episode_uid: str
+    environment_id: str
     participants: list[RatingParticipant]
     metric_scores: dict[str, dict[str, float]]
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -72,7 +72,7 @@ class RatingSnapshot(BaseModel):
     model: str = "openskill.plackett_luce"
     metrics: list[MetricSpec]
     players: dict[str, PlayerRatingState] = Field(default_factory=dict)
-    processed_game_ids: list[str] = Field(default_factory=list)
+    processed_episode_uids: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] = Field(default_factory=dict)
 

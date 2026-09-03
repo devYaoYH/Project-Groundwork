@@ -1,6 +1,6 @@
-"""Buyer-seller bargaining game.
+"""Buyer-seller bargaining environment.
 
-Importing this package registers the game via ``game.py``'s ``register_game``
+Importing this package registers the environment via ``environment.py``'s ``register_environment``
 side effect. See ``SPEC.md`` for the protocol it implements.
 """
 

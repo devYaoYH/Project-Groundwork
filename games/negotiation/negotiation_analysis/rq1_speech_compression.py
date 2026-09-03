@@ -25,10 +25,10 @@ def analyze_speech_compression(dataset: NegotiationDataset) -> dict:
     turn_df = dataset.to_turn_df()
 
     multi_round_ids = set(
-        round_df[round_df["num_game_rounds"] >= 2]["game_id"]
+        round_df[round_df["num_game_rounds"] >= 2]["episode_uid"]
     )
-    mr_rounds = round_df[round_df["game_id"].isin(multi_round_ids)].copy()
-    mr_turns = turn_df[turn_df["game_id"].isin(multi_round_ids)].copy()
+    mr_rounds = round_df[round_df["episode_uid"].isin(multi_round_ids)].copy()
+    mr_turns = turn_df[turn_df["episode_uid"].isin(multi_round_ids)].copy()
 
     # Speech volume by round × mode
     speech_by_round_mode = (
@@ -40,8 +40,8 @@ def analyze_speech_compression(dataset: NegotiationDataset) -> dict:
             sem_speech_chars=pd.NamedAgg(
                 column="total_speech_chars", aggfunc="sem"
             ),
-            n_rounds=pd.NamedAgg(column="game_id", aggfunc="count"),
-            n_games=pd.NamedAgg(column="game_id", aggfunc="nunique"),
+            n_rounds=pd.NamedAgg(column="episode_uid", aggfunc="count"),
+            n_games=pd.NamedAgg(column="episode_uid", aggfunc="nunique"),
         )
         .reset_index()
     )
@@ -60,7 +60,7 @@ def analyze_speech_compression(dataset: NegotiationDataset) -> dict:
 
     # Mean message length per round by shifting status
     msg_per_round = (
-        mr_turns.groupby(["game_id", "round_number", "is_shifting"])
+        mr_turns.groupby(["episode_uid", "round_number", "is_shifting"])
         .agg(mean_msg_len=pd.NamedAgg(column="message_len", aggfunc="mean"))
         .reset_index()
     )
@@ -69,7 +69,7 @@ def analyze_speech_compression(dataset: NegotiationDataset) -> dict:
         .agg(
             mean=pd.NamedAgg(column="mean_msg_len", aggfunc="mean"),
             sem=pd.NamedAgg(column="mean_msg_len", aggfunc="sem"),
-            n_games=pd.NamedAgg(column="game_id", aggfunc="nunique"),
+            n_games=pd.NamedAgg(column="episode_uid", aggfunc="nunique"),
         )
         .reset_index()
     )

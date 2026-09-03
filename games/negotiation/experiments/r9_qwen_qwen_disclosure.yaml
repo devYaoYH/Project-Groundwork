@@ -1,9 +1,9 @@
 name: projects_study_disclosure_009
 description: 'V2 cross-play study: qwen self-play at lowest performance, disclosure intervention.'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: qwen_stable_fixed_share_mc10
   count: 10
   config:

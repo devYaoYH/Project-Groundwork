@@ -1,4 +1,4 @@
-"""Protocol tests for the buyer-seller game.
+"""Protocol tests for the buyer-seller environment.
 
 These cover the rules that are easy to break silently in a refactor: the
 information-leakage boundary, the discounting arithmetic, and the terminal
@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from buyer_seller.game import DEADLINE, SOLD_OUT, BuyerSellerConfig, BuyerSellerGame
+from buyer_seller.game import (
+    DEADLINE,
+    SOLD_OUT,
+    BuyerSellerConfig,
+    BuyerSellerGame,
+    best_joint_utility,
+    undiscounted_total_surplus,
+)
 
 
 def run(**overrides):
@@ -30,16 +37,16 @@ def events_of(trace, kind):
 
 def test_buyer_never_observes_seller_cost():
     """The leakage boundary is the spec's central constraint."""
-    game = BuyerSellerGame(BuyerSellerConfig(seller_cost=7.5, buyer_value=30.0), dry_run=True)
-    obs = game._buyer_observation(1, 0, [], price=20.0)
+    environment = BuyerSellerGame(BuyerSellerConfig(seller_cost=7.5, buyer_value=30.0), dry_run=True)
+    obs = environment._buyer_observation(1, 0, [], price=20.0)
     assert "your_value" in obs
     assert "seller_cost" not in obs
     assert 7.5 not in [v for v in obs.values() if isinstance(v, (int, float))]
 
 
 def test_seller_never_observes_buyer_value():
-    game = BuyerSellerGame(BuyerSellerConfig(seller_cost=10.0, buyer_value=33.25), dry_run=True)
-    obs = game._seller_observation(1, 0, [], last_price=None)
+    environment = BuyerSellerGame(BuyerSellerConfig(seller_cost=10.0, buyer_value=33.25), dry_run=True)
+    obs = environment._seller_observation(1, 0, [], last_price=None)
     assert "your_cost" in obs
     assert "buyer_value" not in obs
     assert 33.25 not in [v for v in obs.values() if isinstance(v, (int, float))]
@@ -74,6 +81,17 @@ def test_later_trades_are_discounted_more():
     discounts = [tr["discount"] for tr in trades]
     assert discounts == sorted(discounts, reverse=True)
     assert discounts[0] > discounts[-1]
+
+
+def test_best_joint_utility_matches_the_item_tuple_discount_factor():
+    """The configured-game optimum includes delta; total surplus is informational."""
+    assert undiscounted_total_surplus(8.0, 30.0, 3) == 66.0
+    assert best_joint_utility(8.0, 30.0, 3, 1.0) == 66.0
+    assert best_joint_utility(8.0, 30.0, 3, 0.5) == pytest.approx(38.5)
+
+    trace = run(seller_cost=8.0, buyer_value=30.0, num_items=3, discount_factor=0.5)
+    assert trace.metrics["best_joint_utility"] == pytest.approx(38.5)
+    assert trace.metrics["undiscounted_total_surplus"] == 66.0
 
 
 def test_no_trade_yields_zero_utility():
@@ -124,13 +142,13 @@ def test_monotonic_constraint_clamps_rising_offers():
             self.n += 1
             return {"price": 10.0 * self.n, "text": f"offer {10.0 * self.n}"}
 
-    game = BuyerSellerGame(
+    environment = BuyerSellerGame(
         BuyerSellerConfig(num_items=3, seller_cost=1.0, buyer_value=5.0,
                           max_rounds=5, enforce_monotonic_offers=True),
         dry_run=True,
     )
-    game.seller = RisingSeller()
-    trace = game.run()
+    environment.seller = RisingSeller()
+    trace = environment.run()
 
     prices = [e.data["price"] for e in events_of(trace, "offer")]
     assert prices == sorted(prices, reverse=True), "offers must be non-increasing"
@@ -146,11 +164,11 @@ def test_violations_not_flagged_when_constraint_disabled():
 
 
 def test_offers_and_responses_are_transcript_visible():
-    """Messages carry {speaker, text} so GameDataset.to_messages_df works."""
-    from a2a_engine.dataset import GameDataset
+    """Messages carry {speaker, text} so EpisodeDataset.to_messages_df works."""
+    from a2a_engine.dataset import EpisodeDataset
 
     trace = run()
-    ds = GameDataset.from_traces([trace])
+    ds = EpisodeDataset.from_traces([trace])
     df = ds.to_messages_df()
     assert not df.empty
     assert set(df["speaker"]) == {"seller", "buyer"}

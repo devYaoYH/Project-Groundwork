@@ -28,7 +28,7 @@ def load_judged_rounds(judgments_csv: Path) -> list[dict]:
         for row in csv.DictReader(f):
             for rnd in json.loads(row["rounds_summary"]):
                 rounds.append({
-                    "game_id": row["game_id"],
+                    "episode_uid": row["episode_uid"],
                     "round_number": int(rnd["round_number"]),
                     "round_outcome": rnd.get("round_outcome"),
                     "joint_efficiency": rnd.get("joint_efficiency"),
@@ -61,7 +61,7 @@ def round_robin_sample(rounds: list[dict], n_rounds: int, seed: int) -> list[dic
         if not added:
             break
 
-    selected.sort(key=lambda r: (r["game_id"], r["round_number"]))
+    selected.sort(key=lambda r: (r["episode_uid"], r["round_number"]))
     return selected
 
 
@@ -70,25 +70,25 @@ def attach_round_payloads(selected: list[dict], extracted_dir: Path) -> list[dic
     payloads: list[dict] = []
 
     for item in selected:
-        gid = item["game_id"]
+        gid = item["episode_uid"]
         if gid not in by_game:
             path = extracted_dir / f"{gid}.json"
             with open(path) as f:
                 by_game[gid] = json.load(f)
 
-        game = by_game[gid]
+        environment = by_game[gid]
         rnd = next(
-            r for r in game["rounds"]
+            r for r in environment["rounds"]
             if int(r["round_number"]) == int(item["round_number"])
         )
         payloads.append({
-            "game_id": gid,
+            "episode_uid": gid,
             "round_number": int(rnd["round_number"]),
-            "model_a": game.get("model_a"),
-            "model_b": game.get("model_b"),
-            "mode": game.get("mode"),
-            "shifting_agent": game.get("shifting_agent"),
-            "mc_ratio": game.get("mc_ratio"),
+            "model_a": environment.get("model_a"),
+            "model_b": environment.get("model_b"),
+            "mode": environment.get("mode"),
+            "shifting_agent": environment.get("shifting_agent"),
+            "mc_ratio": environment.get("mc_ratio"),
             "round": rnd,
         })
 

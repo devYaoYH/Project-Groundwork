@@ -1,4 +1,4 @@
-"""Seam tests: the RunManifest reproducibility contract.
+"""Seam tests: the EpisodeManifest reproducibility contract.
 
 The manifest replaces an ad-hoc metadata dict that used to be assembled inline in
 expt-runner. These tests pin the properties the contract is *for*: the same
@@ -10,7 +10,7 @@ import json
 
 from a2a_engine.manifest import (
     MANIFEST_SCHEMA_VERSION,
-    RunManifest,
+    EpisodeManifest,
     config_hash,
     file_sha256,
     redact_config,
@@ -18,8 +18,8 @@ from a2a_engine.manifest import (
 
 
 BASE_CONFIG = {
-    "game_name": "calendar",
-    "experiment_run_id": "exp.batch.0",
+    "environment_id": "calendar",
+    "episode_id": "exp.cell.0",
     "num_agents": 2,
     "seed": 42,
     "agents": [
@@ -31,10 +31,10 @@ BASE_CONFIG = {
 
 def build(config=None, **kw):
     kw.setdefault("experiment_name", "exp")
-    kw.setdefault("batch_label", "batch")
-    kw.setdefault("run_idx", 0)
-    kw.setdefault("game_id", "gid")
-    return RunManifest.from_run(config=config or BASE_CONFIG, **kw)
+    kw.setdefault("cell_id", "cell")
+    kw.setdefault("episode_idx", 0)
+    kw.setdefault("episode_uid", "gid")
+    return EpisodeManifest.from_run(config=config or BASE_CONFIG, **kw)
 
 
 # --- config hashing ----------------------------------------------------------
@@ -104,7 +104,7 @@ def test_agents_capture_behavioral_params_only():
 
 
 def test_manifest_survives_a_config_with_no_agents():
-    m = build({"game_name": "g", "experiment_run_id": "e.b.0"})
+    m = build({"environment_id": "g", "episode_id": "e.b.0"})
     assert m.agents == []
     assert m.resolved_config_hash
 
@@ -115,9 +115,9 @@ def test_manifest_survives_a_config_with_no_agents():
 def test_manifest_carries_identity_and_versions():
     m = build()
     assert m.schema_version == MANIFEST_SCHEMA_VERSION
-    assert (m.experiment_name, m.batch_label, m.run_idx) == ("exp", "batch", 0)
-    assert m.experiment_run_id == "exp.batch.0"
-    assert m.game_name == "calendar"
+    assert (m.experiment_name, m.cell_id, m.episode_idx) == ("exp", "cell", 0)
+    assert m.episode_id == "exp.cell.0"
+    assert m.environment_id == "calendar"
     assert m.seed == 42
     assert m.a2a_engine_version, "engine version must be recorded"
 
@@ -130,6 +130,6 @@ def test_explicit_git_hash_in_config_wins():
 
 def test_manifest_round_trips_through_json():
     m = build()
-    restored = RunManifest.model_validate(json.loads(m.model_dump_json()))
+    restored = EpisodeManifest.model_validate(json.loads(m.model_dump_json()))
     assert restored.resolved_config_hash == m.resolved_config_hash
     assert [a.model for a in restored.agents] == [a.model for a in m.agents]

@@ -1,5 +1,5 @@
 === DSPY-OPTIMIZED NEGOTIATION POLICY ===
-This client may use an optimized negotiation policy. Preserve the game rules and privacy constraints above.
+This client may use an optimized negotiation policy. Preserve the environment rules and privacy constraints above.
 
 Operational preference:
 - Before accepting a costly slot, name at least one easier alternative if you have one.

@@ -1,6 +1,6 @@
 """RQ11 — LLM Token Usage Analysis for V5+ Project Games.
 
-Extracts actual API-reported token usage from api_meta fields in game traces,
+Extracts actual API-reported token usage from api_meta fields in environment episodes,
 with per-round granularity as the primary unit of analysis.
 
 Falls back to character-based estimation when api_meta is not available.
@@ -26,7 +26,7 @@ CHARS_PER_TOKEN = 4  # fallback estimate when api_meta unavailable
 
 
 def _resolve_model(agent_id: str, agents: list[dict]) -> str:
-    """Map agent_id (agent_a/agent_b) to model name from game config."""
+    """Map agent_id (agent_a/agent_b) to model name from environment config."""
     idx = 0 if agent_id == "agent_a" else 1
     if idx < len(agents):
         agent_cfg = agents[idx]
@@ -57,18 +57,18 @@ def _extract_api_meta_from_events(events: list[dict]) -> dict[tuple[str, int, in
 
 
 def _convert_negotiation_dataset_to_raw_games(dataset: Any) -> list[dict]:
-    """Convert NegotiationDataset to raw game format for analyze_token_usage.
+    """Convert NegotiationDataset to raw environment format for analyze_token_usage.
 
     This avoids the slow Firestore load and works with the already-loaded dataset.
     """
     raw_games = []
-    for game in dataset.games:
+    for environment in dataset.games:
         raw_game = {
-            "game_id": game.game_id,
-            "experiment_label": game.label,
-            "agents": game.config.get("agents", []),
-            "events": game.all_events,
-            "rounds": [r.data for r in game.rounds],
+            "episode_uid": environment.episode_uid,
+            "experiment_label": environment.label,
+            "agents": environment.config.get("agents", []),
+            "events": environment.all_events,
+            "rounds": [r.data for r in environment.rounds],
         }
         raw_games.append(raw_game)
     return raw_games
@@ -103,7 +103,7 @@ def analyze_token_usage(games_input: Any) -> dict:
     """Analyze token usage across games at per-round granularity.
 
     Accepts either:
-    - List of raw game dicts (legacy format from Firestore)
+    - List of raw environment dicts (legacy format from Firestore)
     - NegotiationDataset (fast path using already-loaded dataset)
 
     Prefers actual API-reported token counts from api_meta. Falls back to
@@ -112,7 +112,7 @@ def analyze_token_usage(games_input: Any) -> dict:
     Returns:
         Dict with 'model_summary', 'per_round', 'per_game', 'model_goal_summary' DataFrames.
     """
-    # Convert NegotiationDataset to raw game format if needed (duck typing for flexibility)
+    # Convert NegotiationDataset to raw environment format if needed (duck typing for flexibility)
     if hasattr(games_input, 'games') and not isinstance(games_input, list):
         raw_games = _convert_negotiation_dataset_to_raw_games(games_input)
     else:
@@ -120,12 +120,12 @@ def analyze_token_usage(games_input: Any) -> dict:
 
     per_round_rows = []
 
-    for game in raw_games:
-        game_id = game["game_id"]
-        agents = game.get("agents", [])
-        events = game.get("events", [])
-        rounds = game.get("rounds", [])
-        label = game.get("experiment_label", "")
+    for environment in raw_games:
+        episode_uid = environment["episode_uid"]
+        agents = environment.get("agents", [])
+        events = environment.get("events", [])
+        rounds = environment.get("rounds", [])
+        label = environment.get("experiment_label", "")
 
         if not events and not rounds:
             continue
@@ -205,7 +205,7 @@ def analyze_token_usage(games_input: Any) -> dict:
             output_chars = chars["speech_chars"] + chars["thinking_chars"] + chars["reasoning_chars"]
 
             row = {
-                "game_id": game_id,
+                "episode_uid": episode_uid,
                 "experiment_label": label,
                 "model": model,
                 "agent_id": agent_id,
@@ -248,7 +248,7 @@ def analyze_token_usage(games_input: Any) -> dict:
     # Model summary
     def _model_agg(group):
         result = {
-            "games": group["game_id"].nunique(),
+            "games": group["episode_uid"].nunique(),
             "agent_rounds": len(group),
             "speech_count": group["speech_count"].sum(),
             "thinking_count": group["thinking_count"].sum(),
@@ -277,9 +277,9 @@ def analyze_token_usage(games_input: Any) -> dict:
 
     model_summary_df = per_round_df.groupby("model").apply(_model_agg, include_groups=False).reset_index()
 
-    # Per-game summary
+    # Per-environment summary
     per_game_df = (
-        per_round_df.groupby(["game_id", "model", "agent_id"])
+        per_round_df.groupby(["episode_uid", "model", "agent_id"])
         .agg(
             num_rounds=("round_number", "nunique"),
             speech_chars=("speech_chars", "sum"),
@@ -315,7 +315,7 @@ def print_summary(results: dict) -> None:
     print(f"\n{'='*100}")
     print("RQ11: LLM Token Usage Analysis")
     print(f"{'='*100}")
-    print(f"Games analyzed: {per_round['game_id'].nunique()}")
+    print(f"Games analyzed: {per_round['episode_uid'].nunique()}")
     print(f"Total agent-rounds: {len(per_round)}")
     print(f"API token data available: {'Yes' if has_api else 'No (char-based estimates only)'}")
     print()
@@ -344,13 +344,13 @@ def print_summary(results: dict) -> None:
     print()
     print("Per-round trends (mean across all models):")
     print("-" * 80)
-    trend_agg = {"est_output_tokens": "mean", "game_id": "count"}
+    trend_agg = {"est_output_tokens": "mean", "episode_uid": "count"}
     if has_api:
         for col in ["completion_tokens", "reasoning_tokens", "prompt_tokens"]:
             if col in per_round.columns and per_round[col].notna().any():
                 trend_agg[col] = "mean"
     round_agg = per_round.groupby("round_number").agg(**{
-        k if k != "game_id" else "n": pd.NamedAgg(column=k, aggfunc=v)
+        k if k != "episode_uid" else "n": pd.NamedAgg(column=k, aggfunc=v)
         for k, v in trend_agg.items()
     }).reset_index()
     print(round_agg.to_string(index=False, float_format="%.0f"))

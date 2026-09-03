@@ -8,7 +8,7 @@ Usage::
 
     cd games/calendar
     uv run python analysis/scripts/rq234_llm_vs_dsm_comparison.py \\
-        --llm  ../../shared-traces \\
+        --llm  ../../shared-episodes \\
         --dsm  results/varied_full_dsm
 """
 
@@ -23,12 +23,12 @@ import pandas as pd
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from calendar_game.dataset import CalendarGameDataset
+from calendar_game.dataset import CalendarEpisodeDataset
 
 
 def load(llm_root: Path, dsm_root: Path):
-    llm_ds = CalendarGameDataset.from_dir(llm_root)
-    dsm_ds = CalendarGameDataset.from_dir(dsm_root)
+    llm_ds = CalendarEpisodeDataset.from_dir(llm_root)
+    dsm_ds = CalendarEpisodeDataset.from_dir(dsm_root)
 
     lg = llm_ds.to_game_df(); lg["client"] = "Gemini-3.1-Pro"
     dg = dsm_ds.to_game_df(); dg["client"] = "DSM"
@@ -47,7 +47,7 @@ def report(games: pd.DataFrame, agents: pd.DataFrame) -> str:
     def h(title): lines.append(f"\n=== {title} ===")
     def show(df): lines.append(df.to_string())
 
-    h("Game counts")
+    h("Environment counts")
     show(games.groupby("client").size().rename("n"))
 
     h("RQ2: Communication efficiency (msgs per meeting scheduled)")
@@ -75,8 +75,8 @@ def report(games: pd.DataFrame, agents: pd.DataFrame) -> str:
     show(games.groupby("client")["cost_gini"]
          .agg(["mean", "median", "std"]).round(3))
 
-    h("RQ4: Within-game cost_share std (fairness spread)")
-    cs = agents.groupby(["client", "game_id"])["cost_share"].std().reset_index()
+    h("RQ4: Within-environment cost_share std (fairness spread)")
+    cs = agents.groupby(["client", "episode_uid"])["cost_share"].std().reset_index()
     show(cs.groupby("client")["cost_share"]
          .agg(["mean", "median"]).round(3))
 
@@ -85,10 +85,10 @@ def report(games: pd.DataFrame, agents: pd.DataFrame) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--llm", default="../../shared-traces",
-                        help="Root dir for LLM traces (default: ../../shared-traces)")
+    parser.add_argument("--llm", default="../../shared-episodes",
+                        help="Root dir for LLM episodes (default: ../../shared-episodes)")
     parser.add_argument("--dsm", default="results/varied_full_dsm",
-                        help="Root dir for DSM traces (default: results/varied_full_dsm)")
+                        help="Root dir for DSM episodes (default: results/varied_full_dsm)")
     args = parser.parse_args()
 
     games, agents = load(Path(args.llm), Path(args.dsm))

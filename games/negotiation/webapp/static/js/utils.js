@@ -283,7 +283,7 @@ export function renderGameMetadata(config, result, options = {}) {
     const visUtil = cfg.visible_utilities ? 'Visible' : 'Hidden';
     const visOutcome = cfg.visible_outcome === false ? 'Hidden' : 'Visible';
     const expLabel = cfg.experiment_label || '';
-    const expRunId = cfg.experiment_run_id || '';
+    const expRunId = cfg.episode_id || '';
     const goal = cfg.goal || '';
     const goalLabel = goal || 'Maximize Own Reward';
 
@@ -296,17 +296,17 @@ export function renderGameMetadata(config, result, options = {}) {
         : '';
 
     return `
-        <details class="game-metadata-details">
-            <summary class="game-metadata-summary">
+        <details class="environment-metadata-details">
+            <summary class="environment-metadata-summary">
                 <span class="summary-text">
                     <svg class="summary-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
-                    Game Configuration
+                    Environment Configuration
                 </span>
                 ${downloadBtn}
             </summary>
-            <div class="game-metadata">
+            <div class="environment-metadata">
                 ${expLabel || expRunId ? `<div class="meta-row">${expLabel ? `<div class="meta-group wide"><div class="meta-label">Experiment</div><div class="meta-value experiment-label">${escapeHtml(expLabel)}</div></div>` : ''}${expRunId ? `<div class="meta-group wide"><div class="meta-label">Run ID</div><div class="meta-value" style="font-family:monospace;font-size:0.85em" title="${escapeHtml(expRunId)}">${escapeHtml(expRunId.substring(0, 8))}</div></div>` : ''}</div>` : ''}
                 <div class="meta-row">
                     <div class="meta-group">

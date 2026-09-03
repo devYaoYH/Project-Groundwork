@@ -14,7 +14,7 @@ services:
       timeout: 3s
       retries: 12
 
-  # The default job is fully deterministic: it exercises every packaged game,
+  # The default job is fully deterministic: it exercises every packaged environment,
   # writes to the shared SQLite volume, and makes no model or cloud requests.
   runner:
     build:
@@ -22,17 +22,17 @@ services:
       dockerfile: Dockerfile
     image: a2a-comm-local:latest
     environment:
-      A2A_TRACE_DB: /data/a2a_traces.db
+      A2A_TRACE_DB: /data/a2a.db
       # Local research runs retain the full OTel projection alongside the
       # canonical SQLite trace. Remote export is never required for replay.
       OTEL_TRACES_EXPORTER: file
       A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
       A2A_CAPTURE_CONTENT: "true"
       A2A_REDIS_URL: redis://redis:6379/0
-      # The default smoke job is replayable too; per-rollout launches override
-      # this namespace with their own immutable rollout ID.
-      A2A_ROLLOUT_ID: compose-smoke
-      A2A_REDIS_STREAM_PREFIX: a2a:rollout:compose-smoke
+      # The default smoke job is replayable too; per-launch launches override
+      # this namespace with their own immutable launch ID.
+      A2A_LAUNCH_ID: compose-smoke
+      A2A_REDIS_STREAM_PREFIX: a2a:launch:compose-smoke
       A2A_REDIS_STREAM_TTL_SECONDS: "604800"
       # Provider credentials are interpolated from the repo-root `.env` (or the
       # shell) and default to empty, so the credential-free smoke path still
@@ -67,7 +67,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      A2A_TRACE_DB: /data/a2a_traces.db
+      A2A_TRACE_DB: /data/a2a.db
       A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
       A2A_REDIS_URL: redis://redis:6379/0
       A2A_CAPTURE_CONTENT: "true"
@@ -92,7 +92,7 @@ services:
     ports:
       - "8080:8080"
     command:
-      ["python", "local_stack/server.py", "--database", "/data/a2a_traces.db", "--control-database", "/data/a2a_control.db", "--workspace", "/workspace", "--static-dir", "/workspace/a2a-viewer", "--host", "0.0.0.0", "--port", "8080"]
+      ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       redis:
         condition: service_healthy

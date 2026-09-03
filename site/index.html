@@ -29,18 +29,18 @@
       color: var(--muted); margin: 40px 0 14px; font-weight: 600;
     }
     .games { display: flex; flex-direction: column; gap: 14px; }
-    .game {
+    .environment {
       border: 1px solid var(--border); border-radius: 10px;
       padding: 18px 20px; background: var(--card);
     }
-    .game-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-    .game h3 { font-size: 17px; margin: 0; }
+    .environment-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .environment h3 { font-size: 17px; margin: 0; }
     .badge {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
       color: var(--muted); border: 1px solid var(--border);
       border-radius: 999px; padding: 1px 8px;
     }
-    .game p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+    .environment p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
     .links { margin-top: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
     .links a { color: var(--accent); text-decoration: none; font-size: 14px; }
     .links a:hover { text-decoration: underline; }
@@ -63,7 +63,7 @@
       <h1>a2a-comm</h1>
       <p class="tagline">
         Benchmarks for agent-to-agent coordination: a shared engine, a shared
-        experiment runner, and a shared judge — one game per environment.
+        experiment runner, and a shared judge — one environment per release.
       </p>
     </header>
 
@@ -80,20 +80,20 @@
 cd games/negotiation
 uv run python run.py experiments/smoke_local.yaml --results-dir ./results</code></pre>
     <p style="color: var(--muted); font-size: 14px;">
-      Every run writes a trace plus a <code>RunManifest</code> pinning the code,
+      Every run writes a trace plus a <code>EpisodeManifest</code> pinning the code,
       config hash, dataset hash, and models — so a result can be traced back to
       the exact conditions that produced it. See <code>docs/CONTRACTS.md</code>.
     </p>
 
     <footer>
-      Static page — deploys to GitHub Pages with no build step. Game viewers and
-      leaderboards are deployed separately by each game and linked above.
+      Static page — deploys to GitHub Pages with no build step. Environment viewers and
+      leaderboards are deployed separately by each environment and linked above.
     </footer>
   </div>
 
   <script>
-    // The page is a registry renderer: it owns no game-specific knowledge.
-    // Adding a game means adding an entry to games.json.
+    // The page is a registry renderer: it owns no environment-specific knowledge.
+    // Adding a environment means adding an entry to games.json.
     const LINKS = [
       ["viewer_url", "Trace viewer"],
       ["leaderboard_url", "Leaderboard"],
@@ -103,39 +103,39 @@ uv run python run.py experiments/smoke_local.yaml --results-dir ./results</code>
     function render(games) {
       const root = document.getElementById("games");
       root.innerHTML = "";
-      for (const game of games) {
+      for (const environment of games) {
         const el = document.createElement("div");
-        el.className = "game";
+        el.className = "environment";
 
         const head = document.createElement("div");
-        head.className = "game-head";
+        head.className = "environment-head";
         const title = document.createElement("h3");
-        title.textContent = game.name;
+        title.textContent = environment.name;
         head.appendChild(title);
-        if (game.status && game.status !== "active") {
+        if (environment.status && environment.status !== "active") {
           const badge = document.createElement("span");
           badge.className = "badge";
-          badge.textContent = game.status;
+          badge.textContent = environment.status;
           head.appendChild(badge);
         }
         el.appendChild(head);
 
         const blurb = document.createElement("p");
-        blurb.textContent = game.blurb || "";
+        blurb.textContent = environment.blurb || "";
         el.appendChild(blurb);
 
         const links = document.createElement("div");
         links.className = "links";
         for (const [key, label] of LINKS) {
-          if (!game[key]) continue;  // omit rather than render a dead link
+          if (!environment[key]) continue;  // omit rather than render a dead link
           const a = document.createElement("a");
-          a.href = game[key];
+          a.href = environment[key];
           a.textContent = label;
           links.appendChild(a);
         }
-        if (game.repo) {
+        if (environment.repo) {
           const a = document.createElement("a");
-          a.href = game.repo;
+          a.href = environment.repo;
           a.textContent = "Source";
           links.appendChild(a);
         }

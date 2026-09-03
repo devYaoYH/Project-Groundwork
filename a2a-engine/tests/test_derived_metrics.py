@@ -3,9 +3,9 @@ from a2a_engine.derived_metrics import (
     materialize_derived_metrics,
     register_derived_metric_extractor,
 )
-from a2a_engine.manifest import RunManifest
-from a2a_engine.schemas import EnvironmentReference, GameConfigBase, GameTraceBase
-from a2a_engine.storage.sqlite import SQLiteTraceStore
+from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.schemas import ReleaseReference, EpisodeConfigBase, EpisodeTrace
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 
 class _QualityExtractor:
@@ -18,20 +18,20 @@ class _QualityExtractor:
 
 def test_declared_derived_metrics_materialize_as_idempotent_artifacts(tmp_path):
     register_derived_metric_extractor(_QualityExtractor())
-    config = GameConfigBase(game_name="demo", num_agents=2, experiment_name="e", experiment_run_id="e.b.0")
-    trace = GameTraceBase(
-        game_id="g1", config=config,
-        environment=EnvironmentReference(
-            id="demo.tiny", revision="v1", content_sha256="a" * 64,
+    config = EpisodeConfigBase(environment_id="demo", num_agents=2, experiment_name="e", episode_id="e.b.0")
+    trace = EpisodeTrace(
+        episode_uid="g1", config=config,
+        release=ReleaseReference(
+            id="demo.tiny", release="v1", content_sha256="a" * 64,
             metrics=[{
                 "name": "quality", "producer": "derived", "extractor": "test.quality",
                 "direction": "maximize",
             }],
         ),
     )
-    store = SQLiteTraceStore(path=tmp_path / "traces.db")
-    store.put_trace(trace, RunManifest.from_run(
-        config=config.model_dump(), experiment_name="e", batch_label="b", run_idx=0, game_id="g1",
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, EpisodeManifest.from_run(
+        config=config.model_dump(), experiment_name="e", cell_id="b", episode_idx=0, episode_uid="g1",
     ))
 
     first = materialize_derived_metrics(store)

@@ -1,13 +1,13 @@
-"""Batch pipeline entrypoint for the LLM judge.
+"""Cell pipeline entrypoint for the LLM judge.
 
 Two phases per run (reclassification is dropped for now):
-  Phase 0: Extraction — write JudgeGameContext JSON to output/extracted/<game_id>.json
-  Phase 1: Discovery  — one LLM call per game, save raw judgment
+  Phase 0: Extraction — write JudgeGameContext JSON to output/extracted/<episode_uid>.json
+  Phase 1: Discovery  — one LLM call per environment, save raw judgment
   Phase 2: Consolidation — one LLM call over all raw judgments, save taxonomy
-  CSV:     Flatten raw game judgments into judgments.csv
+  CSV:     Flatten raw environment judgments into judgments.csv
 
 Usage:
-    uv run python -m judge.run_batch \
+    uv run python -m judge.run_cell \
         --provider anthropic \
         --model claude-sonnet-4-5-20250929 \
         --output-dir judge/output
@@ -38,42 +38,42 @@ logging.basicConfig(
     format="%(asctime)s %(name)-20s %(levelname)-7s %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("judge.batch")
+log = logging.getLogger("judge.cell")
 
 
-def _extracted_path(output_dir: Path, game_id: str) -> Path:
-    return output_dir / "extracted" / f"{game_id}.json"
+def _extracted_path(output_dir: Path, episode_uid: str) -> Path:
+    return output_dir / "extracted" / f"{episode_uid}.json"
 
 
 INTERVENTION_KEYWORDS = {"share", "tom", "named", "transp", "transparency", "joint", "notalk"}
 
 
 def _has_intervention(ctx, dataset: NegotiationDataset) -> bool:
-    """Check if a game has any intervention flags set in its config or label."""
-    game = next((g for g in dataset.games if g.game_id == ctx.game_id), None)
-    if game is None:
+    """Check if a environment has any intervention flags set in its config or label."""
+    environment = next((g for g in dataset.games if g.episode_uid == ctx.episode_uid), None)
+    if environment is None:
         return False
-    label = game.label.lower()
-    cfg = game.config
+    label = environment.label.lower()
+    cfg = environment.config
     if cfg.get("share_projects", False) or cfg.get("think_about_opponent", False) or cfg.get("named_projects", False):
         return True
     return any(kw in label for kw in INTERVENTION_KEYWORDS)
 
 
-def _raw_path(output_dir: Path, game_id: str) -> Path:
-    return output_dir / "raw" / f"{game_id}.json"
+def _raw_path(output_dir: Path, episode_uid: str) -> Path:
+    return output_dir / "raw" / f"{episode_uid}.json"
 
 
 def _save_extracted_context(ctx: JudgeGameContext, output_dir: Path) -> None:
     """Persist a JudgeGameContext to disk for inspection and reproducibility."""
-    path = _extracted_path(output_dir, ctx.game_id)
+    path = _extracted_path(output_dir, ctx.episode_uid)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(ctx.model_dump(), f, indent=2)
 
 
 def _load_existing_games(output_dir: Path) -> dict[str, GameJudgment]:
-    """Load already-completed game judgments for resume support."""
+    """Load already-completed environment judgments for resume support."""
     raw_dir = output_dir / "raw"
     existing = {}
     if not raw_dir.exists():
@@ -86,14 +86,14 @@ def _load_existing_games(output_dir: Path) -> dict[str, GameJudgment]:
             if "rounds" not in data or not isinstance(data["rounds"], list):
                 continue
             j = GameJudgment.model_validate(data)
-            existing[j.game_id] = j
+            existing[j.episode_uid] = j
         except Exception as e:
             log.warning("Skipping corrupt judgment file %s: %s", f, e)
     return existing
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run LLM judge batch pipeline (per-game)")
+    parser = argparse.ArgumentParser(description="Run LLM judge cell pipeline (per-environment)")
     parser.add_argument("--provider", default="anthropic", choices=list(LLM_PROVIDERS.keys()),
                         help="LLM provider (default: anthropic)")
     parser.add_argument("--model", default=None,
@@ -141,7 +141,7 @@ def main():
     key_env = args.api_key_env or key_env_map.get(args.provider, "API_KEY")
     api_key = os.environ.get(key_env)
     if not api_key and not args.dry_run:
-        log.error("API key not found. Set %s environment variable.", key_env)
+        log.error("API key not found. Set %s release variable.", key_env)
         sys.exit(1)
 
     output_dir = args.output_dir
@@ -183,24 +183,24 @@ def main():
     if args.dry_run:
         for ctx in contexts:
             log.info("  %s: %d rounds | %s vs %s | %s mc=%s",
-                     ctx.game_id[:12], len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode, ctx.mc_ratio)
+                     ctx.episode_uid[:12], len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode, ctx.mc_ratio)
         log.info("Dry run complete. %d games would be judged.", len(contexts))
         return
 
-    # Step 1: Judge each game (one LLM call per game)
+    # Step 1: Judge each environment (one LLM call per environment)
     existing = _load_existing_games(output_dir) if args.resume else {}
-    log.info("Found %d existing game judgments (resume=%s)", len(existing), args.resume)
+    log.info("Found %d existing environment judgments (resume=%s)", len(existing), args.resume)
 
     judgments: list[GameJudgment] = list(existing.values())
     new_count = 0
 
     for i, ctx in enumerate(contexts):
-        if ctx.game_id in existing:
-            log.info("[%d/%d] SKIP %s (cached, %d rounds)", i + 1, len(contexts), ctx.game_id[:12], len(ctx.rounds))
+        if ctx.episode_uid in existing:
+            log.info("[%d/%d] SKIP %s (cached, %d rounds)", i + 1, len(contexts), ctx.episode_uid[:12], len(ctx.rounds))
             continue
 
         log.info("[%d/%d] Judging %s (%d rounds, %s vs %s, %s mc=%s)...",
-                 i + 1, len(contexts), ctx.game_id[:12], len(ctx.rounds),
+                 i + 1, len(contexts), ctx.episode_uid[:12], len(ctx.rounds),
                  ctx.model_a, ctx.model_b, ctx.mode, ctx.mc_ratio)
 
         try:
@@ -213,7 +213,7 @@ def main():
                 temperature=args.temperature,
             )
             # Save immediately (crash-safe)
-            path = _raw_path(output_dir, ctx.game_id)
+            path = _raw_path(output_dir, ctx.episode_uid)
             with open(path, "w") as f:
                 json.dump(judgment.model_dump(), f, indent=2)
 
@@ -223,9 +223,9 @@ def main():
             log.info("  -> %d rounds, %d total patterns", len(judgment.rounds), total_patterns)
 
         except Exception as e:
-            log.error("FAILED %s: %s", ctx.game_id, e)
+            log.error("FAILED %s: %s", ctx.episode_uid, e)
 
-    log.info("Phase 1 complete: %d new + %d cached = %d total game judgments", new_count, len(existing), len(judgments))
+    log.info("Phase 1 complete: %d new + %d cached = %d total environment judgments", new_count, len(existing), len(judgments))
 
     if not judgments:
         log.warning("No judgments to aggregate; skipping CSV.")

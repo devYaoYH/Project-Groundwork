@@ -62,7 +62,7 @@ def main() -> None:
             clean = {k: v for k, v in doc.items() if k not in ("judge_model", "judged_at")}
             judgments.append(GameJudgment.model_validate(clean))
         except Exception as e:
-            log.warning("Parse error for %s: %s", doc.get("game_id", "?"), e)
+            log.warning("Parse error for %s: %s", doc.get("episode_uid", "?"), e)
 
     log.info("Parsed %d judgments", len(judgments))
 

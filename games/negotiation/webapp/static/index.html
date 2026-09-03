@@ -7,7 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles/base.css">
     <link rel="stylesheet" href="styles/forms.css">
-    <link rel="stylesheet" href="styles/game.css">
+    <link rel="stylesheet" href="styles/environment.css">
     <link rel="stylesheet" href="styles/dataset.css">
 </head>
 <body>
@@ -16,7 +16,7 @@
     <div class="consent-banner" id="consentBanner" style="display:none">
         <div class="consent-text">
             <strong>Data Collection for Research</strong>
-            <p>This study collects anonymized game traces (moves, chat, outcomes) to analyze negotiation strategies. No personal data is stored. Your API keys are used only in-memory for LLM calls and are <strong>never logged, stored, or transmitted</strong> to our servers. You can export your own games locally at any time.</p>
+            <p>This study collects anonymized environment episodes (moves, chat, outcomes) to analyze negotiation strategies. No personal data is stored. Your API keys are used only in-memory for LLM calls and are <strong>never logged, stored, or transmitted</strong> to our servers. You can export your own games locally at any time.</p>
         </div>
         <div class="consent-actions">
             <button class="primary" onclick="acceptConsent()">Accept</button>
@@ -38,7 +38,7 @@
 
     <div class="tabs">
         <div class="tab active" data-tab="about">How It Works</div>
-        <div class="tab" data-tab="launch">Launch Game</div>
+        <div class="tab" data-tab="launch">Launch Environment</div>
         <div class="tab" data-tab="live">Live View</div>
         <div class="tab" data-tab="history">History</div>
         <div class="tab" data-tab="dataset">Dataset</div>
@@ -51,7 +51,7 @@
             <p class="about-subtitle">A research platform for studying <em>dynamic grounding</em> in LLM negotiation dyads. Two agents share scarce resources and hold private projects &mdash; they must build shared understanding through interaction to coordinate, but talk is cheap and every promise is non-binding. Can they bridge the gap between individual planning with full information and joint coordination through communication under asymmetric information?</p>
         </div>
 
-        <!-- Game Flow Diagram -->
+        <!-- Environment Flow Diagram -->
         <div class="about-flow">
             <div class="about-flow-step">
                 <div class="about-flow-icon">
@@ -130,7 +130,7 @@
             <div class="about-grid">
                 <div class="about-card">
                     <div class="about-card-title">Cheap Talk Phase</div>
-                    <div class="about-card-body">Agents negotiate using natural language before committing to decisions. Private <em>thinking</em> traces reveal internal reasoning.</div>
+                    <div class="about-card-body">Agents negotiate using natural language before committing to decisions. Private <em>thinking</em> episodes reveal internal reasoning.</div>
                     <img class="about-card-img clickable" src="img/cheap-talk-thinking.png" alt="Cheap talk negotiation between two agents" onclick="openLightbox(this)" />
                 </div>
                 <div class="about-card">
@@ -161,7 +161,7 @@
                     <li><strong>Role swap</strong> &mdash; Each configuration is played twice with first-speaker roles swapped to control for order effects.</li>
                 </ul>
                 <div class="about-details-images">
-                    <img class="clickable" src="img/settings.png" alt="Environment settings panel" onclick="openLightbox(this)" />
+                    <img class="clickable" src="img/settings.png" alt="Release settings panel" onclick="openLightbox(this)" />
                     <img class="clickable" src="img/values.png" alt="Value function configuration" onclick="openLightbox(this)" />
                 </div>
             </div>
@@ -169,11 +169,11 @@
 
         <div class="about-privacy-note">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            <span><strong>Your API keys stay private.</strong> Keys are used only in-memory for LLM calls during your game session and are never logged, stored, or transmitted to our servers. Game traces (moves, chat, outcomes) may be collected for research if you consent.</span>
+            <span><strong>Your API keys stay private.</strong> Keys are used only in-memory for LLM calls during your environment session and are never logged, stored, or transmitted to our servers. Environment episodes (moves, chat, outcomes) may be collected for research if you consent.</span>
         </div>
 
         <div class="about-cta">
-            <button class="primary" onclick="switchToTab('launch')">Launch a game</button>
+            <button class="primary" onclick="switchToTab('launch')">Launch a environment</button>
             <p class="about-cta-note">Configure agents, generate a scenario, and watch them negotiate in real-time.</p>
         </div>
     </div>
@@ -181,7 +181,7 @@
     <!-- LAUNCH TAB -->
     <div class="tab-content" id="tab-launch">
         <div class="quickstart" id="quickstart">
-            <h3>Play a negotiation game against an AI</h3>
+            <h3>Play a negotiation environment against an AI</h3>
             <p class="quickstart-intro">
                 You and an AI share a small pool of resources. Chat for a few turns, then both of you
                 secretly buy resources to run your private projects &mdash; if your combined orders overdraw
@@ -221,8 +221,8 @@
             </div>
 
             <div class="quickstart-field">
-                <label>Game length</label>
-                <div class="quick-choice" role="radiogroup" aria-label="Game length">
+                <label>Environment length</label>
+                <div class="quick-choice" role="radiogroup" aria-label="Environment length">
                     <input type="radio" name="quickLength" id="quickLengthStandard" value="standard" checked />
                     <label for="quickLengthStandard">
                         <strong>Standard</strong>
@@ -231,7 +231,7 @@
                     <input type="radio" name="quickLength" id="quickLengthLite" value="lite" />
                     <label for="quickLengthLite">
                         <strong>Lite</strong>
-                        <span>2 rounds &mdash; a quicker taste of the game.</span>
+                        <span>2 rounds &mdash; a quicker taste of the environment.</span>
                     </label>
                 </div>
             </div>
@@ -247,7 +247,7 @@
                 A scenario from the paper's validated pool is drawn at random &mdash; the same pool, budgets, and
                 round structure used in our experiments. Whether it is competitive, mixed, or collaborative is
                 also chosen at random and kept hidden: figuring that out is part of the negotiation. The AI's
-                private reasoning appears as collapsible traces in the Live View.
+                private reasoning appears as collapsible episodes in the Live View.
             </p>
         </div>
 
@@ -389,7 +389,7 @@
             </div>
 
             <div class="config-full">
-                <h3>Environment Settings</h3>
+                <h3>Release Settings</h3>
                 <div style="margin-top:16px">
                     <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Agent Settings</label>
                     <div class="inline-fields">
@@ -443,7 +443,7 @@
                     </div>
                 </div>
                 <div style="margin-top:16px">
-                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Game Settings</label>
+                    <label style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px">Environment Settings</label>
                     <div class="inline-fields">
                         <div class="field">
                             <label>Rounds</label>
@@ -540,42 +540,42 @@
         </div>
 
         <div class="launch-actions">
-            <button class="primary" id="launchBtn" onclick="launchGame()" disabled>Launch Game</button>
+            <button class="primary" id="launchBtn" onclick="launchGame()" disabled>Launch Environment</button>
             <button class="primary" id="oracleSolveBtn" onclick="window.__oracleSolve()" disabled style="margin-left:auto">Solve with Oracle</button>
         </div>
         <div id="oracleResult" style="display:none;margin-top:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.7"></div>
 
-        <details class="batch-section">
-            <summary>Batch Launch</summary>
-            <div class="batch-config">
+        <details class="cell-section">
+            <summary>Cell Launch</summary>
+            <div class="cell-config">
                 <div class="inline-fields">
                     <div class="field">
                         <label>Count</label>
-                        <input id="batchCount" type="number" min="1" max="100" value="10" />
+                        <input id="cellCount" type="number" min="1" max="100" value="10" />
                     </div>
                     <div class="field">
                         <label>Experiment Label</label>
-                        <input id="batchLabel" type="text" placeholder="e.g. gpt4o-vs-claude-stable" />
+                        <input id="cellLabel" type="text" placeholder="e.g. gpt4o-vs-claude-stable" />
                     </div>
                     <div class="field">
-                        <label>Batch Seed (optional)</label>
-                        <input id="batchSeed" type="number" placeholder="Random" />
+                        <label>Cell Seed (optional)</label>
+                        <input id="cellSeed" type="number" placeholder="Random" />
                     </div>
                     <div class="field" style="display:flex;align-items:center;gap:8px;padding-top:20px">
-                        <input id="batchBalance" type="checkbox" checked />
-                        <label for="batchBalance" style="margin:0;text-transform:none;letter-spacing:0">Balance turn order</label>
+                        <input id="cellBalance" type="checkbox" checked />
+                        <label for="cellBalance" style="margin:0;text-transform:none;letter-spacing:0">Balance turn order</label>
                     </div>
                 </div>
                 <div style="margin-top:16px">
-                    <button class="primary" id="batchLaunchBtn" onclick="launchBatch()">Launch Batch</button>
+                    <button class="primary" id="cellLaunchBtn" onclick="launchCell()">Launch Cell</button>
                 </div>
             </div>
-            <div id="batchProgress" style="display:none">
-                <div class="batch-progress-header">
-                    <span id="batchProgressText">0 / 0 complete</span>
-                    <div class="batch-progress-bar"><div class="batch-progress-fill" id="batchProgressFill"></div></div>
+            <div id="cellProgress" style="display:none">
+                <div class="cell-progress-header">
+                    <span id="cellProgressText">0 / 0 complete</span>
+                    <div class="cell-progress-bar"><div class="cell-progress-fill" id="cellProgressFill"></div></div>
                 </div>
-                <div id="batchGameList" class="batch-game-list"></div>
+                <div id="cellGameList" class="cell-environment-list"></div>
             </div>
         </details>
         </details>
@@ -584,17 +584,17 @@
     <!-- LIVE TAB -->
     <div class="tab-content" id="tab-live">
         <div id="liveEmpty" class="empty-state">
-            <p>No active game. Launch one from the first tab.</p>
+            <p>No active environment. Launch one from the first tab.</p>
         </div>
         <div id="liveView" style="display:none">
             <div class="thinking-notice" id="thinkingNotice" style="display:none">
                 Dashed italic bubbles show each agent's private reasoning — this text is <strong>not</strong> visible to the other agent.
             </div>
-            <div class="game-header">
-                <h2>Game <span id="liveGameId"></span></h2>
+            <div class="environment-header">
+                <h2>Environment <span id="liveGameId"></span></h2>
                 <div style="display:flex;align-items:center;gap:8px">
-                    <button class="stop-btn" id="stopBtn" onclick="stopGame()">Stop Game</button>
-                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download game events as JSONL">Export Log</button>
+                    <button class="stop-btn" id="stopBtn" onclick="stopGame()">Stop Environment</button>
+                    <button class="stop-btn" id="exportLogBtn" onclick="exportGameLog()" style="background:#2563eb;color:#fff;border-color:#2563eb" title="Download environment events as JSONL">Export Log</button>
                     <span class="mode-badge" id="liveMode"></span>
                 </div>
             </div>
@@ -689,9 +689,9 @@
                     <option value="llm">LLM</option>
                     <option value="heuristic">Heuristic</option>
                 </select>
-                <input id="datasetFilterExperiment" type="text" placeholder="Search label or game ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:160px" />
+                <input id="datasetFilterExperiment" type="text" placeholder="Search label or environment ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:160px" />
                 <div style="display:flex;gap:4px;align-items:center">
-                    <input id="datasetJumpId" type="text" placeholder="Jump to full game ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:200px" />
+                    <input id="datasetJumpId" type="text" placeholder="Jump to full environment ID..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:11px;color:var(--text);width:200px" />
                     <button class="export-btn" id="datasetJumpBtn">Go</button>
                 </div>
                 <button class="export-btn" id="datasetExportBtn" onclick="exportDatasetJSONL()">Export JSONL</button>
@@ -703,7 +703,7 @@
         </div>
         <div id="datasetTable"></div>
         <div id="datasetEmpty" class="empty-state" style="display:none">
-            <p>No traces found in Firestore.</p>
+            <p>No episodes found in Firestore.</p>
         </div>
         <div class="pagination-controls" id="datasetPagination" style="display:none"></div>
         <div id="datasetDetail" style="display:none"></div>

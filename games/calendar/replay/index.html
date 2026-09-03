@@ -4,24 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Calendar stream replay</title>
-<link rel="stylesheet" href="/css/styles.css">
 <style>
+  :root { --paper:#f1f3f0; --card:#fff; --ink:#191c1a; --muted:#6b716d; --rule:#dcdfda; --accent:#33556e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#15171a; --card:#1c1f22; --ink:#e8eae7; --muted:#9aa09c; --rule:#2e3235; --accent:#8fb4d0; }
+  }
+  body { background: var(--paper); color: var(--ink); font: 14px/1.55 "IBM Plex Sans","Segoe UI",sans-serif; margin: 0; }
+  a { color: var(--accent); }
+  h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 500; }
   main { max-width: 760px; margin: 48px auto; padding: 0 20px; }
-  input { width: 100%; padding: 8px; box-sizing: border-box; }
-  button { padding: 8px 14px; margin-top: 12px; }
-  .muted { color: #6b7280; }
+  input { width: 100%; padding: 8px; box-sizing: border-box; background: var(--card); border: 1px solid var(--rule); color: var(--ink); }
+  button { padding: 8px 14px; margin-top: 12px; background: var(--card); border: 1px solid var(--rule); color: var(--ink); cursor: pointer; }
+  .muted { color: var(--muted); }
 </style>
 </head>
-<body data-game="calendar">
+<body data-environment="calendar">
 <main>
-  <a href="/control.html">← Control plane</a>
+  <a href="/episodes/">← Episodes</a>
   <h1>Calendar stream replay</h1>
   <p class="muted">
-    Replays a rollout's Redis event stream through Calendar's own trace viewer.
+    Replays a launch's Redis event stream through Calendar's own trace viewer.
     An episode that is still running renders as far as it has got.
   </p>
   <label for="stream">Redis stream</label>
-  <input id="stream" placeholder="a2a:rollout:…:episode:…">
+  <input id="stream" placeholder="a2a:launch:…:episode:…">
   <button id="open">Open in Calendar viewer</button>
   <p id="status" class="muted"></p>
 </main>
@@ -35,8 +41,14 @@ const status = document.getElementById("status");
 
 function viewerUrl(stream) {
   const trace = `/api/streams/${encodeURIComponent(stream)}/trace`;
-  return `/game-assets/calendar/tasks/viewer.html?trace=${encodeURIComponent(trace)}`;
+  return `/environment-assets/calendar/tasks/viewer.html?trace=${encodeURIComponent(trace)}`;
 }
+
+// Calendar is the one replay page with no cursor of its own to drive: it hands
+// the stream to Calendar's viewer and navigates away, so this page no longer
+// exists by the time a host frame would post one. It is therefore not mounted
+// beside the standard lane view, and deliberately registers no cursor listener
+// rather than an inert one.
 
 async function open_(stream) {
   if (!stream) { status.textContent = "Enter a stream id."; return; }

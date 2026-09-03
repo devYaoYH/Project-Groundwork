@@ -1,9 +1,9 @@
 name: projects_study_disclosure_009
 description: 'V2 cross-play study: targeted model pair at lowest performance, disclosure intervention.'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: qwen-sonnet_stable_fixed_share_mc05
   count: 10
   config:

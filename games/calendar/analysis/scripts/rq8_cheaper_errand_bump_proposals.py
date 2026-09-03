@@ -100,7 +100,7 @@ def analyze_trace(path: Path, model: str) -> list[dict]:
             {
                 "model": model,
                 "setting": setting,
-                "game_id": trace.get("game_id") or path.stem,
+                "episode_uid": trace.get("episode_uid") or path.stem,
                 "task_id": task_id(trace, path),
                 "trace_path": str(path),
                 "event_index": event_index,
@@ -148,7 +148,7 @@ def summarize(rows: list[dict]) -> list[dict]:
     for row in rows:
         key = (row["model"], row["setting"])
         groups[key].append(row)
-        games[key].add(row["game_id"])
+        games[key].add(row["episode_uid"])
     summary: list[dict] = []
     for key, group in sorted(groups.items()):
         model, setting = key
@@ -187,7 +187,7 @@ def plot(summary: list[dict], metric_rows: list[dict], out: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--traces-root", default=str(default_traces_root()))
+    parser.add_argument("--episodes-root", default=str(default_traces_root()))
     parser.add_argument("--out", default="rq8_cheaper_errand_bump_proposals")
     args = parser.parse_args()
 

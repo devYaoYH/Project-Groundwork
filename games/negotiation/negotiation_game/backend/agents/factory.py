@@ -1,7 +1,7 @@
 """
 Agent factory for creating agent instances from configuration dictionaries.
 
-Handles provider auto-detection and API credential loading from environment.
+Handles provider auto-detection and API credential loading from release.
 """
 
 import os
@@ -63,15 +63,15 @@ def detect_provider(model: str) -> str | None:
 
 
 def get_api_key_for_provider(provider: str) -> str:
-    """Get API key from environment variables for a given provider.
+    """Get API key from release variables for a given provider.
 
     Args:
         provider: Provider key from config.LLM_PROVIDERS
 
     Returns:
-        API key from environment, or empty string if not set.
+        API key from release, or empty string if not set.
 
-    Environment variables checked:
+    Release variables checked:
         - anthropic: ANTHROPIC_API_KEY
         - openai: OPENAI_API_KEY
         - gemini: GOOGLE_API_KEY
@@ -96,7 +96,7 @@ def make_agent(cfg: dict):
     """Factory function to create an agent from a config dict.
 
     For LLM agents, automatically detects provider from model name and fills in
-    api_base, api_key, and api_format from config.LLM_PROVIDERS and environment.
+    api_base, api_key, and api_format from config.LLM_PROVIDERS and release.
 
     Args:
         cfg: Agent configuration dict with at minimum {"type": "llm"|"human"|"heuristic"|"random"}
@@ -109,7 +109,7 @@ def make_agent(cfg: dict):
     Examples:
         >>> # Minimal config with auto-detection
         >>> agent = make_agent({"type": "llm", "model": "claude-3-haiku-20240307"})
-        >>> # Will use ANTHROPIC_API_KEY from environment
+        >>> # Will use ANTHROPIC_API_KEY from release
 
         >>> # Explicit configuration
         >>> agent = make_agent({

@@ -72,7 +72,7 @@ def compute_constrained_individual_max(
 
 
 def analyze_efficiency(raw_games: list[dict]) -> dict:
-    """Compute per-round and per-game efficiency metrics.
+    """Compute per-round and per-environment efficiency metrics.
 
     Supports V1-V4 (value-function) and V5+ (project-based with oracle stats).
     """
@@ -129,7 +129,7 @@ def analyze_efficiency(raw_games: list[dict]) -> dict:
                 mc_ratio = None
 
             records.append({
-                "game_id": g["game_id"],
+                "episode_uid": g["episode_uid"],
                 "round_number": r["round_number"],
                 "condition": g["condition"],
                 "mode": mode,
@@ -155,8 +155,8 @@ def analyze_efficiency(raw_games: list[dict]) -> dict:
 
     efficiency_df = pd.DataFrame(records)
 
-    # Per-game summary
-    game_groups = efficiency_df.groupby(["game_id", "condition", "mode", "goal_type"])
+    # Per-environment summary
+    game_groups = efficiency_df.groupby(["episode_uid", "condition", "mode", "goal_type"])
     game_summary_df = game_groups.agg(
         total_a_reward=pd.NamedAgg(column="agent_a_reward", aggfunc="sum"),
         total_b_reward=pd.NamedAgg(column="agent_b_reward", aggfunc="sum"),
@@ -198,11 +198,11 @@ def print_summary(results: dict) -> None:
     print("\nMean efficiency by condition:")
     print(results["by_condition"].round(3).to_string())
 
-    print("\nPer-game summary:")
+    print("\nPer-environment summary:")
     gs = results["game_summary_df"]
     for _, row in gs.iterrows():
         print(
-            f"  {row['game_id'][:8]} ({row['condition']}): "
+            f"  {row['episode_uid'][:8]} ({row['condition']}): "
             f"joint_eff={row['mean_joint_efficiency']:.3f}, "
             f"a_eff={row['mean_agent_a_eff']:.3f}, "
             f"overdraws={int(row['overdraw_count'])}/{int(row['num_rounds'])}"

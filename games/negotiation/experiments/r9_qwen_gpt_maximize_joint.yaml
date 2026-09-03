@@ -6,9 +6,9 @@ description: >
   N=6 per cell for a quick signal on whether the bottleneck is incentive framing,
   information access, or true coordination overhead.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 # ── stable / fixed / mc=0.5 ─────────────────────────────────────────────────
 - label: qwen-gpt5m_stable_fixed_joint_mc05
   count: 6

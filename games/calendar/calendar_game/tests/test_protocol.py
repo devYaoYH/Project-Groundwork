@@ -1,4 +1,4 @@
-"""Integration tests for the calendar scheduling game protocol."""
+"""Integration tests for the calendar scheduling environment protocol."""
 from __future__ import annotations
 
 import asyncio
@@ -7,10 +7,10 @@ import uuid
 import pytest
 from collections import deque
 
-from a2a_engine import EventLog, GameTraceBase
+from a2a_engine import EventLog, EpisodeTrace
 from calendar_game.game import CalendarGame, CalendarGameConfig
 from calendar_game.agents import Agent, BaseClient, CapturingClient, GameConfig, TurnResult, DecideResult, ReflectionResult
-from calendar_game.calendar import Calendar, validate_batch, apply_batch
+from calendar_game.calendar import Calendar, validate_cell, apply_cell
 from calendar_game.clients import ScriptedClient
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import solve_greedy, solve_optimal
@@ -22,12 +22,12 @@ from calendar_game.solver import solve_greedy, solve_optimal
 
 def run_dry(seed=42, num_meetings=1, **kwargs):
     config = CalendarGameConfig(seed=seed, num_meetings=num_meetings, **kwargs)
-    game = CalendarGame(config, dry_run=True)
-    return game.run()
+    environment = CalendarGame(config, dry_run=True)
+    return environment.run()
 
 
 def _event_as_dict(event):
-    """Normalise GameEvent (Pydantic model) or plain dict to a plain dict."""
+    """Normalise Event (Pydantic model) or plain dict to a plain dict."""
     if isinstance(event, dict):
         return event
     return {"type": event.type, "data": event.data}
@@ -251,8 +251,8 @@ class ReflectingFixedSlotClient(OneShotGroupchatFixedSlotClient):
         )
 
 
-class InvalidBatchClient(BaseClient):
-    """Always returns an invalid batch (schedule for non-existent slot 999)."""
+class InvalidCellClient(BaseClient):
+    """Always returns an invalid cell (schedule for non-existent slot 999)."""
     def __init__(self, meeting_id: int = 1):
         self.meeting_id = meeting_id
         self.agent_id = -1
@@ -304,8 +304,8 @@ class FixedSlotClient(BaseClient):
         return self.decide({}, "")
 
 
-class FixedBatchClient(BaseClient):
-    """Submits the same decision batch for the current meeting."""
+class FixedCellClient(BaseClient):
+    """Submits the same decision cell for the current meeting."""
     def __init__(self, actions: list[dict]):
         self.actions = actions
         self.meeting_id = 1
@@ -376,14 +376,14 @@ def _build_game_with_clients(clients: list[BaseClient], seed: int = 42, num_slot
         decision_retries=decision_retries,
         max_turns_per_round=max_turns_per_round,
     )
-    game = CalendarGame(config, dry_run=True)
-    return game, config
+    environment = CalendarGame(config, dry_run=True)
+    return environment, config
 
 
 def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int = 16,
                       num_meetings: int = 1, dm_cap: int = 100, decision_retries: int = 3,
                       max_turns_per_round: int = 20):
-    """Run a game but with custom clients injected after construction."""
+    """Run a environment but with custom clients injected after construction."""
     config = CalendarGameConfig(
         seed=seed,
         num_agents=len(clients),
@@ -393,10 +393,10 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
         decision_retries=decision_retries,
         max_turns_per_round=max_turns_per_round,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
 
     # Patch the run to inject custom clients
-    original_run_async = game._run_async
+    original_run_async = environment._run_async
 
     async def patched_run_async():
         scenario = generate_scenario(
@@ -426,9 +426,9 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
             )
             agent.register(agent_id, gc)
 
-        # Reuse game's event log and loop
-        game.events = EventLog()
-        game.events.append("game_start", data={
+        # Reuse environment's event log and loop
+        environment.events = EventLog()
+        environment.events.append("game_start", data={
             "round": -1, "turn": -1, "phase": "GAME_START", "agent_id": None,
             "scenario_seed": config.seed, "num_agents": config.num_agents, "num_slots": config.num_slots,
             "optimal_cost": optimal.get("cost"), "greedy_cost": greedy.get("cost"),
@@ -439,7 +439,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
         round_outcomes = []
 
         for round_num, meeting in enumerate(scenario["meetings"]):
-            game.events.append("round_start", data={
+            environment.events.append("round_start", data={
                 "round": round_num, "turn": 0, "phase": "CHEAP_TALK", "agent_id": None,
                 "meeting": meeting,
             })
@@ -457,14 +457,14 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
 
                 for agent_id in meeting["participants"]:
                     inbox_snapshot = list(agents[agent_id].inbox_queue)
-                    game.events.append("turn_start", data={
+                    environment.events.append("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id, "inbox_drained": inbox_snapshot,
                         "calendar_render": agents[agent_id].calendar.render(),
                     })
                     result = agents[agent_id].turn(turn_index, config.max_turns_per_round)
                     total_client_calls[agent_id] += 1
-                    game.events.append("turn_end", data={
+                    environment.events.append("turn_end", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id, "tool_calls": result.tool_calls,
                         "text": result.text, "thinking": result.thinking,
@@ -476,7 +476,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                         if tool.get("type") != "dm":
                             continue
                         if round_messaging_tools_invoked[agent_id] >= config.dm_cap:
-                            game.events.append("invalid_tool_call", data={
+                            environment.events.append("invalid_tool_call", data={
                                 "round": round_num,
                                 "turn": turn_index,
                                 "phase": "CHEAP_TALK",
@@ -491,7 +491,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                                "content": str(tool.get("content", ""))}
                         agents[to].inbox_queue.append(msg)
                         has_activity = True
-                        game.events.append("dm_sent", data={
+                        environment.events.append("dm_sent", data={
                             "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                             "agent_id": agent_id, "from_agent": agent_id, "to_agent": to,
                             "meeting_id": msg["meeting_id"], "content": msg["content"],
@@ -502,14 +502,14 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                 queue = list(already_queued - set(meeting["participants"]))
                 for agent_id in queue:
                     inbox_snapshot = list(agents[agent_id].inbox_queue)
-                    game.events.append("turn_start", data={
+                    environment.events.append("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id, "inbox_drained": inbox_snapshot,
                         "calendar_render": agents[agent_id].calendar.render(),
                     })
                     result = agents[agent_id].turn(turn_index, config.max_turns_per_round)
                     total_client_calls[agent_id] += 1
-                    game.events.append("turn_end", data={
+                    environment.events.append("turn_end", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id, "tool_calls": result.tool_calls,
                         "text": result.text, "thinking": result.thinking,
@@ -520,7 +520,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                         if tool.get("type") != "dm":
                             continue
                         if round_messaging_tools_invoked[agent_id] >= config.dm_cap:
-                            game.events.append("invalid_tool_call", data={
+                            environment.events.append("invalid_tool_call", data={
                                 "round": round_num,
                                 "turn": turn_index,
                                 "phase": "CHEAP_TALK",
@@ -535,7 +535,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                                "content": str(tool.get("content", ""))}
                         agents[to].inbox_queue.append(msg)
                         has_activity = True
-                        game.events.append("dm_sent", data={
+                        environment.events.append("dm_sent", data={
                             "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                             "agent_id": agent_id, "from_agent": agent_id, "to_agent": to,
                             "meeting_id": msg["meeting_id"], "content": msg["content"],
@@ -547,13 +547,13 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
 
             for agent_id in meeting["participants"]:
                 snapshot_render = agents[agent_id].calendar.snapshot().render()
-                game.events.append("decide_start", data={
+                environment.events.append("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id, "calendar_snapshot_render": snapshot_render,
                 })
                 result = agents[agent_id].decide(meeting)
                 total_client_calls[agent_id] += 1
-                game.events.append("decide_end", data={
+                environment.events.append("decide_end", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id, "tool_calls": result.tool_calls,
                     "text": result.text, "thinking": result.thinking,
@@ -567,7 +567,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                     for a in result.tool_calls if a.get("type") in ("schedule", "reschedule")
                 ]
                 for attempt in range(config.decision_retries + 1):
-                    ok, conflict = validate_batch(agents[agent_id].calendar, actions)
+                    ok, conflict = validate_cell(agents[agent_id].calendar, actions)
                     if ok:
                         for action in actions:
                             if action.get("type") == "reschedule":
@@ -575,15 +575,15 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                                 item = agents[agent_id].calendar.get(from_slot)
                                 if isinstance(item, dict) and "cost" in item:
                                     displacement_cost[agent_id] += int(item["cost"])
-                        apply_batch(agents[agent_id].calendar, actions)
-                        game.events.append("batch_applied", data={
+                        apply_cell(agents[agent_id].calendar, actions)
+                        environment.events.append("cell_applied", data={
                             "round": round_num, "turn": turn_index, "phase": "DECISION",
                             "agent_id": agent_id, "actions": actions,
                             "calendar_render_after": agents[agent_id].calendar.render(),
                         })
                         break
                     else:
-                        game.events.append("batch_rejected", data={
+                        environment.events.append("cell_rejected", data={
                             "round": round_num, "turn": turn_index, "phase": "DECISION",
                             "agent_id": agent_id, "attempt": attempt,
                             "conflict_description": conflict, "actions": actions,
@@ -598,7 +598,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                                 for a in retry_result.tool_calls if a.get("type") in ("schedule", "reschedule")
                             ]
                         else:
-                            game.events.append("decision_failed", data={
+                            environment.events.append("decision_failed", data={
                                 "round": round_num, "turn": turn_index, "phase": "DECISION",
                                 "agent_id": agent_id,
                                 "attempts_exhausted": config.decision_retries + 1,
@@ -627,7 +627,7 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
                 if conflicts:
                     slot_conflicts[str(agent_id)] = conflicts
 
-            game.events.append("resolution", data={
+            environment.events.append("resolution", data={
                 "round": round_num, "turn": turn_index, "phase": "RESOLUTION",
                 "agent_id": None, "meeting_id": meeting["id"],
                 "per_agent_slot": per_agent_slot, "coordinated": coordinated,
@@ -658,15 +658,15 @@ def _run_with_clients(clients: list[BaseClient], seed: int = 42, num_slots: int 
             "meetings_scheduled": coordinated_meetings, "realized_cost": realized_cost,
             "optimal_cost": optimal_cost,
         }
-        game.events.append("game_end", data={
+        environment.events.append("game_end", data={
             "round": len(scenario["meetings"]), "turn": 0, "phase": "GAME_END", "agent_id": None,
             **metrics,
         })
 
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),
             config=config,
-            events=game.events.all(),
+            events=environment.events.all(),
             final_state={
                 "calendars": [agent.calendar.slots for agent in agents],
                 "per_agent_cost": per_agent_cost_list,
@@ -692,7 +692,7 @@ def test_reflection_records_one_estimate_per_other_agent_slot():
         enable_fallback=False,
         enable_reflection=True,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 2,
@@ -709,7 +709,7 @@ def test_reflection_records_one_estimate_per_other_agent_slot():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
     reflection_events = events_of_type(trace, "reflection_end")
 
     assert len(reflection_events) == 2
@@ -737,7 +737,7 @@ def test_round_reflection_records_each_round_without_game_scope():
         enable_reflection=True,
         reflection_frequency="round",
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 2,
@@ -757,7 +757,7 @@ def test_round_reflection_records_each_round_without_game_scope():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
     reflection_events = events_of_type(trace, "reflection_end")
     reflection_starts = events_of_type(trace, "reflection_start")
 
@@ -781,7 +781,7 @@ def test_round_reflection_skips_agents_without_turns():
         enable_reflection=True,
         reflection_frequency="round",
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 3,
@@ -798,7 +798,7 @@ def test_round_reflection_skips_agents_without_turns():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
     reflection_events = events_of_type(trace, "reflection_end")
 
     assert len(reflection_events) == 4
@@ -818,7 +818,7 @@ def test_malformed_tool_calls_are_rejected_not_crashing():
         max_turns_per_round=2,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 2,
@@ -841,14 +841,14 @@ def test_malformed_tool_calls_are_rejected_not_crashing():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
 
     invalid = events_of_type(trace, "invalid_tool_call")
     assert invalid
 
     # Every malformed call is attributable, in both phases. The decision-phase
     # events matter most: a schedule tool with no meeting_id is dropped before
-    # validate_batch ever sees it, so without these the trace could not
+    # validate_cell ever sees it, so without these the trace could not
     # distinguish "emitted garbage" from "emitted nothing".
     decision_invalid = [e for e in invalid if e["data"]["phase"] == "DECISION"]
     assert decision_invalid, "malformed decision tool calls must be recorded"
@@ -856,10 +856,10 @@ def test_malformed_tool_calls_are_rejected_not_crashing():
     assert "tool call is not an object" in reasons
     assert "missing 'meeting_id'" in reasons
 
-    # The batch-level event reports the batch-level consequence: nothing valid
+    # The cell-level event reports the cell-level consequence: nothing valid
     # survived filtering. These are two different layers and the trace keeps
     # them separate rather than collapsing one into the other.
-    rejected = events_of_type(trace, "batch_rejected")
+    rejected = events_of_type(trace, "cell_rejected")
     assert any(
         "Expected exactly 1 schedule action, got 0" in e["data"]["conflict_description"]
         for e in rejected
@@ -920,7 +920,7 @@ def test_groupchat_protocol_delivers_messages_to_all_task_agents_and_scores_mixe
             {"type": "llm", "model": "model-b"},
         ],
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 3,
@@ -950,7 +950,7 @@ def test_groupchat_protocol_delivers_messages_to_all_task_agents_and_scores_mixe
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
 
     groupchat_events = events_of_type(trace, "all_groupchat_sent")
     assert len(groupchat_events) == 1
@@ -981,7 +981,7 @@ def test_dm_and_groupchat_protocol_allows_both_message_types():
         max_turns_per_round=2,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 3,
@@ -1011,7 +1011,7 @@ def test_dm_and_groupchat_protocol_allows_both_message_types():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
 
     groupchat_events = events_of_type(trace, "all_groupchat_sent")
     dm_events = events_of_type(trace, "dm_sent")
@@ -1039,7 +1039,7 @@ def test_participant_groupchat_reaches_only_meeting_participants():
         max_turns_per_round=2,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 3,
@@ -1073,7 +1073,7 @@ def test_participant_groupchat_reaches_only_meeting_participants():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
 
     participant_events = events_of_type(trace, "participant_groupchat_sent")
     assert len(participant_events) == 1
@@ -1098,7 +1098,7 @@ def test_trace_records_per_agent_oracle_cost_and_excess_burden():
         max_turns_per_round=1,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     scenario = {
         "seed": 1,
         "num_agents": 2,
@@ -1119,8 +1119,8 @@ def test_trace_records_per_agent_oracle_cost_and_excess_burden():
         "feasible": True,
     }
     clients: list[BaseClient] = [
-        FixedBatchClient([{"type": "schedule", "slot": 0}]),
-        FixedBatchClient([
+        FixedCellClient([{"type": "schedule", "slot": 0}]),
+        FixedCellClient([
             {"type": "reschedule", "item_id": 10, "from_slot": 0, "to_slot": 2, "justification": "Free the selected meeting slot."},
             {"type": "schedule", "slot": 0},
         ]),
@@ -1133,7 +1133,7 @@ def test_trace_records_per_agent_oracle_cost_and_excess_burden():
         agent.calendar = cal
         agents.append(agent)
 
-    trace = game._run_with_agents(agents, scenario)
+    trace = environment._run_with_agents(agents, scenario)
 
     assert trace.metrics["realized_cost"] == 4
     assert trace.metrics["optimal_cost"] == 0
@@ -1237,7 +1237,7 @@ def test_messaging_tool_cap_applies_across_dm_and_groupchat_tools():
         ))
         agents_list.append(agent)
 
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=1,
             num_agents=3,
@@ -1253,7 +1253,7 @@ def test_messaging_tool_cap_applies_across_dm_and_groupchat_tools():
         dry_run=True,
     )
 
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
 
     agent0_all_groupchat = [
         e for e in events_of_type(trace, "all_groupchat_sent")
@@ -1278,7 +1278,7 @@ def test_decision_simultaneous():
     trace = run_dry()
 
     decide_starts = events_of_type(trace, "decide_start")
-    assert len(decide_starts) >= 2, "Expected at least 2 decide_start events for 2-agent game"
+    assert len(decide_starts) >= 2, "Expected at least 2 decide_start events for 2-agent environment"
 
     for event in decide_starts:
         snapshot = event["data"]["calendar_snapshot_render"]
@@ -1289,7 +1289,7 @@ def test_decision_simultaneous():
 
 
 def test_decision_atomicity():
-    """Invalid batch with duplicate target slot does not mutate calendar."""
+    """Invalid cell with duplicate target slot does not mutate calendar."""
     cal = Calendar(num_slots=8)
     cal.slots = [{"errand_id": 1, "cost": 1}, None, None, None, None, None, None, None]
 
@@ -1299,8 +1299,8 @@ def test_decision_atomicity():
         {"type": "schedule", "meeting_id": 1, "slot": 2},
     ]
 
-    ok, reason = validate_batch(cal, actions)
-    assert not ok, "Expected invalid batch for duplicate target slot"
+    ok, reason = validate_cell(cal, actions)
+    assert not ok, "Expected invalid cell for duplicate target slot"
     assert "2" in reason, f"Expected slot 2 in conflict reason, got: {reason}"
 
     # Calendar must be completely unchanged
@@ -1309,9 +1309,9 @@ def test_decision_atomicity():
 
 
 def test_decision_actions_ignore_wrong_meeting_schedule():
-    game = CalendarGame(CalendarGameConfig(), dry_run=True)
+    environment = CalendarGame(CalendarGameConfig(), dry_run=True)
 
-    actions = game._decision_actions(
+    actions = environment._decision_actions(
         [
             {"type": "schedule", "meeting_id": 999, "slot": 0},
             {"type": "reschedule", "item_id": 1, "from_slot": 0, "to_slot": 2, "justification": "free slot"},
@@ -1327,9 +1327,9 @@ def test_decision_actions_ignore_wrong_meeting_schedule():
 
 
 def test_decision_retry_exhaustion():
-    """With decision_retries=2, invalid batches produce 3 batch_rejected + 1 decision_failed per agent."""
-    invalid_client_0 = InvalidBatchClient(meeting_id=1)
-    invalid_client_1 = InvalidBatchClient(meeting_id=1)
+    """With decision_retries=2, invalid cells produce 3 cell_rejected + 1 decision_failed per agent."""
+    invalid_client_0 = InvalidCellClient(meeting_id=1)
+    invalid_client_1 = InvalidCellClient(meeting_id=1)
 
     trace, agents = _run_with_clients(
         [invalid_client_0, invalid_client_1],
@@ -1337,14 +1337,14 @@ def test_decision_retry_exhaustion():
         num_slots=16,
     )
 
-    # Each agent produces batch_rejected events
+    # Each agent produces cell_rejected events
     norm = _normalize(trace.events)
     for agent_id in [0, 1]:
         rejected = [e for e in norm
-                    if e["type"] == "batch_rejected" and e["data"]["agent_id"] == agent_id]
+                    if e["type"] == "cell_rejected" and e["data"]["agent_id"] == agent_id]
         # initial attempt + 2 retries = 3 rejections
         assert len(rejected) == 3, (
-            f"Agent {agent_id}: expected 3 batch_rejected events, got {len(rejected)}"
+            f"Agent {agent_id}: expected 3 cell_rejected events, got {len(rejected)}"
         )
 
         failed = [e for e in norm
@@ -1374,18 +1374,18 @@ def test_inbox_empty_at_decision():
 
 def test_non_participant_queued_once():
     """Non-participant agent 2 gets at most one turn_start per round even if DM'd twice."""
-    # 3-agent game; agent 0 DMs agent 2 twice per turn
+    # 3-agent environment; agent 0 DMs agent 2 twice per turn
     # meeting participants will be agents 0 and 1 (default generate_scenario for 3 agents all participate)
     # We need only agents 0 and 1 as participants; use participant_lists to control this
     # Since CalendarGame doesn't support participant_lists directly, we'll use _run_with_clients
     # with 2 participants and 3 agents. The scenario generator includes all agents by default.
     # Instead: run 3 agents with default (all participate) — agent 2 is a participant.
-    # We need a non-participant scenario. Let's create the game with 3 agents but only agents 0+1 meet.
+    # We need a non-participant scenario. Let's create the environment with 3 agents but only agents 0+1 meet.
     # We can't easily do this via CalendarGame alone, so we'll verify the count principle
-    # by running a 2-agent game and confirming the basic queuing behavior, then test
+    # by running a 2-agent environment and confirming the basic queuing behavior, then test
     # with a manual run that uses participant_lists.
 
-    # Manual approach: run the game loop manually with participant_lists=[0,1] for 3 agents
+    # Manual approach: run the environment loop manually with participant_lists=[0,1] for 3 agents
     num_agents = 3
     seed = 42
     num_slots = 16
@@ -1528,7 +1528,7 @@ def test_non_participant_gets_followup_turn_after_nonparticipant_reply():
         ))
         agents_list.append(agent)
 
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=42,
             num_agents=num_agents,
@@ -1540,7 +1540,7 @@ def test_non_participant_gets_followup_turn_after_nonparticipant_reply():
         ),
         dry_run=True,
     )
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     events = _normalize(trace.events)
 
     agent2_turns = [
@@ -1594,7 +1594,7 @@ def test_unread_cheap_talk_messages_do_not_cross_round_boundary():
         ))
         agents_list.append(agent)
 
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=1,
             num_agents=3,
@@ -1608,7 +1608,7 @@ def test_unread_cheap_talk_messages_do_not_cross_round_boundary():
         ),
         dry_run=True,
     )
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     events = _normalize(trace.events)
 
     round_two_agent_zero_start = next(
@@ -1689,27 +1689,27 @@ def test_resolution_mismatch():
 
 def test_resolution_slot_conflict():
     """Two meetings scheduled at same slot by same agent appear in slot_conflicts."""
-    # Run a 2-round game where both clients always schedule at slot 0
+    # Run a 2-round environment where both clients always schedule at slot 0
     # This will create conflict: M1 and M2 both at slot 0
     # We need 2 different meetings. With num_meetings=2, two rounds occur.
     # Both agents always schedule at slot 0 for both meetings.
     # On round 2, slot 0 already has M1, so FixedSlotClient(0) tries to put M2 at 0 too.
-    # validate_batch will reject it (slot occupied) unless there's a reschedule.
+    # validate_cell will reject it (slot occupied) unless there's a reschedule.
     # So the "two meetings in same slot" via normal validation cannot happen normally.
     # Test the resolution checker directly with a manually crafted calendar state.
 
-    # Build a simple 2-agent 2-meeting game and check slot_conflicts logic
+    # Build a simple 2-agent 2-meeting environment and check slot_conflicts logic
     # We'll manually set up calendars with two M markers in same slot
-    # by calling resolution logic directly from the game code.
+    # by calling resolution logic directly from the environment code.
 
     # Simulate: agent 0 has M1 and M2 both "at slot 3" by directly placing them
     cal = Calendar(num_slots=8)
     # Place two meeting markers - this tests the slot_conflict detection
     cal.slots[3] = "M1"
     # Can't have two values in same slot naturally, but detection looks for >1 'M' per slot
-    # The actual slot_conflicts detection in game.py uses seen[slot_idx] which is a list
+    # The actual slot_conflicts detection in environment.py uses seen[slot_idx] which is a list
     # It appends each "M*" string per slot, so we need to manually test that path
-    # by simulating what game.py does
+    # by simulating what environment.py does
 
     slot_conflicts: dict[str, list[int]] = {}
     seen: dict[int, list] = {}
@@ -1724,7 +1724,7 @@ def test_resolution_slot_conflict():
     assert len(conflicts) == 0, "Single meeting marker should not produce conflicts"
 
     # Now simulate two markers at same slot (as if state corruption occurred)
-    # We do this by manually building the seen dict as game.py would
+    # We do this by manually building the seen dict as environment.py would
     seen2: dict[int, list] = {}
     for slot_idx, items in enumerate([{"meeting_id": 1, "cost": 1}, None, None, {"meeting_id": 2, "cost": 1}, None, None, None, None]):
         if items is None:
@@ -1852,8 +1852,8 @@ def test_voluntary_reschedule_phase():
         ))
         agents_list.append(agent)
 
-    game, _ = _build_game_with_clients(clients, seed=seed, num_slots=num_slots)
-    trace = game._run_with_agents(agents_list, scenario)
+    environment, _ = _build_game_with_clients(clients, seed=seed, num_slots=num_slots)
+    trace = environment._run_with_agents(agents_list, scenario)
     trace_events = [{"type": e.type, "data": e.data} for e in trace.events]
 
     # voluntary_decide should have been called on agent 2
@@ -1865,8 +1865,8 @@ def test_voluntary_reschedule_phase():
     assert voluntary_starts[0]["data"]["agent_id"] == 2
 
     # The reschedule should have been applied
-    batch_applied = [e for e in trace_events if e["type"] == "batch_applied" and e["data"]["phase"] == "VOLUNTARY"]
-    assert len(batch_applied) == 1
+    cell_applied = [e for e in trace_events if e["type"] == "cell_applied" and e["data"]["phase"] == "VOLUNTARY"]
+    assert len(cell_applied) == 1
 
     # Agent 2's calendar should reflect the move: errand gone from errand_slot, present at free_slot
     assert not (isinstance(agents_list[2].calendar.get(errand_slot), dict) and
@@ -1916,8 +1916,8 @@ class PerMeetingDecideClient(BaseClient):
         return DecideResult(tool_calls=[], text=None, thinking=None, usage=None, latency_ms=None, raw=None)
 
 
-def test_blocked_reschedule_fails_resolution_and_rolls_back_staged_batches():
-    """If one participant tries to move a blocked errand, no participant batch commits."""
+def test_blocked_reschedule_fails_resolution_and_rolls_back_staged_cells():
+    """If one participant tries to move a blocked errand, no participant cell commits."""
     scenario = {
         "seed": 1,
         "num_agents": 2,
@@ -1951,7 +1951,7 @@ def test_blocked_reschedule_fails_resolution_and_rolls_back_staged_batches():
         decision_retries=0,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
     agents_list = []
     for agent_id, client in enumerate(clients):
         agent = Agent(client)
@@ -1964,7 +1964,7 @@ def test_blocked_reschedule_fails_resolution_and_rolls_back_staged_batches():
         ))
         agents_list.append(agent)
 
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     ev = [{"type": e.type, "data": e.data} for e in trace.events]
 
     resolution = next(e for e in ev if e["type"] == "resolution")
@@ -1972,7 +1972,7 @@ def test_blocked_reschedule_fails_resolution_and_rolls_back_staged_batches():
     assert resolution["data"]["blocked_slot_violations"]
     assert resolution["data"]["blocked_slot_violations"][0]["kind"] == "blocked_reschedule"
     assert agents_list[1].calendar.get(0) is None
-    assert any(e["type"] == "batch_rolled_back" and e["data"]["agent_id"] == 1 for e in ev)
+    assert any(e["type"] == "cell_rolled_back" and e["data"]["agent_id"] == 1 for e in ev)
 
 
 def test_meeting_on_blocked_slot_fails_resolution():
@@ -1998,7 +1998,7 @@ def test_meeting_on_blocked_slot_fails_resolution():
         num_agents=1, num_slots=2, agent_id=0,
         all_agent_ids=[0], dm_cap=100, decision_retries=0,
     ))
-    game = CalendarGame(
+    environment = CalendarGame(
         CalendarGameConfig(
             seed=1,
             num_agents=1,
@@ -2011,7 +2011,7 @@ def test_meeting_on_blocked_slot_fails_resolution():
         dry_run=True,
     )
 
-    trace = game._run_with_agents([agent], scenario)
+    trace = environment._run_with_agents([agent], scenario)
     resolution = next(e for e in trace.events if e.type == "resolution")
 
     assert not resolution.data["coordinated"]
@@ -2116,7 +2116,7 @@ def test_consistency_violation_on_unilateral_initial_prior_meeting_reschedule():
         decision_retries=0,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
 
     all_agent_ids = [0, 1, 2, 3]
     agents_list = []
@@ -2131,7 +2131,7 @@ def test_consistency_violation_on_unilateral_initial_prior_meeting_reschedule():
         ))
         agents_list.append(agent)
 
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     ev = [{"type": e.type, "data": e.data} for e in trace.events]
 
     violations = [e for e in ev if e["type"] == "consistency_violation"]
@@ -2174,8 +2174,8 @@ def test_prior_meeting_participants_are_rendered_in_prompts():
         decision_retries=0,
         enable_fallback=False,
     )
-    game = CalendarGame(config, dry_run=True)
-    trace = game.run_with_scenario(scenario)
+    environment = CalendarGame(config, dry_run=True)
+    trace = environment.run_with_scenario(scenario)
     ev = [{"type": e.type, "data": e.data} for e in trace.events]
 
     agent0_registered = next(
@@ -2221,7 +2221,7 @@ def test_consistency_violation_on_unilateral_reschedule():
 
     config = CalendarGameConfig(seed=1, num_agents=3, num_slots=16, num_meetings=2,
                                 density=0, decision_retries=0)
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
 
     all_agent_ids = [0, 1, 2]
     agents_list = []
@@ -2236,7 +2236,7 @@ def test_consistency_violation_on_unilateral_reschedule():
         ))
         agents_list.append(agent)
 
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     ev = [{"type": e.type, "data": e.data} for e in trace.events]
 
     violations = [e for e in ev if e["type"] == "consistency_violation"]
@@ -2290,7 +2290,7 @@ def test_voluntary_meeting_reschedule_satisfies_consistency():
 
     config = CalendarGameConfig(seed=1, num_agents=3, num_slots=16, num_meetings=2,
                                 density=0, decision_retries=0)
-    game = CalendarGame(config, dry_run=True)
+    environment = CalendarGame(config, dry_run=True)
 
     all_agent_ids = [0, 1, 2]
     agents_list = []
@@ -2305,7 +2305,7 @@ def test_voluntary_meeting_reschedule_satisfies_consistency():
         ))
         agents_list.append(agent)
 
-    trace = game._run_with_agents(agents_list, scenario)
+    trace = environment._run_with_agents(agents_list, scenario)
     ev = [{"type": e.type, "data": e.data} for e in trace.events]
 
     # No consistency violations

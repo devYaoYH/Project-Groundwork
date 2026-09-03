@@ -4,12 +4,12 @@ description: >
   3 MC ratios x 10 games = 120 self-play games. Cheap talk remains enabled;
   no joint-goal intervention is applied.
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
   vertex_adc_file: ${A2A_VERTEX_MAAS_ADC_FILE}
   gcp_project: ${A2A_VERTEX_MAAS_PROJECT}
   gcp_location: us-east5
-batches:
+cells:
 - label: llama4m_selfplay_stable_fixed_mc05
   count: 10
   config:

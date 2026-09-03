@@ -1,8 +1,8 @@
-"""Interactive entrypoint: judge a single game and print results.
+"""Interactive entrypoint: judge a single environment and print results.
 
 Usage:
     uv run python -m judge.run_interactive \
-        --game-id dbd45fed \
+        --environment-id dbd45fed \
         --provider anthropic
 """
 
@@ -68,8 +68,8 @@ def _print_round(j: RoundJudgment, taxonomy: Taxonomy | None = None):
 
 
 def _print_game_judgment(j: GameJudgment, taxonomy: Taxonomy | None = None):
-    """Pretty-print a whole-game judgment."""
-    print(f"\nGame: {j.game_id}")
+    """Pretty-print a whole-environment judgment."""
+    print(f"\nGame: {j.episode_uid}")
     print(f"Models: {j.model_a} vs {j.model_b}")
     print(f"Mode: {j.mode} | mc_ratio: {j.mc_ratio}")
     print(f"\nGame-level attribution: {j.game_attribution}")
@@ -80,8 +80,8 @@ def _print_game_judgment(j: GameJudgment, taxonomy: Taxonomy | None = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive LLM judge for a single game")
-    parser.add_argument("--game-id", required=True, help="Game ID (or prefix)")
+    parser = argparse.ArgumentParser(description="Interactive LLM judge for a single environment")
+    parser.add_argument("--environment-id", required=True, help="Environment ID (or prefix)")
     parser.add_argument("--provider", default="anthropic", choices=list(LLM_PROVIDERS.keys()))
     parser.add_argument("--model", default=None)
     parser.add_argument("--api-key-env", default=None)
@@ -105,7 +105,7 @@ def main():
     key_env = args.api_key_env or key_env_map.get(args.provider, "API_KEY")
     api_key = os.environ.get(key_env)
     if not api_key:
-        log.error("Set %s environment variable.", key_env)
+        log.error("Set %s release variable.", key_env)
         sys.exit(1)
 
     # Load taxonomy if provided
@@ -123,23 +123,23 @@ def main():
     raw_traces = load_experiment_data()
     dataset = NegotiationDataset.from_traces(raw_traces)
 
-    # Find matching game(s)
-    matching = [g.game_id for g in dataset.games if g.game_id.startswith(args.game_id)]
+    # Find matching environment(s)
+    matching = [g.episode_uid for g in dataset.games if g.episode_uid.startswith(args.episode_uid)]
     if not matching:
-        log.error("No game found matching '%s'", args.game_id)
+        log.error("No environment found matching '%s'", args.episode_uid)
         sys.exit(1)
     if len(matching) > 1:
-        log.warning("Multiple matches for '%s': %s — using first", args.game_id, matching)
-    game_id = matching[0]
+        log.warning("Multiple matches for '%s': %s — using first", args.episode_uid, matching)
+    episode_uid = matching[0]
 
-    # Extract the game context (single call, all rounds)
-    game_ctxs = extract_all_game_contexts(dataset, game_ids={game_id})
+    # Extract the environment context (single call, all rounds)
+    game_ctxs = extract_all_game_contexts(dataset, episode_uids={episode_uid})
     if not game_ctxs:
-        log.error("No eligible game found for %s", game_id)
+        log.error("No eligible environment found for %s", episode_uid)
         sys.exit(1)
     ctx = game_ctxs[0]
 
-    log.info("Judging game %s (%d rounds) — one LLM call...", game_id, len(ctx.rounds))
+    log.info("Judging environment %s (%d rounds) — one LLM call...", episode_uid, len(ctx.rounds))
     judgment = judge_game(
         ctx=ctx,
         api_format=api_format,

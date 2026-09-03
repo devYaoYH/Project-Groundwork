@@ -1,6 +1,6 @@
-"""Load and classify game data from Firestore (or cached JSON) into DataFrames.
+"""Load and classify environment data from Firestore (or cached JSON) into DataFrames.
 
-Primary source: Firestore experiment traces (30 labeled games).
+Primary source: Firestore experiment episodes (30 labeled games).
 Fallback: cached JSON file at data/experiment_traces.json.
 
 Usage:
@@ -24,13 +24,13 @@ import pandas as pd
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from negotiation_game.backend.storage import firestore_available, list_traces, get_trace
+from negotiation_game.backend.storage import firestore_available, list_episodes, get_episode
 from negotiation_game.backend.defaults import REPO_ROOT
 from negotiation_analysis.models import NegotiationDataset
 
 log = logging.getLogger("data_loader")
 
-# 720-game main cohort used in the paper (4 run IDs + 3 tombstoned incomplete games)
+# 720-environment main cohort used in the paper (4 run IDs + 3 tombstoned incomplete games)
 MAIN_COHORT_RUN_IDS: frozenset[str] = frozenset({
     "8aab2461-2450-4781-b341-51e54a653122",  # self-play, run A
     "37a7488c-ea18-4b15-bfe7-7978a4ecbb8b",  # self-play, run B
@@ -42,7 +42,7 @@ FULL_TRANSPARENCY_COHORT_RUN_IDS: frozenset[str] = frozenset({
     "ac21edea-41ae-4953-894c-0327927b0e8a",  # Qwen 3.5 Flash x GPT-5 Mini, remaining stable M/C=0.8 cells
     "cae3ddf2-d9af-4b3f-9af1-82280c21acb1",  # Claude Sonnet 4.5 x Claude Sonnet 4.5
 })
-TOMBSTONED_GAME_IDS: frozenset[str] = frozenset({
+TOMBSTONED_EPISODE_UID_PREFIXES: frozenset[str] = frozenset({
     "1e0a1120",
     "7cde50c3",
     "abe546f3",
@@ -53,7 +53,7 @@ RESOURCE_COSTS = {"wood": 1.0, "stone": 1.5, "gold": 3.0}
 RESOURCE_SUPPLY = {"wood": 10, "stone": 10, "gold": 6}
 BUDGET = 15.0
 
-# The game's data lives beside the packages that ship it, not at the root of
+# The environment's data lives beside the packages that ship it, not at the root of
 # whatever repository vendored them. Resolving against REPO_ROOT pointed the
 # denylist at a path that does not exist, and a missing denylist silently
 # filters nothing, so excluded games quietly rejoined the analysis.
@@ -67,9 +67,9 @@ DENYLIST_PATH = DATA_DIR / "denylist.txt"
 # ---------------------------------------------------------------------------
 
 def load_denylist(path: Path | None = None) -> set[str]:
-    """Load game ID prefixes to exclude from analysis.
+    """Load environment ID prefixes to exclude from analysis.
 
-    Each non-comment line starts with a game_id prefix. Anything after the
+    Each non-comment line starts with a episode_uid prefix. Anything after the
     first whitespace is treated as a comment/reason.
     """
     path = path or DENYLIST_PATH
@@ -85,13 +85,13 @@ def load_denylist(path: Path | None = None) -> set[str]:
 
 
 def apply_denylist(games: list[dict], denylist: set[str] | None = None) -> list[dict]:
-    """Remove games whose game_id starts with any denylisted prefix."""
+    """Remove games whose episode_uid starts with any denylisted prefix."""
     if denylist is None:
         denylist = load_denylist()
     if not denylist:
         return games
     before = len(games)
-    filtered = [g for g in games if not any(g["game_id"].startswith(p) for p in denylist)]
+    filtered = [g for g in games if not any(g["episode_uid"].startswith(p) for p in denylist)]
     removed = before - len(filtered)
     if removed > 0:
         log.info("Denylist removed %d/%d games", removed, before)
@@ -187,51 +187,51 @@ def parse_v5_label(label: str) -> dict:
     }
 
 
-def get_agent_models(game: dict) -> tuple[str, str]:
+def get_agent_models(environment: dict) -> tuple[str, str]:
     """Extract model names for agent_a and agent_b from agent configs.
 
-    Primary: reads from agents[].model in game config.
+    Primary: reads from agents[].model in environment config.
     Fallback: parses model from experiment label via parse_v5_label().
     Logs a warning when falling back so the trace can be investigated.
 
     Returns (model_a, model_b).
     """
-    agents = game.get("agents", [])
+    agents = environment.get("agents", [])
     model_a = agents[0].get("model") if len(agents) > 0 else None
     model_b = agents[1].get("model") if len(agents) > 1 else None
 
     if not model_a or not model_b:
-        label = game.get("experiment_label", "")
+        label = environment.get("experiment_label", "")
         fallback = parse_v5_label(label).get("model", "unknown") if label else "unknown"
-        game_id = game.get("game_id", "?")
+        episode_uid = environment.get("episode_uid", "?")
         if not model_a:
             log.warning(
-                "game %s agent_a missing model in config, falling back to label parse: %s",
-                game_id, fallback,
+                "environment %s agent_a missing model in config, falling back to label parse: %s",
+                episode_uid, fallback,
             )
             model_a = fallback
         if not model_b:
             log.warning(
-                "game %s agent_b missing model in config, falling back to label parse: %s",
-                game_id, fallback,
+                "environment %s agent_b missing model in config, falling back to label parse: %s",
+                episode_uid, fallback,
             )
             model_b = fallback
 
     return model_a, model_b
 
 
-def get_round_oracle(game: dict, round_idx: int) -> dict | None:
+def get_round_oracle(environment: dict, round_idx: int) -> dict | None:
     """Get oracle stats for a specific round.
 
     For rotating games, uses per_round_scenarios[round_idx].oracle_stats.
-    Falls back to game-level oracle_stats.
+    Falls back to environment-level oracle_stats.
     """
-    prs = game.get("per_round_scenarios")
+    prs = environment.get("per_round_scenarios")
     if prs and round_idx < len(prs):
         oracle = prs[round_idx].get("oracle_stats")
         if oracle:
             return oracle
-    return game.get("oracle_stats")
+    return environment.get("oracle_stats")
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def reconstruct_transcript_from_events(events: list[dict], round_num: int) -> li
     """Reconstruct cheap_talk_transcript from events for a given round.
 
     Args:
-        events: List of game events
+        events: List of environment events
         round_num: Round number to reconstruct transcript for
 
     Returns:
@@ -307,7 +307,7 @@ def _trace_to_game(trace: dict) -> dict:
     else:
         events = trace.get("events", [])
 
-    game_id = trace.get("game_id", result.get("game_id", ""))
+    episode_uid = trace.get("episode_uid", result.get("episode_uid", ""))
 
     experiment_label = config.get("experiment_label", "")
     parsed = parse_experiment_label(experiment_label)
@@ -345,7 +345,7 @@ def _trace_to_game(trace: dict) -> dict:
     resource_types = config.get("resource_types", RESOURCES)
 
     return {
-        "game_id": game_id,
+        "episode_uid": episode_uid,
         "experiment_label": experiment_label,
         "mode": mode,
         "goal_type": goal_type,
@@ -370,7 +370,7 @@ def _trace_to_game(trace: dict) -> dict:
         "enable_cheap_talk": config.get("enable_cheap_talk", True),
         "created_at": trace.get("created_at", ""),
         # Experiment tracking metadata (V4+)
-        "experiment_run_id": config.get("experiment_run_id"),
+        "episode_id": config.get("episode_id"),
         "experiment_name": config.get("experiment_name"),
         "git_hash": config.get("git_hash"),
         # V5 project-based fields
@@ -388,7 +388,7 @@ def _trace_to_game(trace: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def load_from_firestore(filters: dict | None = None) -> list[dict]:
-    """Fetch labeled experiment traces from Firestore and convert to raw_games.
+    """Fetch labeled experiment episodes from Firestore and convert to raw_games.
 
     Args:
         filters: Optional dict of Firestore field filters (e.g., {"schema_version": 2})
@@ -401,19 +401,19 @@ def load_from_firestore(filters: dict | None = None) -> list[dict]:
     page_size = 50
 
     while True:
-        batch, _ = list_traces(limit=page_size, start_after=cursor, filters=filters)
-        if not batch:
+        cell, _ = list_episodes(limit=page_size, start_after=cursor, filters=filters)
+        if not cell:
             break
-        for summary in batch:
+        for summary in cell:
             label = summary.get("experiment_label", "")
             if not label:
                 continue
-            trace = get_trace(summary["game_id"])
+            trace = get_episode(summary["episode_uid"])
             if trace:
                 all_traces.append(trace)
-        if len(batch) < page_size:
+        if len(cell) < page_size:
             break
-        cursor = batch[-1]["game_id"]
+        cursor = cell[-1]["episode_uid"]
 
     games = [_trace_to_game(t) for t in all_traces]
     log.info("Loaded %d labeled games from Firestore (filters=%s)", len(games), filters)
@@ -421,11 +421,11 @@ def load_from_firestore(filters: dict | None = None) -> list[dict]:
 
 
 def cache_traces(games_or_traces: list[dict], path: Path = CACHE_PATH) -> None:
-    """Save raw Firestore traces to a local JSON cache file."""
+    """Save raw Firestore episodes to a local JSON cache file."""
     os.makedirs(path.parent, exist_ok=True)
     with open(path, "w") as f:
         json.dump(games_or_traces, f, indent=2, default=str)
-    log.info("Cached %d traces to %s", len(games_or_traces), path)
+    log.info("Cached %d episodes to %s", len(games_or_traces), path)
 
 
 def load_from_cache(path: Path = CACHE_PATH) -> list[dict]:
@@ -434,8 +434,8 @@ def load_from_cache(path: Path = CACHE_PATH) -> list[dict]:
         raise FileNotFoundError(f"Cache file not found: {path}")
     with open(path) as f:
         data = json.load(f)
-    # The cache may contain either raw traces or already-converted games.
-    # If entries have "game_config", they're raw traces; convert them.
+    # The cache may contain either raw episodes or already-converted games.
+    # If entries have "game_config", they're raw episodes; convert them.
     if data and "game_config" in data[0]:
         games = [_trace_to_game(t) for t in data]
     else:
@@ -500,11 +500,11 @@ def load_experiment_data(
     return games
 
 
-def load_by_experiment_run_id(run_id: str, cache_path: Path | None = None) -> list[dict]:
+def load_by_episode_id(run_id: str, cache_path: Path | None = None) -> list[dict]:
     """Load games from a specific experiment run by its UUID.
 
     Args:
-        run_id: The experiment_run_id UUID (can be partial prefix, e.g., first 8 chars)
+        run_id: The episode_id UUID (can be partial prefix, e.g., first 8 chars)
         cache_path: Optional custom cache file path (defaults to CACHE_PATH)
 
     Returns:
@@ -512,17 +512,17 @@ def load_by_experiment_run_id(run_id: str, cache_path: Path | None = None) -> li
 
     Example:
         # Load by full UUID
-        games = load_by_experiment_run_id("a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6")
+        games = load_by_episode_id("a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6")
 
         # Load by prefix (first 8 chars)
-        games = load_by_experiment_run_id("a1b2c3d4")
+        games = load_by_episode_id("a1b2c3d4")
     """
     if cache_path is None:
         cache_path = CACHE_PATH
 
     # Try Firestore first with exact filter
     try:
-        games = load_from_firestore(filters={"game_config.experiment_run_id": run_id})
+        games = load_from_firestore(filters={"game_config.episode_id": run_id})
         if games:
             return games
     except Exception:
@@ -534,11 +534,11 @@ def load_by_experiment_run_id(run_id: str, cache_path: Path | None = None) -> li
         # Support partial prefix matching (e.g., first 8 chars of UUID)
         filtered = [
             g for g in all_games
-            if (g.get("experiment_run_id") or "").startswith(run_id)
+            if (g.get("episode_id") or "").startswith(run_id)
         ]
         if not filtered:
-            raise ValueError(f"No games found with experiment_run_id matching '{run_id}'")
-        log.info("Loaded %d games for experiment_run_id=%s", len(filtered), run_id)
+            raise ValueError(f"No games found with episode_id matching '{run_id}'")
+        log.info("Loaded %d games for episode_id=%s", len(filtered), run_id)
         return filtered
     except FileNotFoundError:
         raise RuntimeError(f"No cache file found at {cache_path}")
@@ -549,7 +549,7 @@ def load_by_experiment_run_id(run_id: str, cache_path: Path | None = None) -> li
 # ---------------------------------------------------------------------------
 
 def build_round_df(games: list[dict]) -> pd.DataFrame:
-    """Build a flat DataFrame with one row per (game, round).
+    """Build a flat DataFrame with one row per (environment, round).
 
     Uses precomputed stats (V2 schema) when available, otherwise computes
     from transcript (V1 schema) for backward compatibility.
@@ -595,7 +595,7 @@ def build_round_df(games: list[dict]) -> pd.DataFrame:
             a_alloc = r.get("agent_a_allocation", {})
             b_alloc = r.get("agent_b_allocation", {})
 
-            # V5+ oracle stats (per-round for rotating, game-level fallback)
+            # V5+ oracle stats (per-round for rotating, environment-level fallback)
             schema_version = g.get("schema_version", 1)
             round_idx = r["round_number"] - 1
             oracle = get_round_oracle(g, round_idx) if schema_version >= 5 else None
@@ -649,7 +649,7 @@ def build_round_df(games: list[dict]) -> pd.DataFrame:
             normalized_rotation = v5_parsed.get("rotation", "unknown")
 
             row = {
-                "game_id": g["game_id"],
+                "episode_uid": g["episode_uid"],
                 "experiment_label": label,
                 "mode": normalized_mode,
                 "goal_type": g.get("goal_type", normalized_mode),
@@ -743,7 +743,7 @@ def build_agent_df(round_df: pd.DataFrame) -> pd.DataFrame:
         joint = r.get("joint_reward", 0)
 
         shared = {
-            "game_id": r["game_id"],
+            "episode_uid": r["episode_uid"],
             "experiment_label": r.get("experiment_label", ""),
             "round_number": r["round_number"],
             "mode": r.get("mode"),
@@ -808,7 +808,7 @@ def build_turn_df(games: list[dict]) -> pd.DataFrame:
                 if entry.get("type") == "thinking":
                     continue
                 rows.append({
-                    "game_id": g["game_id"],
+                    "episode_uid": g["episode_uid"],
                     "experiment_label": g.get("experiment_label", ""),
                     "mode": g["mode"],
                     "goal_type": g["goal_type"],
@@ -848,7 +848,7 @@ def filter_games(
         run_ids: Experiment run ID prefixes to include (OR logic)
         min_schema_version: Minimum schema version (inclusive)
         models: Model name substrings to include (OR logic, matched against experiment_label)
-        modes: Game modes to include ("stable", "shifting")
+        modes: Environment modes to include ("stable", "shifting")
         labels: Experiment label substrings to include (OR logic)
 
     Returns:
@@ -863,7 +863,7 @@ def filter_games(
         filtered = [
             g for g in filtered
             if any(
-                (g.get("experiment_run_id") or "").startswith(rid)
+                (g.get("episode_id") or "").startswith(rid)
                 for rid in run_ids
             )
         ]
@@ -917,7 +917,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     Available filters:
         --schema-version INT       exact schema version
         --run-id STR               experiment run ID prefix
-        --mode {stable,shifting}   game mode
+        --mode {stable,shifting}   environment mode
         --model STR                model name substring (e.g. haiku, sonnet)
         --model-a STR              filter by agent_a model
         --model-b STR              filter by agent_b model
@@ -928,11 +928,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         --share-projects           include only share_projects=True games
         --tom                      include only think_about_opponent=True games
         --label STR                filter by experiment_label substring
-        --main-cohort              restrict to the 720-game paper main cohort
+        --main-cohort              restrict to the 720-environment paper main cohort
     """
     parser.add_argument(
         "--main-cohort", action="store_true", default=False,
-        help="Restrict to the 720-game paper main cohort (4 run IDs, excl. tombstoned games)",
+        help="Restrict to the 720-environment paper main cohort (4 run IDs, excl. tombstoned games)",
     )
     parser.add_argument(
         "--schema-version", type=int, default=None,
@@ -1029,7 +1029,7 @@ def load_games_from_args(args: argparse.Namespace) -> list[dict]:
     Returns a list of raw_game dicts after applying all requested filters.
     """
     if args.run_id:
-        games = load_by_experiment_run_id(args.run_id)
+        games = load_by_episode_id(args.run_id)
     else:
         games = load_experiment_data(schema_version=args.schema_version)
 
@@ -1077,8 +1077,8 @@ def load_dataset_from_args(args: argparse.Namespace) -> 'NegotiationDataset':
     if getattr(args, "main_cohort", False):
         games = [
             g for g in games
-            if g.config.get("experiment_run_id") in MAIN_COHORT_RUN_IDS
-            and not any(g.game_id.startswith(t) for t in TOMBSTONED_GAME_IDS)
+            if g.config.get("episode_id") in MAIN_COHORT_RUN_IDS
+            and not any(g.episode_uid.startswith(t) for t in TOMBSTONED_EPISODE_UID_PREFIXES)
         ]
         filters_applied.append("main_cohort=True")
 
@@ -1182,10 +1182,10 @@ def load_dataset(
 ) -> NegotiationDataset:
     """Load experiment data as a NegotiationDataset (structured models)."""
     if run_id:
-        games = load_by_experiment_run_id(run_id)
+        games = load_by_episode_id(run_id)
     else:
-        # We need raw traces here. load_experiment_data currently returns converted dicts.
-        # Let's use load_from_cache or load_from_firestore directly to get raw traces.
+        # We need raw episodes here. load_experiment_data currently returns converted dicts.
+        # Let's use load_from_cache or load_from_firestore directly to get raw episodes.
         try:
             games = load_from_cache()
         except Exception:
@@ -1197,6 +1197,6 @@ def load_dataset(
     if schema_version:
         games = [g for g in games if g.get("schema_version") == schema_version]
 
-    # Filter out games without game_config (standardized dicts) if we want pure raw traces,
+    # Filter out games without game_config (standardized dicts) if we want pure raw episodes,
     # but our NegotiationGame model is now robust enough to handle both.
     return NegotiationDataset.from_traces(games)

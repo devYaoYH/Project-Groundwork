@@ -46,7 +46,7 @@ class ScenarioPool:
             return json.load(f)
 
     def pick_theme(self, seed: int | None = None) -> dict:
-        """Pick a random cosmetic theme (fixed for entire game).
+        """Pick a random cosmetic theme (fixed for entire environment).
 
         Args:
             seed: Random seed for deterministic theme selection

@@ -1,4 +1,4 @@
-"""CLI: cache Langfuse traces locally as GameTraceBase JSON files.
+"""CLI: cache Langfuse episodes locally as EpisodeTrace JSON files.
 
 Example:
     uv run python scripts/cache_langfuse.py --output-dir ./langfuse_cache \
@@ -26,16 +26,16 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"[cache_langfuse] using_sdk={using_sdk()}")
-    traces = fetch_and_convert(
+    episodes = fetch_and_convert(
         session_ids=args.session_id or None,
         tags=args.tag or None,
         from_timestamp=args.since,
         limit=args.limit,
     )
-    print(f"[cache_langfuse] fetched {len(traces)} trace(s)")
+    print(f"[cache_langfuse] fetched {len(episodes)} trace(s)")
 
-    for t in traces:
-        path = out / f"{t.game_id}.json"
+    for t in episodes:
+        path = out / f"{t.episode_uid}.json"
         path.write_text(t.model_dump_json(indent=2))
         print(f"  wrote {path}")
 

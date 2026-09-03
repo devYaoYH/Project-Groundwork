@@ -1,1 +1,54 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Word Guess Redis replay</title><link rel="stylesheet" href="/css/styles.css"><style>main{max-width:900px;margin:24px auto;padding:0 20px}input{width:65%;padding:8px}button{padding:8px}#timeline{max-height:65vh;overflow:auto}article{border-top:1px solid #ddd;padding:10px}strong,small{display:block}pre{white-space:pre-wrap}</style></head><body data-game="word-guess"><main><a href="/">← Viewer</a><h1>Word Guess stream replay</h1><p>Replay persisted Redis game events. Stream IDs are shown in a rollout’s episode details.</p><input id="stream" placeholder="a2a:rollout:…:episode:…"><button id="load">Load</button><button id="play">Play</button><button id="step">Step</button><button id="reset">Reset</button><p id="status"></p><p id="count"></p><section id="timeline"></section></main><script type="module" src="/replays/replay.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Word Guess stream replay</title>
+<!-- Self-contained by construction. This page is served out of the
+     environment's own directory, so it may not link to a stylesheet living
+     anywhere else in the workspace. -->
+<style>
+  :root { --paper:#f1f3f0; --card:#fff; --ink:#191c1a; --muted:#6b716d; --rule:#dcdfda; --accent:#33556e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#15171a; --card:#1c1f22; --ink:#e8eae7; --muted:#9aa09c; --rule:#2e3235; --accent:#8fb4d0; }
+  }
+  body { background:var(--paper); color:var(--ink); font:14px/1.55 "IBM Plex Sans","Segoe UI",sans-serif; margin:0; }
+  a { color:var(--accent); }
+  main { max-width:900px; margin:24px auto; padding:0 20px; }
+  h1 { font-family:"Source Serif 4",Georgia,serif; font-weight:500; }
+  input { width:65%; padding:8px; background:var(--card); border:1px solid var(--rule); color:var(--ink); }
+  button { padding:8px; background:var(--card); border:1px solid var(--rule); color:var(--ink); cursor:pointer; }
+  #timeline { max-height:65vh; overflow:auto; }
+  article { border-top:1px solid var(--rule); padding:10px; }
+  strong, small { display:block; }
+  small { color:var(--muted); font-family:ui-monospace,monospace; font-size:11px; }
+  pre { white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:12px; }
+  body.embedded .replay-bar, body.embedded .replay-note { display:none; }
+</style>
+</head>
+<body data-environment="word-guess">
+<main>
+  <div class="replay-bar">
+    <a href="/episodes/">&larr; Episodes</a>
+    <h1>Word Guess stream replay</h1>
+    <p class="replay-note">Replay persisted Redis environment events. Stream IDs are shown in a launch's episode details.</p>
+    <input id="stream" placeholder="a2a:launch:…:episode:…">
+    <button id="load">Load</button>
+    <button id="play">Play</button>
+    <button id="step">Step</button>
+    <button id="reset">Reset</button>
+  </div>
+  <p id="status"></p>
+  <p id="count"></p>
+  <section id="timeline"></section>
+</main>
+<script type="module" src="./replay.js"></script>
+<script>
+  // The standard episode viewer mounts this page chrome-free beside its own
+  // lanes; `hidden` alone loses to the display rules above, so the class does it.
+  if (new URLSearchParams(location.search).get("embed") === "1") {
+    document.body.classList.add("embedded");
+  }
+</script>
+</body>
+</html>

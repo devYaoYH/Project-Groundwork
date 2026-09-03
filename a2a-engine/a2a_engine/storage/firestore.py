@@ -9,8 +9,8 @@ negotiation corpus depends on both:
   like ``agent_projects`` are stored as ``{"0": [...], "1": [...]}`` and
   restored on read.
 
-Unlike the original this stores a ``GameTraceBase``, not a bespoke document
-shape, so the judge and ``GameDataset`` read negotiation and calendar identically.
+Unlike the original this stores a ``EpisodeTrace``, not a bespoke document
+shape, so the judge and ``EpisodeDataset`` read negotiation and calendar identically.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from a2a_engine.manifest import RunManifest
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
 from a2a_engine.storage.local import LocalJSONStore
 
@@ -70,7 +70,7 @@ def restore_nested_arrays(node: Any) -> Any:
     return node
 
 
-class FirestoreTraceStore:
+class FirestoreEpisodeStore:
     """Writes locally first, then mirrors to a Firestore collection."""
 
     name = "firestore"
@@ -110,21 +110,21 @@ class FirestoreTraceStore:
                 return None
         return self._client
 
-    def to_document(self, trace: GameTraceBase, manifest: RunManifest) -> dict[str, Any]:
+    def to_document(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> dict[str, Any]:
         """Serialize a trace into the Firestore document shape."""
         payload = json.loads(trace.model_dump_json())
         events = payload.pop("events", [])
         doc = {
             "schema_version": TRACE_SCHEMA_VERSION,
-            "game_id": trace.game_id,
-            "game_name": manifest.game_name,
+            "episode_uid": trace.episode_uid,
+            "environment_id": manifest.environment_id,
             "experiment_name": manifest.experiment_name,
-            "experiment_run_id": manifest.experiment_run_id,
-            "batch_label": manifest.batch_label,
+            "episode_id": manifest.episode_id,
+            "cell_id": manifest.cell_id,
             "config": flatten_nested_arrays(payload.get("config", {})),
             "final_state": flatten_nested_arrays(payload.get("final_state", {})),
             "metrics": flatten_nested_arrays(payload.get("metrics", {})),
-            "environment": flatten_nested_arrays(payload.get("environment") or {}),
+            "release": flatten_nested_arrays(payload.get("release") or {}),
             "episode": flatten_nested_arrays(payload.get("episode") or {}),
             "observability": flatten_nested_arrays(payload.get("observability", {})),
             "started_at": payload.get("started_at"),
@@ -135,7 +135,7 @@ class FirestoreTraceStore:
         }
         return doc
 
-    def from_document(self, doc: dict[str, Any]) -> GameTraceBase:
+    def from_document(self, doc: dict[str, Any]) -> EpisodeTrace:
         """Deserialize current and pre-migration negotiation documents.
 
         The old negotiation collection used ``{game_config, result}`` while
@@ -148,7 +148,7 @@ class FirestoreTraceStore:
             config = restore_nested_arrays(doc.get("game_config") or {})
             result = restore_nested_arrays(doc.get("result") or {})
             agents = config.get("agents") or []
-            config.setdefault("game_name", "negotiation")
+            config.setdefault("environment_id", "negotiation")
             config.setdefault("num_agents", len(agents) or 2)
             config.setdefault("agents", agents)
             metrics = dict(result.get("metrics") or {})
@@ -165,12 +165,12 @@ class FirestoreTraceStore:
             if a_reward is not None and b_reward is not None:
                 metrics.setdefault("joint_reward", a_reward + b_reward)
             payload = {
-                "game_id": doc.get("game_id") or result.get("game_id", ""),
+                "episode_uid": doc.get("episode_uid") or result.get("episode_uid", ""),
                 "config": config,
                 "events": events,
                 "final_state": result,
                 "metrics": metrics,
-                "environment": restore_nested_arrays(doc.get("environment", {})) or None,
+                "release": restore_nested_arrays(doc.get("release", {})) or None,
                 "episode": restore_nested_arrays(doc.get("episode", {})) or None,
                 "observability": restore_nested_arrays(doc.get("observability", {})),
                 "stopped": result.get("stopped", False),
@@ -179,14 +179,14 @@ class FirestoreTraceStore:
                 payload["started_at"] = doc.get("started_at") or doc.get("created_at")
             if doc.get("ended_at"):
                 payload["ended_at"] = doc["ended_at"]
-            return GameTraceBase.model_validate(payload)
-        return GameTraceBase.model_validate({
-            "game_id": doc.get("game_id", ""),
+            return EpisodeTrace.model_validate(payload)
+        return EpisodeTrace.model_validate({
+            "episode_uid": doc.get("episode_uid", ""),
             "config": restore_nested_arrays(doc.get("config", {})),
             "events": events,
             "final_state": restore_nested_arrays(doc.get("final_state", {})),
             "metrics": restore_nested_arrays(doc.get("metrics", {})),
-            "environment": restore_nested_arrays(doc.get("environment", {})) or None,
+            "release": restore_nested_arrays(doc.get("release", {})) or None,
             "episode": restore_nested_arrays(doc.get("episode", {})) or None,
             "observability": restore_nested_arrays(doc.get("observability", {})),
             "started_at": doc.get("started_at"),
@@ -194,8 +194,8 @@ class FirestoreTraceStore:
             "stopped": doc.get("stopped", False),
         })
 
-    def put_trace(self, trace: GameTraceBase, manifest: RunManifest) -> str:
-        local_uri = self.local.put_trace(trace, manifest)
+    def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
+        local_uri = self.local.put_episode(trace, manifest)
         manifest.storage.backend = self.name
 
         client = self.client
@@ -204,31 +204,31 @@ class FirestoreTraceStore:
             self.local.write_manifest(manifest, Path(local_uri))
             return local_uri
 
-        uri = f"firestore://{self.collection}/{trace.game_id}"
+        uri = f"firestore://{self.collection}/{trace.episode_uid}"
         manifest.storage.uri = uri
         try:
-            client.collection(self.collection).document(trace.game_id).set(
+            client.collection(self.collection).document(trace.episode_uid).set(
                 self.to_document(trace, manifest)
             )
             manifest.storage.status = "written"
         except Exception as exc:
             manifest.storage.status = "failed"
             manifest.storage.error = f"{type(exc).__name__}: {exc}"
-            log.warning("Firestore write failed for %s: %s", trace.game_id, exc)
+            log.warning("Firestore write failed for %s: %s", trace.episode_uid, exc)
 
         self.local.write_manifest(manifest, Path(local_uri))
         return uri if manifest.storage.status == "written" else local_uri
 
-    def get_trace(self, game_id: str) -> GameTraceBase | None:
+    def get_episode(self, episode_uid: str) -> EpisodeTrace | None:
         client = self.client
         if client is None:
-            return self.local.get_trace(game_id)
-        snapshot = client.collection(self.collection).document(game_id).get()
+            return self.local.get_episode(episode_uid)
+        snapshot = client.collection(self.collection).document(episode_uid).get()
         if not getattr(snapshot, "exists", False):
-            return self.local.get_trace(game_id)
+            return self.local.get_episode(episode_uid)
         return self.from_document(snapshot.to_dict())
 
-    def list_traces(
+    def list_episodes(
         self,
         filters: dict[str, Any] | None = None,
         limit: int = 50,
@@ -236,15 +236,15 @@ class FirestoreTraceStore:
     ) -> tuple[list[dict[str, Any]], str | None]:
         client = self.client
         if client is None:
-            return self.local.list_traces(filters, limit, cursor)
+            return self.local.list_episodes(filters, limit, cursor)
         query = client.collection(self.collection)
         for key, value in (filters or {}).items():
             query = query.where(key, "==", value)
-        query = query.order_by("game_id").limit(limit)
+        query = query.order_by("episode_uid").limit(limit)
         if cursor:
-            query = query.start_after({"game_id": cursor})
+            query = query.start_after({"episode_uid": cursor})
         rows = [doc.to_dict().get("manifest", {}) for doc in query.stream()]
-        next_cursor = rows[-1].get("game_id") if len(rows) == limit and rows else None
+        next_cursor = rows[-1].get("episode_uid") if len(rows) == limit and rows else None
         return rows, next_cursor
 
     # --- preflight ---
@@ -287,4 +287,4 @@ class FirestoreTraceStore:
         )
 
 
-register_store("firestore", FirestoreTraceStore)
+register_store("firestore", FirestoreEpisodeStore)

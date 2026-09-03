@@ -1,10 +1,10 @@
-"""Pluggable trace storage. See ``base.TraceStore``."""
+"""Pluggable trace storage. See ``base.EpisodeStore``."""
 
 from a2a_engine.storage.base import (
     StoreCheck,
-    TraceStore,
+    EpisodeStore,
     check_store,
-    iter_traces,
+    iter_episodes,
     list_stores,
     make_store,
     register_store,
@@ -15,9 +15,9 @@ _import_backends()
 
 __all__ = [
     "StoreCheck",
-    "TraceStore",
+    "EpisodeStore",
     "check_store",
-    "iter_traces",
+    "iter_episodes",
     "list_stores",
     "make_store",
     "register_store",

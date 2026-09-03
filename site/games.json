@@ -1,5 +1,5 @@
 {
-  "$comment": "Registry powering the static landing page. Each entry links OUT to that game's own deployed site; nothing here is game-specific code.",
+  "$comment": "Registry powering the static landing page. Each entry links OUT to that environment's own deployed site; nothing here is environment-specific code.",
   "games": [
     {
       "id": "calendar",
@@ -34,7 +34,7 @@
     {
       "id": "word-guess",
       "name": "Word Guess",
-      "blurb": "Minimal two-agent reference game. The worked example in the add-a-game guide.",
+      "blurb": "Minimal two-agent reference environment. The worked example in the add-a-environment guide.",
       "status": "reference",
       "repo": "games/word-guess",
       "viewer_url": "",

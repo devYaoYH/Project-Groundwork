@@ -1,9 +1,9 @@
 """Versioned, trace-derived artifacts.
 
-Experiment traces are immutable source records. Expensive or evolving analyses
+Experiment episodes are immutable source records. Expensive or evolving analyses
 (privacy scores, judge results, embeddings) belong in a separate artifact
 record keyed to both the trace and the extractor version. This makes replay and
-backfill explicit instead of letting a live game session mutate reporting state.
+backfill explicit instead of letting a live environment session mutate reporting state.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.schemas import EpisodeTrace
 
 
-def trace_digest(trace: GameTraceBase | dict[str, Any]) -> str:
+def trace_digest(trace: EpisodeTrace | dict[str, Any]) -> str:
     """Return a stable digest for the complete persisted trace payload."""
-    if isinstance(trace, GameTraceBase):
+    if isinstance(trace, EpisodeTrace):
         payload = trace.model_dump(mode="json")
     else:
         payload = trace
@@ -29,9 +29,9 @@ def trace_digest(trace: GameTraceBase | dict[str, Any]) -> str:
 
 
 class DerivedArtifact(BaseModel):
-    """A reproducible analysis result derived from one completed game trace."""
+    """A reproducible analysis result derived from one completed environment trace."""
 
-    game_id: str
+    episode_uid: str
     kind: str
     version: str
     trace_digest: str

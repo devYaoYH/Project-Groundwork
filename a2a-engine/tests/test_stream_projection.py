@@ -10,9 +10,9 @@ import pytest
 from a2a_engine.stream_projection import project_stream_to_trace
 
 
-def entry(event_type, data=None, *, game="calendar", episode="expt.batch.0"):
+def entry(event_type, data=None, *, environment="calendar", episode="expt.cell.0"):
     return {
-        "game_name": game,
+        "environment_id": environment,
         "episode_id": episode,
         "stream_id": "1-0",
         "event": {"type": event_type, "timestamp": "2026-08-31T12:00:00Z", "data": data or {}},
@@ -21,7 +21,7 @@ def entry(event_type, data=None, *, game="calendar", episode="expt.batch.0"):
 
 def test_completed_stream_projects_a_finished_trace():
     entries = [
-        entry("game_start", {"num_agents": 5, "game_id": "cal-1"}),
+        entry("game_start", {"num_agents": 5, "episode_uid": "cal-1"}),
         entry("dm_sent", {"from": 0}),
         entry("game_end", {"coordination_rate": 0.8}),
     ]
@@ -32,11 +32,11 @@ def test_completed_stream_projects_a_finished_trace():
     assert trace.observability["partial"] is False
     assert trace.ended_at is not None
     assert trace.final_state == {"coordination_rate": 0.8}
-    assert trace.game_id == "cal-1"
+    assert trace.episode_uid == "cal-1"
 
 
 def test_in_flight_stream_is_marked_partial_and_carries_no_result():
-    """A rollout being watched live has no summary yet; showing zeros would
+    """A launch being watched live has no summary yet; showing zeros would
     read as a result rather than an absence."""
     entries = [
         entry("game_start", {"num_agents": 5}),
@@ -55,7 +55,7 @@ def test_in_flight_stream_is_marked_partial_and_carries_no_result():
 
 @pytest.mark.parametrize("terminal", ["game_end", "game_complete", "game_stopped"])
 def test_each_game_s_terminal_event_completes_the_projection(terminal):
-    """Calendar ends with game_end, negotiation with game_complete. A game
+    """Calendar ends with game_end, negotiation with game_complete. A environment
     whose terminal type is unrecognised would look permanently in-flight."""
     entries = [entry("game_start", {}), entry(terminal, {"score": 1})]
 
@@ -63,12 +63,12 @@ def test_each_game_s_terminal_event_completes_the_projection(terminal):
 
 
 def test_nested_config_is_recovered_when_a_game_publishes_one():
-    entries = [entry("game_start", {"config": {"game_name": "negotiation", "num_agents": 2,
+    entries = [entry("game_start", {"config": {"environment_id": "negotiation", "num_agents": 2,
                                                "num_rounds": 4}})]
 
-    config = project_stream_to_trace(entries, stream="s", game_name="negotiation").config
+    config = project_stream_to_trace(entries, stream="s", environment_id="negotiation").config
 
-    assert config.game_name == "negotiation"
+    assert config.environment_id == "negotiation"
     assert config.num_agents == 2
     assert config.model_dump()["num_rounds"] == 4
 
@@ -79,7 +79,7 @@ def test_flat_start_payload_still_yields_a_usable_config():
 
     config = project_stream_to_trace(entries, stream="s").config
 
-    assert config.game_name == "calendar"
+    assert config.environment_id == "calendar"
     assert config.num_agents == 5
 
 
@@ -88,13 +88,13 @@ def test_episode_id_survives_into_the_config():
 
     trace = project_stream_to_trace(entries, stream="s")
 
-    assert trace.config.experiment_run_id == "calendar_smoke.pinned.0"
+    assert trace.config.episode_id == "calendar_smoke.pinned.0"
 
 
 def test_empty_and_anonymous_streams_are_refused():
-    with pytest.raises(ValueError, match="no A2A game events"):
+    with pytest.raises(ValueError, match="no A2A environment events"):
         project_stream_to_trace([], stream="s")
 
     anonymous = [{"event": {"type": "game_start", "timestamp": "2026-08-31T12:00:00Z", "data": {}}}]
-    with pytest.raises(ValueError, match="no game_name"):
+    with pytest.raises(ValueError, match="no environment_id"):
         project_stream_to_trace(anonymous, stream="s")

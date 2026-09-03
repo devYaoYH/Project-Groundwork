@@ -86,14 +86,14 @@ def write_experiments() -> list[Path]:
             })
             if defaults.get("num_agents"):
                 defaults["agents"] = _agent_specs(int(defaults["num_agents"]))
-            batches = []
-            for batch in spec.get("batches") or []:
-                batch = dict(batch)
-                config = dict(batch.get("config") or {})
+            cells = []
+            for cell in spec.get("cells") or []:
+                cell = dict(cell)
+                config = dict(cell.get("config") or {})
                 num_agents = int(config.get("num_agents", defaults.get("num_agents", 0) or 0))
                 config["agents"] = _agent_specs(num_agents)
-                batch["config"] = config
-                batches.append(batch)
+                cell["config"] = config
+                cells.append(cell)
             spec.update({
                 "name": name,
                 "description": (
@@ -101,7 +101,7 @@ def write_experiments() -> list[Path]:
                     "0=welfare preset, 1=private-like preset."
                 ),
                 "defaults": defaults,
-                "batches": batches,
+                "cells": cells,
             })
             path = EXPERIMENT_DIR / f"{name}.yaml"
             path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
@@ -136,8 +136,8 @@ def score_vps() -> None:
     for run_dir in sorted(RESULTS_DIR.iterdir() if RESULTS_DIR.exists() else []):
         if not run_dir.is_dir():
             continue
-        traces = _trace_paths(run_dir)
-        if not traces:
+        episodes = _trace_paths(run_dir)
+        if not episodes:
             continue
         out_dir = VPS_DIR / run_dir.name
         if (out_dir / "game_summary.csv").exists():
@@ -240,7 +240,7 @@ def plot(rows: list[dict[str, Any]]) -> tuple[Path, Path]:
             )
         ax.set_title(titles[setting], fontsize=12, fontweight="bold")
         ax.set_xlabel("Excess cost (realized - optimal)")
-        ax.set_ylabel("Uniform VPS privacy loss (mean per game)")
+        ax.set_ylabel("Uniform VPS privacy loss (mean per environment)")
         ax.grid(True, alpha=0.3)
         ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
@@ -436,7 +436,7 @@ def plot_with_models(
 
         ax.set_title(titles[setting], fontsize=12, fontweight="bold")
         ax.set_xlabel("Excess cost (realized - optimal)")
-        ax.set_ylabel("Uniform VPS privacy loss (mean per game)")
+        ax.set_ylabel("Uniform VPS privacy loss (mean per environment)")
         ax.grid(True, alpha=0.3)
         if setting == "varied_full":
             ax.set_xscale("log")
@@ -492,7 +492,7 @@ def plot_with_models(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="Run staged DSM experiments before plotting.")
-    parser.add_argument("--score-vps", action="store_true", help="Compute uniform VPS for staged traces.")
+    parser.add_argument("--score-vps", action="store_true", help="Compute uniform VPS for staged episodes.")
     parser.add_argument("--plot", action="store_true", help="Write summary CSV and chart.")
     parser.add_argument(
         "--plot-model-overlay",

@@ -148,10 +148,10 @@ input[type=range]{width:100%;accent-color:#185FA5}
     <p style="margin-bottom:6px;font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px">V_i(σ, q, r, B) = max over feasible run-count vectors n satisfying resource and budget constraints of Σ n(p)·r(p)</p>
     <p style="margin-bottom:6px">The combined score is <em>C</em> = V₁ + V₂. The true collaborative maximum <em>M</em> is the optimal combined reward when both players draw simultaneously from the shared resource pool, <em>including synergy bonuses</em> (a joint integer program solved by bounded enumeration). The <strong>M/C ratio</strong> = M / C characterises resource interaction across three regimes:</p>
     <ul style="margin:0 0 10px 18px;line-height:2">
-      <li><strong>M/C = 1</strong> (non-interfering): joint play recovers exactly the sum of individual optima — projects use disjoint resources and no synergies apply. Distributive game; the pie is fixed.</li>
+      <li><strong>M/C = 1</strong> (non-interfering): joint play recovers exactly the sum of individual optima — projects use disjoint resources and no synergies apply. Distributive environment; the pie is fixed.</li>
       <li><strong>M/C ∈ (0,1)</strong> (partially interfering): resource contention means joint play recovers less than individual optima summed. Partially competitive.</li>
       <li><strong>M/C → 0</strong> (destructive): near-total contention; simultaneous play collapses combined reward. Negative-sum.</li>
-      <li><strong>M/C > 1</strong> (superadditive): synergy bonuses make joint purchasing strictly better than solo play — cooperation produces surplus value. True cooperative game in the game-theoretic sense.</li>
+      <li><strong>M/C > 1</strong> (superadditive): synergy bonuses make joint purchasing strictly better than solo play — cooperation produces surplus value. True cooperative environment in the environment-theoretic sense.</li>
     </ul>
     <p style="margin-bottom:6px"><strong>Synergy bonuses</strong> are project-level conditions of the form: if total units of resource ρ purchased by both players combined ≥ θ, then the triggering player receives an additional +β reward per run of that project. This is evaluated after all purchases are made using only publicly observable information (total resource consumption), preserving project privacy. Formally, the effective reward is:</p>
     <p style="margin-bottom:10px;font-family:monospace;background:#f5f4f0;padding:6px 10px;border-radius:6px">r̃(p, n_p, u_other) = r(p) + β(p) · 𝟙[n_p·q(p,ρ) + u_other[ρ] ≥ θ(p)]</p>
@@ -570,7 +570,7 @@ async function narrateResult(targetMC, bestState, ev){
   var pp1=bestState.projs.filter(function(p){return bestState.assign[p.id]==='p1'});
   var pp2=bestState.projs.filter(function(p){return bestState.assign[p.id]==='p2'});
   var unass=bestState.projs.filter(function(p){return bestState.assign[p.id]==='unassigned'});
-  var prompt='A game balance solver produced this scenario targeting M/C = '+targetMC.toFixed(2)
+  var prompt='A environment balance solver produced this scenario targeting M/C = '+targetMC.toFixed(2)
     +' (M/C = collab_max/combined; >1 = superadditive via synergy bonuses, 1 = non-interfering, 0 = destructive). Achieved M/C = '+ev.mcRatio.toFixed(3)
     +' (combined='+ev.combined+', collab='+ev.collab+'). Narrate in 2 sentences: explain the strategic character and specifically how resource overlap and any synergy conditions drive the achieved M/C.'
     +'\nCash per player: '+bestState.cash

@@ -12,13 +12,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from a2a_engine.dataset import GameMessage, GameRecord
-from a2a_engine.schemas import AgentInfo
+from a2a_engine.dataset import GameMessage, EpisodeRecord
+from a2a_engine.schemas import ParticipantBinding
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert analyst of multi-agent coordination transcripts. "
-    "You will be shown a game's full transcript, final state, and metrics. "
-    "Identify the key coordination behaviors that explain the game's outcome — "
+    "You will be shown a environment's full transcript, final state, and metrics. "
+    "Identify the key coordination behaviors that explain the environment's outcome — "
     "successes, failures, missed opportunities, and notable communication patterns. "
     "Be specific, ground each observation in transcript turns by quoting briefly."
 )
@@ -29,19 +29,19 @@ class JudgeContext(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    game_id: str
-    game_name: str
+    episode_uid: str
+    environment_id: str
     experiment_name: str | None
-    agents: list[AgentInfo]
+    agents: list[ParticipantBinding]
     messages: list[GameMessage]
     final_state: dict[str, Any]
     metrics: dict[str, Any]
 
     @classmethod
-    def from_record(cls, record: GameRecord) -> "JudgeContext":
+    def from_record(cls, record: EpisodeRecord) -> "JudgeContext":
         return cls(
-            game_id=record.game_id,
-            game_name=record.game_name,
+            episode_uid=record.episode_uid,
+            environment_id=record.environment_id,
             experiment_name=record.experiment_name,
             agents=record.agents,
             messages=record.messages,
@@ -50,7 +50,7 @@ class JudgeContext(BaseModel):
         )
 
 
-def _agent_label(idx: int, agent: AgentInfo) -> str:
+def _agent_label(idx: int, agent: ParticipantBinding) -> str:
     name = agent.extra.get("name") if agent.extra else None
     if not name:
         # Pull from any extra-allowed top-level attr, else fall back to index.
@@ -60,9 +60,9 @@ def _agent_label(idx: int, agent: AgentInfo) -> str:
 
 def render_transcript(ctx: JudgeContext, *, include_metrics: bool = True) -> str:
     lines: list[str] = []
-    lines.append(f"GAME: {ctx.game_id}")
+    lines.append(f"GAME: {ctx.episode_uid}")
     lines.append(f"EXPERIMENT: {ctx.experiment_name or '<none>'}")
-    lines.append(f"GAME TYPE: {ctx.game_name}")
+    lines.append(f"GAME TYPE: {ctx.environment_id}")
     lines.append("AGENTS:")
     for i, a in enumerate(ctx.agents):
         lines.append(_agent_label(i, a))
@@ -81,7 +81,7 @@ def render_transcript(ctx: JudgeContext, *, include_metrics: bool = True) -> str
 
 
 def build_transcript_prompt(
-    record: GameRecord,
+    record: EpisodeRecord,
     *,
     system_prompt: str | None = None,
     include_metrics: bool = True,

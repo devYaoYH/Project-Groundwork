@@ -5,13 +5,13 @@ from pathlib import Path
 import pandas as pd
 
 
-KEYS = ["game_id", "round_number"]
+KEYS = ["episode_uid", "round_number"]
 
 METADATA_COLS = [
-    "game_id",
+    "episode_uid",
     "round_number",
     "experiment_label",
-    "experiment_run_id",
+    "episode_id",
     "model_a",
     "model_b",
     "mode",

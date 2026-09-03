@@ -1,7 +1,7 @@
 """Seam tests: negotiation agents on the shared retry policy.
 
 ``LLMAgentBase`` carried its own retry/backoff/cooldown copy. It now delegates to
-``a2a_engine.llm.retry``. Negotiation's behavior is load-bearing for the game
+``a2a_engine.llm.retry``. Negotiation's behavior is load-bearing for the environment
 engine — it reads ``last_api_meta`` to emit ``api_failure`` events and falls back
 to a heuristic agent when a call returns None — so these tests pin that the
 delegation changed nothing observable.
@@ -58,7 +58,7 @@ def test_policy_preserves_the_original_constants():
 
 def test_agents_degrade_rather_than_raise():
     """The engine substitutes a heuristic agent on None; an exception would
-    abort the whole game instead."""
+    abort the whole environment instead."""
     assert NEGOTIATION_RETRY_POLICY.on_exhausted == "return_none"
 
 

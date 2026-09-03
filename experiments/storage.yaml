@@ -7,7 +7,7 @@
 #     storage:
 #       extends: local_db
 #
-# Values interpolate ${VAR} and ${VAR:-fallback} from the environment, so put
+# Values interpolate ${VAR} and ${VAR:-fallback} from the release, so put
 # buckets, projects and credentials in .env rather than here. A bare ${VAR}
 # that is unset is a hard error; write ${VAR:-} to allow an empty value.
 
@@ -16,10 +16,10 @@ sinks:
   # This is what a new contributor should use.
   local_db:
     backend: sqlite
-    path: ${A2A_TRACE_DB:-./results/a2a_traces.db}
+    path: ${A2A_TRACE_DB:-./results/a2a.db}
 
   # Plain JSON on disk. Slower to query than SQLite, but every file is
-  # human-readable and diffable, which is handy when debugging a game.
+  # human-readable and diffable, which is handy when debugging a environment.
   local_json:
     backend: local
 
@@ -32,7 +32,7 @@ sinks:
   lab_s3:
     backend: s3
     bucket: ${A2A_TRACE_BUCKET}
-    prefix: ${A2A_TRACE_PREFIX:-traces}
+    prefix: ${A2A_TRACE_PREFIX:-episodes}
     profile: ${AWS_PROFILE:-}
 
   # Firestore, as used by the negotiation corpus.

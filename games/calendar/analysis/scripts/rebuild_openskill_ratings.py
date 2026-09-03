@@ -57,16 +57,16 @@ def _write_leaderboard(path: Path, rows: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("traces", nargs="+", help="Trace JSON files, directories, or globs.")
+    parser.add_argument("episodes", nargs="+", help="Trace JSON files, directories, or globs.")
     parser.add_argument("--vps-pair-csv", help="Optional pair_round_vps.csv with target/observer VPS rows.")
-    parser.add_argument("--vps-game-target-csv", help="Optional game_target_summary.csv with per-target excess VPS rows.")
-    parser.add_argument("--reflection-vps-csv", help="Deprecated alias for --vps-game-target-csv.")
+    parser.add_argument("--vps-environment-target-csv", help="Optional game_target_summary.csv with per-target excess VPS rows.")
+    parser.add_argument("--reflection-vps-csv", help="Deprecated alias for --vps-environment-target-csv.")
     parser.add_argument("--vps-weight-mode", default="cost", choices=["cost", "uniform", ""])
     parser.add_argument("--rating-variant", default="default", choices=["default", "score_margin_v1"])
     parser.add_argument(
         "--vps-value-column",
         default=None,
-        help="Value column for --vps-game-target-csv. Defaults to reflection/static excess columns.",
+        help="Value column for --vps-environment-target-csv. Defaults to reflection/static excess columns.",
     )
     parser.add_argument("--out", default="analysis/outputs/openskill_ratings/rating_snapshot.json")
     parser.add_argument("--leaderboard-csv", default="analysis/outputs/openskill_ratings/leaderboard.csv")
@@ -74,7 +74,7 @@ def main() -> int:
 
     game_target_csv = args.vps_game_target_csv or args.reflection_vps_csv
     if args.vps_pair_csv and game_target_csv:
-        parser.error("Use only one of --vps-pair-csv or --vps-game-target-csv.")
+        parser.error("Use only one of --vps-pair-csv or --vps-environment-target-csv.")
     has_vps_report = bool(args.vps_pair_csv or game_target_csv)
     if game_target_csv:
         value_column = args.vps_value_column
@@ -91,13 +91,13 @@ def main() -> int:
         vps_by_game = {}
     events = []
     skipped = 0
-    for path in _trace_paths(args.traces):
+    for path in _trace_paths(args.episodes):
         trace = load_calendar_trace(path)
         event = extract_calendar_rating_event(
             trace,
             source_path=str(path),
             excess_vps_by_agent=(
-                vps_by_game.get(str(trace.get("game_id") or path.stem), {})
+                vps_by_game.get(str(trace.get("episode_uid") or path.stem), {})
                 if has_vps_report
                 else None
             ),
@@ -111,8 +111,8 @@ def main() -> int:
     metrics = CALENDAR_RATING_VARIANT_METRICS.get(args.rating_variant, CALENDAR_RATING_METRICS)
     snapshot = OpenSkillRater(metrics).rate_events(events)
     snapshot.metadata.update({
-        "trace_count": len(events),
-        "skipped_trace_count": skipped,
+        "episode_count": len(events),
+        "skipped_episode_count": skipped,
         "vps_pair_csv": args.vps_pair_csv,
         "vps_game_target_csv": game_target_csv,
         "reflection_vps_csv": args.reflection_vps_csv,

@@ -81,7 +81,7 @@ class HumanAgent:
         self._system_prompt = None
 
     def _init_session(self, agent_id, game_config_public):
-        """Called by engine at game start to set up the system prompt."""
+        """Called by engine at environment start to set up the system prompt."""
         resources = game_config_public.get("resource_types", ["wood", "stone", "gold"])
         costs = game_config_public.get("resource_costs", {})
         supply = game_config_public.get("resource_supply", {})
@@ -107,16 +107,16 @@ class HumanAgent:
             talk_tools = "- During cheap talk: send messages or make an early decision using the order sliders\n"
         else:
             talk_mechanics = (
-                "- There is no communication in this game: each round, both players "
+                "- There is no communication in this environment: each round, both players "
                 "simultaneously select which resources to purchase"
             )
             talk_tools = ""
 
-        self._system_prompt = f"""You are playing a {num_rounds}-round resource allocation negotiation game.
+        self._system_prompt = f"""You are playing a {num_rounds}-round resource allocation negotiation environment.
 
 **Your objective:** Maximize your cumulative reward across all rounds.
 
-**Game mechanics:**
+**Environment mechanics:**
 {talk_mechanics}
 - Your budget: ${budget} per round
 - Max resource types per purchase: {max_types}

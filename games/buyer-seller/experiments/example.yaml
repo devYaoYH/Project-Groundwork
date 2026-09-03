@@ -9,7 +9,7 @@ storage:
   path: ./results/buyer_seller.db
 
 defaults:
-  game_name: buyer_seller
+  environment_id: buyer_seller
   num_agents: 2
   num_items: 3
   max_rounds: 10
@@ -20,7 +20,7 @@ defaults:
     - type: llm
       model: deepseek/deepseek-v4-flash # buyer
 
-batches:
+cells:
   - label: wide_surplus
     count: 3
     config:

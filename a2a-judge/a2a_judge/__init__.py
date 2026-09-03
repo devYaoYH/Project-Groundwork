@@ -1,12 +1,12 @@
-"""a2a-judge: LLM-as-judge analysis layer for a2a-engine traces.
+"""a2a-judge: LLM-as-judge analysis layer for a2a-engine episodes.
 
 Two layers, deliberately separated:
 
-- **here** — game-agnostic machinery: transcript prompt construction and
-  judgment storage/resume, usable by any game whose traces carry
+- **here** — environment-agnostic machinery: transcript prompt construction and
+  judgment storage/resume, usable by any environment whose episodes carry
   ``{speaker, text}`` message events.
-- **games/<game>/** — rubrics, taxonomies, golden sets and prompt versions,
-  which are game-specific by nature (see ``games/negotiation/negotiation_judge``).
+- **games/<environment>/** — rubrics, taxonomies, golden sets and prompt versions,
+  which are environment-specific by nature (see ``games/negotiation/negotiation_judge``).
 """
 
 from a2a_judge.prompt import JudgeContext, build_transcript_prompt, render_transcript

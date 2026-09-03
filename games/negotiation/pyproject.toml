@@ -1,5 +1,5 @@
 [project]
-name = "negotiation-game"
+name = "negotiation-environment"
 version = "0.1.0"
 description = "Multi-agent resource negotiation benchmark for a2a-engine."
 requires-python = ">=3.11"
@@ -24,8 +24,8 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Lets `a2a-run` discover the game without the caller importing it first.
-[project.entry-points."a2a_engine.games"]
+# Lets `a2a-run` discover the environment without the caller importing it first.
+[project.entry-points."a2a_engine.environments"]
 negotiation = "negotiation_game"
 
 [tool.hatch.build.targets.wheel]

@@ -16,7 +16,7 @@ import argparse
 import json
 from pathlib import Path
 
-from a2a_engine.storage.firestore import FirestoreTraceStore
+from a2a_engine.storage.firestore import FirestoreEpisodeStore
 
 
 def _documents(path: Path) -> list[dict]:
@@ -37,17 +37,17 @@ def _documents(path: Path) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Firestore export as JSON, JSON array, or JSONL")
-    parser.add_argument("output_dir", type=Path, help="Destination for canonical GameTraceBase JSON files")
+    parser.add_argument("output_dir", type=Path, help="Destination for canonical EpisodeTrace JSON files")
     args = parser.parse_args()
 
-    store = FirestoreTraceStore(results_dir=args.output_dir)
+    store = FirestoreEpisodeStore(results_dir=args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     written = 0
     for index, document in enumerate(_documents(args.input), start=1):
         trace = store.from_document(document)
-        if not trace.game_id:
-            raise ValueError(f"document {index} has no game_id")
-        (args.output_dir / f"{trace.game_id}.json").write_text(
+        if not trace.episode_uid:
+            raise ValueError(f"document {index} has no episode_uid")
+        (args.output_dir / f"{trace.episode_uid}.json").write_text(
             trace.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
         written += 1

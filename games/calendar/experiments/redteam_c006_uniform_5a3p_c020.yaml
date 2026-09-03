@@ -1,7 +1,7 @@
 name: redteam_c006_uniform_5a3p_c020
 description: Agent 0 uses the c006 privacy red-team adversarial prompt against c020 DSPy agents on all 36 uniform 5-agent, 3-participant calendar scenarios.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 5
   num_slots: 16
   max_turns_per_round: 6
@@ -28,7 +28,7 @@ defaults:
     - type: dspy
       model: gemini-3-flash-preview
       prompt_variant: gepa_05042248_reflective_gepa_train3_c20_c020_e9f8fd8368.md
-batches:
+cells:
   - label: b037_easy_5a_3p_d0p6_c1_1
     count: 1
     config:

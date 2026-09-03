@@ -17,21 +17,21 @@ uv run python scripts/run_experiment.py experiments/full_factorial.yaml
 
 | File | Description |
 |---|---|
-| `presets.yaml` | Reusable game configs (agents, resources, rounds, etc.) |
-| `no_talk_baseline.yaml` | 4 batches: no cheap talk across all mode/goal combos |
-| `talk_baseline.yaml` | 4 batches: with cheap talk across all mode/goal combos |
-| `full_factorial.yaml` | 8 batches: talk x no-talk x 4 mode/goal combos |
+| `presets.yaml` | Reusable environment configs (agents, resources, rounds, etc.) |
+| `no_talk_baseline.yaml` | 4 cells: no cheap talk across all mode/goal combos |
+| `talk_baseline.yaml` | 4 cells: with cheap talk across all mode/goal combos |
+| `full_factorial.yaml` | 8 cells: talk x no-talk x 4 mode/goal combos |
 
 ## Config Resolution
 
-Each batch's final config is built by merging (later wins):
+Each cell's final config is built by merging (later wins):
 
 1. **Preset base** (`extends` parent, if any)
 2. **Preset fields**
 3. **Experiment `defaults`** (any GameConfig field)
-4. **Per-batch `config`** (any GameConfig field)
+4. **Per-cell `config`** (any GameConfig field)
 
-Batches can override `preset` to use a different base than the experiment default.
+Cells can override `preset` to use a different base than the experiment default.
 
 ## Runner Flags
 

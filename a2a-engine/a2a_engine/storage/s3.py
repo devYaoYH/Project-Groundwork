@@ -2,10 +2,10 @@
 
 Key layout is preserved exactly so the existing calendar bucket
 (``s3://<bucket>/<prefix>/<uploader>/<experiment>/<run_id>/``) keeps working and
-already-uploaded traces stay addressable:
+already-uploaded episodes stay addressable:
 
-    <prefix>/<uploader>/<experiment_name>/<experiment_run_id>/<game_id>.json
-    <prefix>/<uploader>/<experiment_name>/<experiment_run_id>/<game_id>.manifest.json
+    <prefix>/<uploader>/<experiment_name>/<episode_id>/<episode_uid>.json
+    <prefix>/<uploader>/<experiment_name>/<episode_id>/<episode_uid>.manifest.json
 
 Uploads go through the AWS CLI, matching the previous implementation, so the
 same profile/credential setup collaborators already have continues to apply.
@@ -21,15 +21,15 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from a2a_engine.manifest import RunManifest
-from a2a_engine.schemas import GameTraceBase
+from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
 from a2a_engine.storage.local import LocalJSONStore
 
 log = logging.getLogger("a2a_engine.storage.s3")
 
 
-class S3TraceStore:
+class S3EpisodeStore:
     """Writes locally first, then mirrors to S3 best-effort."""
 
     name = "s3"
@@ -38,7 +38,7 @@ class S3TraceStore:
         self,
         *,
         bucket: str | None = None,
-        prefix: str = "traces",
+        prefix: str = "episodes",
         profile: str | None = None,
         uploader: str | None = None,
         results_dir: str | Path = "./results",
@@ -55,8 +55,8 @@ class S3TraceStore:
         )
         self.local = LocalJSONStore(results_dir=results_dir)
 
-    def put_trace(self, trace: GameTraceBase, manifest: RunManifest) -> str:
-        local_uri = self.local.put_trace(trace, manifest)
+    def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
+        local_uri = self.local.put_episode(trace, manifest)
         trace_path = Path(local_uri)
 
         if not self.bucket:
@@ -66,19 +66,19 @@ class S3TraceStore:
             return local_uri
 
         base = self._uri(
-            self.prefix, self.uploader, manifest.experiment_name, manifest.experiment_run_id
+            self.prefix, self.uploader, manifest.experiment_name, manifest.episode_id
         )
-        trace_uri = f"{base}/{trace_path.name}"
+        episode_uri = f"{base}/{trace_path.name}"
         manifest.storage.backend = self.name
-        manifest.storage.uri = trace_uri
+        manifest.storage.uri = episode_uri
 
         try:
-            self._upload(trace_path, trace_uri)
+            self._upload(trace_path, episode_uri)
             manifest.storage.status = "written"
         except Exception as exc:
             manifest.storage.status = "failed"
             manifest.storage.error = f"{type(exc).__name__}: {exc}"
-            log.warning("S3 upload failed for %s: %s", manifest.experiment_run_id, exc)
+            log.warning("S3 upload failed for %s: %s", manifest.episode_id, exc)
 
         # Rewrite the local manifest so it carries the final upload status, then
         # mirror it. A manifest-upload failure must not fail the run either.
@@ -91,7 +91,7 @@ class S3TraceStore:
                 manifest.storage.error = f"{type(exc).__name__}: {exc}"
                 self.local.write_manifest(manifest, trace_path)
                 log.warning(
-                    "S3 manifest upload failed for %s: %s", manifest.experiment_run_id, exc
+                    "S3 manifest upload failed for %s: %s", manifest.episode_id, exc
                 )
         # Only hand back the remote URI if the object is actually there; a failed
         # upload must resolve to the local path, which is the surviving copy.
@@ -99,19 +99,19 @@ class S3TraceStore:
             return manifest.storage.uri or local_uri
         return local_uri
 
-    def get_trace(self, game_id: str) -> GameTraceBase | None:
-        local = self.local.get_trace(game_id)
+    def get_episode(self, episode_uid: str) -> EpisodeTrace | None:
+        local = self.local.get_episode(episode_uid)
         if local is not None or not self.bucket:
             return local
-        matches = self._ls_recursive(f"{game_id}.json")
+        matches = self._ls_recursive(f"{episode_uid}.json")
         if not matches:
             return None
         with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / f"{game_id}.json"
+            dest = Path(tmp) / f"{episode_uid}.json"
             self._download(matches[0], dest)
-            return GameTraceBase.model_validate_json(dest.read_text())
+            return EpisodeTrace.model_validate_json(dest.read_text())
 
-    def list_traces(
+    def list_episodes(
         self,
         filters: dict[str, Any] | None = None,
         limit: int = 50,
@@ -122,7 +122,7 @@ class S3TraceStore:
         The bucket is a mirror, not an index: scanning it per query would be slow
         and costly. Use the downloader scripts to hydrate local manifests first.
         """
-        return self.local.list_traces(filters, limit, cursor)
+        return self.local.list_episodes(filters, limit, cursor)
 
     # --- preflight ---
 
@@ -215,4 +215,4 @@ class S3TraceStore:
         ]
 
 
-register_store("s3", S3TraceStore)
+register_store("s3", S3EpisodeStore)

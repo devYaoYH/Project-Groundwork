@@ -1,9 +1,9 @@
 name: projects_study_theory_of_mind_009
 description: 'V2 cross-play study: targeted model pair, theory of mind intervention.'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: qwen-gpt5m_stable_fixed_tom_mc05
   count: 10
   config:

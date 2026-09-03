@@ -138,7 +138,7 @@ def analyze_trace(path: Path, model: str, *, series: str = "model") -> list[dict
                 "model": model,
                 "series": series,
                 "setting": setting,
-                "game_id": trace.get("game_id") or path.stem,
+                "episode_uid": trace.get("episode_uid") or path.stem,
                 "task_id": task_id(trace, path),
                 "trace_path": str(path),
                 "round": round_idx,
@@ -285,7 +285,7 @@ def plot(summary: list[dict], rows: list[dict], out: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--traces-root", default=str(default_traces_root()))
+    parser.add_argument("--episodes-root", default=str(default_traces_root()))
     parser.add_argument("--out", default="rq6_first_feasible_slot_acceptance")
     parser.add_argument("--include-baselines", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()

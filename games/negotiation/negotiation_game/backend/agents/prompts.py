@@ -15,11 +15,11 @@ GOAL_DEFAULT = "maximize your cumulative reward across all rounds"
 GOAL_JOINT = "maximize the JOINT (combined) reward of both parties across all rounds — cooperate to achieve the best possible outcome for everyone"
 
 # ---------------------------------------------------------------------------
-# System prompt: game rules + situation (project-based rewards)
+# System prompt: environment rules + situation (project-based rewards)
 # ---------------------------------------------------------------------------
 
 SYSTEM_RULES_PROJECTS = """\
-## Game Rules
+## Environment Rules
 - Resources available: {resource_types}
 - Resource supply per round: {resource_supply}
 - Resource costs: {resource_costs}
@@ -42,7 +42,7 @@ Submit a JSON object with your resource purchases AND project allocations:
 {decision_example}
 The "projects" field specifies how many times to run each project. If omitted, the engine assigns resources to projects automatically by prioritizing projects in the order presented to you.
 
-## Game Flow
+## Environment Flow
 {game_flow_info}
 At ANY point during the conversation, you may finalize your purchase.
 Once you submit a purchase, your decision is locked for that round — you cannot change it.
@@ -139,7 +139,7 @@ def _format_synergy(scenario_synergy: dict | None) -> str:
 
 
 def build_system_prompt(game_config_public: dict, agent_id: str, thinking_enabled: bool) -> str:
-    """Assemble the complete system prompt from game config."""
+    """Assemble the complete system prompt from environment config."""
     goal_text = GOAL_JOINT if game_config_public.get("maximize_joint") else GOAL_DEFAULT
     is_shifting = game_config_public.get("is_shifting", False)
 
@@ -455,7 +455,7 @@ def round_result_message(
 
 
 # ---------------------------------------------------------------------------
-# Post-game reflection prompt
+# Post-environment reflection prompt
 # ---------------------------------------------------------------------------
 
 
@@ -467,9 +467,9 @@ def reflection_prompt(
     visible_opponent_reward: bool = True,
     theoretical_joint_max: float | None = None,
 ) -> str:
-    """Build the post-game reflection prompt sent after all rounds complete.
+    """Build the post-environment reflection prompt sent after all rounds complete.
 
-    This leverages cached tokens from the full game conversation to efficiently
+    This leverages cached tokens from the full environment conversation to efficiently
     extract learnings that can improve performance in future games.
     """
     if visible_opponent_reward:
@@ -496,7 +496,7 @@ def reflection_prompt(
     return (
         f"--- GAME COMPLETE ({total_rounds} rounds) ---\n"
         f"{outcome}\n\n"
-        f"Reflect on the game and summarize key learnings that could help you "
+        f"Reflect on the environment and summarize key learnings that could help you "
         f"achieve better outcomes in future games. Consider:\n"
         f"- What strategies worked well or poorly?\n"
         f"- How effective was your communication and negotiation approach?\n"

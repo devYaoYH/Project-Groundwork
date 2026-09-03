@@ -12,7 +12,7 @@ import textwrap
 import pytest
 
 from a2a_engine.experiment import (
-    ExperimentSpec,
+    ExecutionPlan,
     expand_env,
     load_experiment,
     resolve_storage,
@@ -30,9 +30,9 @@ def write(tmp_path, name: str, body: str):
 BASE = textwrap.dedent("""
     name: demo
     defaults:
-      game_name: word_guess
+      environment_id: word_guess
       num_agents: 2
-    batches:
+    cells:
       - label: a
         config: {seed: 1}
 """)
@@ -42,8 +42,8 @@ BASE = textwrap.dedent("""
 
 
 def test_expands_set_variables(monkeypatch):
-    monkeypatch.setenv("MY_BUCKET", "lab-traces")
-    assert expand_env({"bucket": "${MY_BUCKET}"}) == {"bucket": "lab-traces"}
+    monkeypatch.setenv("MY_BUCKET", "lab-episodes")
+    assert expand_env({"bucket": "${MY_BUCKET}"}) == {"bucket": "lab-episodes"}
 
 
 def test_uses_fallback_when_unset(monkeypatch):
@@ -139,27 +139,27 @@ def test_bare_string_storage_is_shorthand_for_extends(tmp_path):
 
 
 def test_game_default_applies_when_experiment_is_silent():
-    spec = ExperimentSpec(name="d", defaults={"game_name": "calendar"})
+    spec = ExecutionPlan(name="d", defaults={"environment_id": "calendar"})
     resolved = resolve_storage(spec, game_default={"backend": "s3", "prefix": "cal"})
     assert resolved == {"backend": "s3", "prefix": "cal"}
 
 
 def test_switching_backend_drops_the_game_default_entirely():
     """A sqlite sink must not inherit calendar's S3 prefix."""
-    spec = ExperimentSpec(name="d", storage={"backend": "sqlite", "path": "./x.db"})
+    spec = ExecutionPlan(name="d", storage={"backend": "sqlite", "path": "./x.db"})
     resolved = resolve_storage(spec, game_default={"backend": "s3", "prefix": "cal"})
     assert resolved == {"backend": "sqlite", "path": "./x.db"}
     assert "prefix" not in resolved
 
 
 def test_same_backend_merges_with_the_game_default():
-    spec = ExperimentSpec(name="d", storage={"bucket": "mine"})
+    spec = ExecutionPlan(name="d", storage={"bucket": "mine"})
     resolved = resolve_storage(spec, game_default={"backend": "s3", "prefix": "cal"})
     assert resolved == {"backend": "s3", "prefix": "cal", "bucket": "mine"}
 
 
 def test_caller_overrides_beat_everything():
-    spec = ExperimentSpec(name="d", storage={"backend": "sqlite", "path": "./a.db"})
+    spec = ExecutionPlan(name="d", storage={"backend": "sqlite", "path": "./a.db"})
     resolved = resolve_storage(spec, overrides={"path": "./cli.db"})
     assert resolved["path"] == "./cli.db"
 
@@ -174,22 +174,22 @@ def test_env_expansion_runs_after_resolution(monkeypatch, tmp_path):
     assert resolve_storage(load_experiment(path))["path"] == "/tmp/from-env.db"
 
 
-# --- multi-game experiments -------------------------------------------------
+# --- multi-environment experiments -------------------------------------------------
 
 
-def test_game_names_collects_per_batch_overrides():
-    spec = ExperimentSpec(
+def test_environment_ids_collects_per_cell_overrides():
+    spec = ExecutionPlan(
         name="d",
-        defaults={"game_name": "word_guess"},
-        batches=[
+        defaults={"environment_id": "word_guess"},
+        cells=[
             {"label": "a", "config": {}},
-            {"label": "b", "config": {"game_name": "buyer_seller"}},
-            {"label": "c", "config": {"game_name": "buyer_seller"}},
+            {"label": "b", "config": {"environment_id": "buyer_seller"}},
+            {"label": "c", "config": {"environment_id": "buyer_seller"}},
         ],
     )
-    assert spec.game_names() == ["word_guess", "buyer_seller"]
+    assert spec.environment_ids() == ["word_guess", "buyer_seller"]
 
 
-def test_game_names_falls_back_to_defaults_with_no_batches():
-    spec = ExperimentSpec(name="d", defaults={"game_name": "calendar"})
-    assert spec.game_names() == ["calendar"]
+def test_environment_ids_falls_back_to_defaults_with_no_cells():
+    spec = ExecutionPlan(name="d", defaults={"environment_id": "calendar"})
+    assert spec.environment_ids() == ["calendar"]

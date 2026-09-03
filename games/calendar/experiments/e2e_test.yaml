@@ -1,6 +1,6 @@
 name: e2e_test
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 2
   num_slots: 16
   density: 0.5
@@ -13,7 +13,7 @@ defaults:
   agents:
     - {type: llm, model: gpt-5-mini}
     - {type: llm, model: gpt-5-mini}
-batches:
+cells:
   - label: two_meetings
     count: 1
     config: {seed: 42, density: 0.5}

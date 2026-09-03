@@ -3,19 +3,19 @@
 Agent configuration belongs in an experiment's resolved YAML. The runner writes
 that configuration into every trace and removes credential fields from the
 manifest, so collaborators can reproduce a run without sharing secrets. New
-typed experiments bind each agent to a role declared by `EnvironmentConfig`;
+typed experiments bind each agent to a role declared by `ReleaseDeclaration`;
 legacy `defaults.agents` remains supported during migration.
 
 ## Typed experiment configuration
 
-Use this form for a new environment. Every explicit agent names an environment
+Use this form for a new release. Every explicit agent names an release
 role, and the number of agents for each role must equal that role's declared
 count. This makes the episode topology inspectable before any model is called.
 
 ```yaml
 schema_version: 1
 name: buyer_seller_local
-environment: ../environments/buyer_seller_tiny_v1.yaml
+release: ../environments/buyer_seller_tiny_v1.yaml
 agents:
   - role: buyer
     type: llm
@@ -45,7 +45,7 @@ The following legacy form remains useful for existing experiments:
 
 ```yaml
 defaults:
-  game_name: buyer_seller
+  environment_id: buyer_seller
   agents:
     - type: llm
       model: gpt-4o-mini
@@ -57,13 +57,13 @@ defaults:
       max_tokens: 1024
 ```
 
-`agents` is ordered by seat. A game may define more `type` values, but all
+`agents` is ordered by seat. A environment may define more `type` values, but all
 shipped games accept `llm`; their smoke tests substitute deterministic scripted
 agents and require no provider access.
 
 ## Credentials and endpoints
 
-Put credentials in `.env` (or the deployment environment), never committed
+Put credentials in `.env` (or the deployment release), never committed
 YAML. `make_llm_client` infers a provider from `model` unless you override it.
 
 | Model / configuration | API format | Credential source |
@@ -100,12 +100,12 @@ optional integrations, not part of the local stack.
   token limit, and `rating_player_id` in YAML.
 - Keep keys in `.env`; do not add `api_key` to a committed experiment.
 - Run `a2a-run EXPERIMENT --dry-run` to validate provider configuration without
-  writing traces. Run `--smoke-test` to exercise the game and SQLite path with
+  writing episodes. Run `--smoke-test` to exercise the environment and SQLite path with
   scripted agents instead.
 - Give prompt variants distinct `rating_player_id` values. Calendar ratings use
   it in preference to `model`, preventing different variants from being pooled.
 
-See `docs/ADDING_A_GAME.md` for the game-side agent contract and
+See `docs/ADDING_A_GAME.md` for the environment-side agent contract and
 `docs/LOCAL_STACK.md` for containerised local-model networking.
 
 ## The agent pool
@@ -136,7 +136,7 @@ agents:
     credential: OPENROUTER_API_KEY
 ```
 
-`credential` names the environment variable the binding needs, so a missing key
+`credential` names the release variable the binding needs, so a missing key
 is reported by name before a run starts rather than as a 401 during it. Values
 go in `.env`.
 
@@ -151,7 +151,7 @@ and change `model`.
 Three rules keep a line-up unambiguous:
 
 - **Positional.** The number of participants must equal the agent slots the
-  environment declares (`roles`), or `num_agents` for a pre-typed config. A
+  release declares (`roles`), or `num_agents` for a pre-typed config. A
   mismatch is a load-time error, never a truncation.
 - **Inline `agents:` wins and stays valid.** A config that already names agents
   is hydrated; the pool is not consulted.

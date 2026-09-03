@@ -8,7 +8,7 @@ Two-stage pipeline:
 1. **Regex extraction** (fast, free) — extract candidate episodes where:
    - A message contains a named reference (project name, option label, plan)
    - A subsequent message from the other agent exists
-2. **LLM-as-judge** (batched, cached) — classify each episode as:
+2. **LLM-as-judge** (celled, cached) — classify each episode as:
    - `project_mismatch` — speaker describes project requirements differing from responder's info
    - `confusion` — responder expresses uncertainty about what the plan means
    - `blind_acceptance` — responder agrees without verifying concrete allocations
@@ -101,7 +101,7 @@ def _get_agent_last_messages(transcript: list[dict], agent_id: str) -> tuple[str
 # ---------------------------------------------------------------------------
 
 def _extract_candidates_in_round(
-    game_id: str,
+    episode_uid: str,
     round_number: int,
     transcript: list[dict],
     a_alloc: dict,
@@ -167,7 +167,7 @@ def _extract_candidates_in_round(
 
     # Create candidate with both agents' speech + thinking
     return [{
-        "game_id": game_id,
+        "episode_uid": episode_uid,
         "round_number": round_number,
         "first_agent": first_agent,
         "first_agent_model": first_model,
@@ -247,12 +247,12 @@ def _format_episode(candidate: dict, episode_id: int) -> str:
 """
 
 
-def _judge_episodes_batch(
+def _judge_episodes_cell(
     candidates: list[dict],
     start_idx: int,
     judge_model: str = "claude-3-haiku-20240307",
 ) -> dict[str, dict]:
-    """Send a batch of episodes to LLM judge and return judgments.
+    """Send a cell of episodes to LLM judge and return judgments.
 
     Returns:
         Dict mapping cache_key -> judgment dict
@@ -267,7 +267,7 @@ def _judge_episodes_batch(
 
     api_config = LLM_PROVIDERS[provider]
 
-    # Format batch of episodes
+    # Format cell of episodes
     episodes_text = "\n".join(
         _format_episode(c, start_idx + i)
         for i, c in enumerate(candidates)
@@ -337,13 +337,13 @@ def _judge_episodes_batch(
         return result
 
     except Exception as e:
-        print(f"WARNING: LLM judge failed for batch starting at {start_idx}: {e}")
+        print(f"WARNING: LLM judge failed for cell starting at {start_idx}: {e}")
         return {}
 
 
 def _make_cache_key(candidate: dict) -> str:
     """Create a unique cache key for a candidate episode."""
-    return f"{candidate['game_id']}_{candidate['round_number']}"
+    return f"{candidate['episode_uid']}_{candidate['round_number']}"
 
 
 def _load_cache() -> dict[str, dict]:
@@ -397,7 +397,7 @@ def extract_candidates(dataset: NegotiationDataset) -> list[dict]:
                 continue
 
             candidates = _extract_candidates_in_round(
-                game_id=g.game_id,
+                episode_uid=g.episode_uid,
                 round_number=r.round_number,
                 transcript=ct,
                 a_alloc=r.agent_a_resources,
@@ -418,16 +418,16 @@ def analyze_referential_binding(
     dataset: NegotiationDataset,
     use_llm_judge: bool = True,
     judge_model: str = "claude-3-haiku-20240307",
-    batch_size: int = 15,
+    cell_size: int = 15,
     use_cache: bool = True,
 ) -> dict:
     """Two-stage pipeline: extract candidates (regex) → classify (LLM judge).
 
     Args:
-        raw_games: List of game documents from cache
+        raw_games: List of environment documents from cache
         use_llm_judge: If False, return only candidates without LLM classification
         judge_model: Model to use for LLM-as-judge (default: claude-3-haiku-20240307)
-        batch_size: Number of episodes per LLM call (default: 15)
+        cell_size: Number of episodes per LLM call (default: 15)
         use_cache: If True, load cached judgments and skip re-judging (default: True)
 
     Returns:
@@ -473,11 +473,11 @@ def analyze_referential_binding(
     if uncached:
         print(f"  Judging {len(uncached)} new episodes ({len(candidates) - len(uncached)} from cache)...")
 
-        # Batch judge
-        for i in range(0, len(uncached), batch_size):
-            batch = uncached[i:i + batch_size]
-            print(f"    Batch {i // batch_size + 1}/{(len(uncached) + batch_size - 1) // batch_size} ({len(batch)} episodes)...")
-            judgments = _judge_episodes_batch(batch, i, judge_model)
+        # Cell judge
+        for i in range(0, len(uncached), cell_size):
+            cell = uncached[i:i + cell_size]
+            print(f"    Cell {i // cell_size + 1}/{(len(uncached) + cell_size - 1) // cell_size} ({len(cell)} episodes)...")
+            judgments = _judge_episodes_cell(cell, i, judge_model)
             cache.update(judgments)
 
         # Save updated cache
@@ -537,9 +537,9 @@ def _compute_summary(df: pd.DataFrame, dataset: NegotiationDataset, candidates: 
     n_failures = len(failures_df)
 
     summary["n_failures"] = n_failures
-    summary["n_unique_games_with_failures"] = failures_df["game_id"].nunique() if n_failures > 0 else 0
+    summary["n_unique_games_with_failures"] = failures_df["episode_uid"].nunique() if n_failures > 0 else 0
     summary["n_unique_rounds_with_failures"] = (
-        failures_df.groupby(["game_id", "round_number"]).ngroups if n_failures > 0 else 0
+        failures_df.groupby(["episode_uid", "round_number"]).ngroups if n_failures > 0 else 0
     )
 
     # By failure type
@@ -563,7 +563,7 @@ def _compute_summary(df: pd.DataFrame, dataset: NegotiationDataset, candidates: 
     summary["failure_rate"] = n_failures / n if n > 0 else 0
     summary["failures_per_round"] = n_failures / n_rounds_with_ct if n_rounds_with_ct else 0
     summary["games_with_failures_rate"] = (
-        failures_df["game_id"].nunique() / n_project_games if n_project_games and n_failures > 0 else 0
+        failures_df["episode_uid"].nunique() / n_project_games if n_project_games and n_failures > 0 else 0
     )
 
     return summary
@@ -620,7 +620,7 @@ def print_summary(results: dict, show_examples: bool = True) -> None:
     # List games with failures
     if s["n_failures"] > 0:
         failures_df = df[df["failure_type"] != "grounded"]
-        games_with_failures = failures_df.groupby("game_id").agg({
+        games_with_failures = failures_df.groupby("episode_uid").agg({
             "failure_type": ["count", lambda x: ", ".join(sorted(set(x)))],
         })
         games_with_failures.columns = ["n_failures", "failure_types"]
@@ -628,8 +628,8 @@ def print_summary(results: dict, show_examples: bool = True) -> None:
 
         print(f"\nGames with failures ({len(games_with_failures)} games):")
         print("=" * 70)
-        for game_id, row in games_with_failures.head(20).iterrows():
-            print(f"  {game_id}: {row['n_failures']} failure{'s' if row['n_failures'] > 1 else ''} ({row['failure_types']})")
+        for episode_uid, row in games_with_failures.head(20).iterrows():
+            print(f"  {episode_uid}: {row['n_failures']} failure{'s' if row['n_failures'] > 1 else ''} ({row['failure_types']})")
         if len(games_with_failures) > 20:
             print(f"  ... and {len(games_with_failures) - 20} more games")
 
@@ -644,7 +644,7 @@ def print_summary(results: dict, show_examples: bool = True) -> None:
                 continue
             print(f"\n--- {ftype.upper()} ({len(subset)} total) ---")
             for i, (_, row) in enumerate(subset.head(5).iterrows(), 1):
-                print(f"\n[{i}] Game {row['game_id']}, Round {row['round_number']} (confidence: {row.get('confidence', 0)}/5)")
+                print(f"\n[{i}] Environment {row['episode_uid']}, Round {row['round_number']} (confidence: {row.get('confidence', 0)}/5)")
                 print(f"    First agent ({row['first_agent']}, {row['first_agent_model']}):")
                 print(f"      Speech: \"{row['first_agent_speech'][:300]}{'...' if len(row['first_agent_speech']) > 300 else ''}\"")
                 if row.get('first_agent_thinking'):
@@ -667,7 +667,7 @@ def export_candidates_to_markdown(candidates: list[dict], output_path: Path) -> 
 
         for i, c in enumerate(candidates, 1):
             f.write(f"## Candidate {i}\n\n")
-            f.write(f"**Game:** `{c['game_id']}`  \n")
+            f.write(f"**Environment:** `{c['episode_uid']}`  \n")
             f.write(f"**Round:** {c['round_number']}  \n")
             f.write(f"**Mode:** {c.get('mode', 'N/A')} | **Goal:** {c.get('goal_type', 'N/A')}  \n")
             f.write(f"**Experiment Label:** {c.get('experiment_label', 'N/A')}  \n\n")
@@ -714,7 +714,7 @@ if __name__ == "__main__":
         help="Model to use for LLM-as-judge (default: claude-3-haiku-20240307)",
     )
     parser.add_argument(
-        "--batch-size",
+        "--cell-size",
         type=int,
         default=15,
         help="Number of episodes per LLM call (default: 15)",
@@ -732,7 +732,7 @@ if __name__ == "__main__":
         dataset,
         use_llm_judge=not args.candidates_only,
         judge_model=args.judge_model,
-        batch_size=args.batch_size,
+        cell_size=args.cell_size,
         use_cache=not args.no_cache,
     )
 

@@ -1,6 +1,6 @@
 """Aggregate benchmark-lite metrics by difficulty bucket.
 
-This script scans synced shared-traces benchmark-lite runs and groups traces by
+This script scans synced shared-episodes benchmark-lite runs and groups episodes by
 model, setting, and difficulty bucket (easy/medium/hard). It writes:
 
 * trace_metrics.csv: one row per trace
@@ -70,9 +70,9 @@ def _field_haystack(path: Path, trace: dict[str, Any]) -> str:
         str(value)
         for value in [
             path,
-            trace.get("game_id"),
+            trace.get("episode_uid"),
             config.get("experiment_name"),
-            config.get("experiment_run_id"),
+            config.get("episode_id"),
             config.get("task_id"),
             config.get("task_path"),
         ]
@@ -106,18 +106,18 @@ def _dm_events(trace: dict[str, Any]) -> list[dict[str, Any]]:
     return [event for event in trace.get("events", []) if event.get("type") == "dm_sent"]
 
 
-def _vps_by_game_id(run_dir: Path) -> dict[str, dict[str, dict[str, float]]]:
+def _vps_by_episode_uid(run_dir: Path) -> dict[str, dict[str, dict[str, float]]]:
     path = run_dir / "_reports" / "vps" / "game_summary.csv"
     if not path.exists():
         return {}
     out: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
     with path.open(newline="") as f:
         for row in csv.DictReader(f):
-            game_id = row.get("game_id")
+            episode_uid = row.get("episode_uid")
             mode = row.get("weight_mode")
-            if not game_id or not mode:
+            if not episode_uid or not mode:
                 continue
-            out[game_id][mode] = {
+            out[episode_uid][mode] = {
                 "vps_loss_mean": _float(row.get("vps_loss_mean")),
                 "vps_loss_per_weight": _float(row.get("vps_loss_per_weight")),
                 "participant_pair_vps_loss_mean": _float(row.get("participant_pair_vps_loss_mean")),
@@ -188,7 +188,7 @@ def collect_trace_rows(shared_traces: Path, models: dict[str, str]) -> list[dict
     rows: list[dict[str, Any]] = []
     for model, run_name in models.items():
         run_dir = shared_traces / run_name
-        vps = _vps_by_game_id(run_dir)
+        vps = _vps_by_episode_uid(run_dir)
         for path in _trace_files(run_dir):
             trace = _load_trace(path)
             if not _is_5a3p(trace):
@@ -198,7 +198,7 @@ def collect_trace_rows(shared_traces: Path, models: dict[str, str]) -> list[dict
             if setting not in SETTING_ORDER or difficulty not in DIFFICULTY_ORDER:
                 continue
             metrics = trace.get("metrics") or {}
-            game_id = str(trace.get("game_id") or path.stem)
+            episode_uid = str(trace.get("episode_uid") or path.stem)
             meetings = _float(metrics.get("meetings_scheduled"))
             total_dms = _float(metrics.get("total_dms_sent"))
             realized = _float(metrics.get("realized_cost"))
@@ -208,15 +208,15 @@ def collect_trace_rows(shared_traces: Path, models: dict[str, str]) -> list[dict
             failed_meetings = max(0.0, 5.0 - meetings) if not math.isnan(meetings) else math.nan
             full_coord = _float(metrics.get("coordination_rate")) >= 1.0
             costly_full_coordination = 1.0 if full_coord and not math.isnan(excess) and excess > 0 else 0.0
-            uniform_vps = vps.get(game_id, {}).get("uniform", {})
-            cost_vps = vps.get(game_id, {}).get("cost", {})
+            uniform_vps = vps.get(episode_uid, {}).get("uniform", {})
+            cost_vps = vps.get(episode_uid, {}).get("cost", {})
             rows.append(
                 {
                     "model": model,
                     "run": run_name,
                     "setting": setting,
                     "difficulty": difficulty,
-                    "game_id": game_id,
+                    "episode_uid": episode_uid,
                     "trace_path": str(path),
                     "headline_score": _float(metrics.get("headline_score")),
                     "headline_score_weighted": _float(metrics.get("headline_score_weighted")),
@@ -313,7 +313,7 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "model": model,
             "setting": setting,
             "difficulty": difficulty,
-            "trace_count": len(items),
+            "episode_count": len(items),
         }
         for metric in SUMMARY_METRICS:
             values = [_float(item.get(metric)) for item in items]
@@ -453,7 +453,7 @@ def write_report(
                 "model": row["model"],
                 "setting": row["setting"],
                 "difficulty": row["difficulty"],
-                "n": row["trace_count"],
+                "n": row["episode_count"],
                 "coord_%": 100 * row["coordination_rate_mean"],
                 "meetings": row["meetings_scheduled_mean"],
                 "excess_mean": row["excess_cost_mean"],
@@ -502,7 +502,7 @@ def write_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--shared-traces", default=str(_repo_root() / "shared-traces"))
+    parser.add_argument("--shared-episodes", default=str(_repo_root() / "shared-episodes"))
     parser.add_argument("--out-dir", default=str(_calendar_root() / "analysis" / "outputs" / "difficulty_bucket_metrics"))
     args = parser.parse_args()
 

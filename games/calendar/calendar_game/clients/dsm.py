@@ -16,7 +16,7 @@ Protocol per meeting:
   Initiator (lowest-id participant):
     turn 1  → send up to NUM_PROPOSALS untried free slots to all responders
     turn 2+ → collect score DMs; once all received, announce a fully-feasible
-              slot if one exists, otherwise try the next untried batch
+              slot if one exists, otherwise try the next untried cell
   Responders:
     turn 1  → wait for proposals DM
     turn 2  → score each proposed slot, DM scores back to initiator
@@ -688,7 +688,7 @@ class DSMClient(BaseClient):
         return _empty_turn()
 
     def _next_proposals(self) -> list[int]:
-        """Return the next untried batch of locally schedulable agreement ids."""
+        """Return the next untried cell of locally schedulable agreement ids."""
         candidates: list[int] = []
         plans: dict[int, dict] = {}
         for slot in _schedulable_slots(self._slot_items):
@@ -816,7 +816,7 @@ class DSMClient(BaseClient):
         return (satisfaction_loss, required_count, plan["slot"], plan_id)
 
     def _assess(self) -> int | None:
-        """Return a fully-feasible slot if the current batch has one."""
+        """Return a fully-feasible slot if the current cell has one."""
         # Aggregate scores across responders + initiator's own score
         agg: dict[int, int] = {}
         for plan_id in self._proposals:
@@ -1260,7 +1260,7 @@ class PrivateDSMClient(PaperDSMClient):
 
     This preset favors small proposal sets and low leakage over social-welfare
     exploration: high theta, low beta, Lmin=1, Lmax=2, and shallow displacement
-    search. Use PaperDSMClient directly for explicit knob sweeps.
+    search. Use PaperDSMClient directly for explicit knob studies.
     """
 
     def _lmin(self) -> int:

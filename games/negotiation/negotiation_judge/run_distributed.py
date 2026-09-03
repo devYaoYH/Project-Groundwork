@@ -1,7 +1,7 @@
 """Distributed Phase 1: judge games and write results to Firestore.
 
 Two people can run this concurrently with different shards and API keys.
-Resume is automatic — checks Firestore for already-judged game_ids.
+Resume is automatic — checks Firestore for already-judged episode_uids.
 
 Usage:
     # Person 1 (first half)
@@ -47,7 +47,7 @@ from negotiation_judge.extractor import extract_all_game_contexts
 from negotiation_judge.judge import judge_game, TokenBudgetExceeded
 from negotiation_judge.prompts import get_prompt_version, build_judge_user_prompt
 from negotiation_judge.schema import JudgeGameContext
-from negotiation_judge.storage import firestore_available, save_judgment, list_completed_game_ids
+from negotiation_judge.storage import firestore_available, save_judgment, list_completed_episode_uids
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,11 +60,11 @@ INTERVENTION_KEYWORDS = {"share", "tom", "named", "transp", "transparency", "joi
 
 
 def _has_intervention(ctx: JudgeGameContext, dataset: NegotiationDataset) -> bool:
-    game = next((g for g in dataset.games if g.game_id == ctx.game_id), None)
-    if game is None:
+    environment = next((g for g in dataset.games if g.episode_uid == ctx.episode_uid), None)
+    if environment is None:
         return False
-    label = game.label.lower()
-    cfg = game.config
+    label = environment.label.lower()
+    cfg = environment.config
     if cfg.get("share_projects", False) or cfg.get("think_about_opponent", False) or cfg.get("named_projects", False):
         return True
     return any(kw in label for kw in INTERVENTION_KEYWORDS)
@@ -85,15 +85,15 @@ def main():
     parser.add_argument("--models", nargs="+", default=None,
                         help="Only games where BOTH agents are in this list")
     parser.add_argument("--run-ids", nargs="+", default=None,
-                        help="Only include games whose experiment_run_id starts with one of these prefixes")
+                        help="Only include games whose episode_id starts with one of these prefixes")
     parser.add_argument("--exclude-interventions", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--max-parallelism", type=int, default=1,
                         help="Number of concurrent judge calls (default: 1 = sequential)")
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "judge" / "output",
-                        help="Local output directory (writes raw/<game_id>.json alongside Firestore)")
+                        help="Local output directory (writes raw/<episode_uid>.json alongside Firestore)")
     parser.add_argument("--cache", action="store_true", default=False,
-                        help="Load game traces from local cache instead of Firestore (faster startup)")
+                        help="Load environment episodes from local cache instead of Firestore (faster startup)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -120,7 +120,7 @@ def main():
     else:
         api_key = get_api_key_for_provider(provider_name)
     if not api_key and not args.dry_run:
-        log.error("No API key found for provider '%s'. Check your environment variables.", provider_name)
+        log.error("No API key found for provider '%s'. Check your release variables.", provider_name)
         sys.exit(1)
 
     # Verify prompts.py is clean and capture the git hash for provenance
@@ -151,10 +151,10 @@ def main():
     if args.run_ids:
         run_id_prefixes = args.run_ids
         before = len(contexts)
-        game_run_ids = {g.game_id: g.config.get("experiment_run_id", "") for g in dataset.games}
+        game_run_ids = {g.episode_uid: g.config.get("episode_id", "") for g in dataset.games}
         contexts = [
             c for c in contexts
-            if any(game_run_ids.get(c.game_id, "").startswith(rid) for rid in run_id_prefixes)
+            if any(game_run_ids.get(c.episode_uid, "").startswith(rid) for rid in run_id_prefixes)
         ]
         log.info("Run ID filter %s: %d -> %d games", run_id_prefixes, before, len(contexts))
 
@@ -163,8 +163,8 @@ def main():
         contexts = [c for c in contexts if not _has_intervention(c, dataset)]
         log.info("Intervention filter: %d -> %d games", before, len(contexts))
 
-    # Sort by game_id for deterministic sharding
-    contexts.sort(key=lambda c: c.game_id)
+    # Sort by episode_uid for deterministic sharding
+    contexts.sort(key=lambda c: c.episode_uid)
 
     # Apply shard
     if args.shard:
@@ -195,13 +195,13 @@ def main():
 
     if args.dry_run:
         for ctx in contexts:
-            log.info("  %s: %d rounds | %s vs %s | %s", ctx.game_id[:12], len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode)
+            log.info("  %s: %d rounds | %s vs %s | %s", ctx.episode_uid[:12], len(ctx.rounds), ctx.model_a, ctx.model_b, ctx.mode)
         log.info("Dry run complete. %d games would be judged.", len(contexts))
         return
 
     # Check Firestore for already-completed games (resume support)
-    # completed: {game_id: {prompt_version, ...}} — skip only if current prompt already judged
-    completed = list_completed_game_ids()
+    # completed: {episode_uid: {prompt_version, ...}} — skip only if current prompt already judged
+    completed = list_completed_episode_uids()
     already_judged = sum(1 for versions in completed.values() if prompt_version in versions)
     log.info("Found %d games in Firestore (%d already judged with prompt %s)",
              len(completed), already_judged, prompt_version)
@@ -219,8 +219,8 @@ def main():
     # Judge loop
     pending = [
         ctx for ctx in contexts
-        if prompt_version not in completed.get(ctx.game_id, set())
-        and ctx.game_id not in local_done
+        if prompt_version not in completed.get(ctx.episode_uid, set())
+        and ctx.episode_uid not in local_done
     ]
     skip_count = len(contexts) - len(pending)
     if skip_count:
@@ -228,7 +228,7 @@ def main():
 
     def judge_one(ctx):
         log.info("Judging %s (%d rounds, %s vs %s, %s mc=%s)...",
-                 ctx.game_id[:12], len(ctx.rounds),
+                 ctx.episode_uid[:12], len(ctx.rounds),
                  ctx.model_a, ctx.model_b, ctx.mode, ctx.mc_ratio)
         judgment = judge_game(
             ctx=ctx,
@@ -241,13 +241,13 @@ def main():
         )
         judgment_dict = judgment.model_dump()
         input_transcript = build_judge_user_prompt(ctx)
-        save_judgment(ctx.game_id, judgment_dict, judge_model=model, prompt_version=prompt_version,
+        save_judgment(ctx.episode_uid, judgment_dict, judge_model=model, prompt_version=prompt_version,
                       input_transcript=input_transcript)
-        local_path = output_dir / "raw" / f"{ctx.game_id}.json"
+        local_path = output_dir / "raw" / f"{ctx.episode_uid}.json"
         with open(local_path, "w") as f:
             json.dump(judgment_dict, f, indent=2)
         total_patterns = sum(len(r.patterns) for r in judgment.rounds)
-        log.info("  -> %s: %d rounds, %d patterns (saved)", ctx.game_id[:12], len(judgment.rounds), total_patterns)
+        log.info("  -> %s: %d rounds, %d patterns (saved)", ctx.episode_uid[:12], len(judgment.rounds), total_patterns)
         return judgment
 
     total_pending = len(pending)
@@ -267,7 +267,7 @@ def main():
         log.error(
             "FAILED %s [TOKEN BUDGET EXCEEDED — increase JUDGE_MAX_TOKENS]: %s" if isinstance(e, TokenBudgetExceeded)
             else "FAILED %s: %s",
-            ctx.game_id, e,
+            ctx.episode_uid, e,
         )
         log.info("Progress: %d/%d done, %d failed", done, total_pending, failed)
 
@@ -293,17 +293,17 @@ def main():
     print(f"Total in Firestore: {len(completed) + new_count}")
 
     if errors:
-        print(f"\nFailed traces requiring re-processing ({len(errors)}):")
+        print(f"\nFailed episodes requiring re-processing ({len(errors)}):")
         budget_exceeded = [(ctx, e) for ctx, e in errors if isinstance(e, TokenBudgetExceeded)]
         other_errors = [(ctx, e) for ctx, e in errors if not isinstance(e, TokenBudgetExceeded)]
         if budget_exceeded:
             print(f"  [TOKEN BUDGET EXCEEDED — increase JUDGE_MAX_TOKENS before retrying]")
             for ctx, e in budget_exceeded:
-                print(f"    {ctx.game_id}  ({ctx.model_a} vs {ctx.model_b}, {len(ctx.rounds)} rounds)")
+                print(f"    {ctx.episode_uid}  ({ctx.model_a} vs {ctx.model_b}, {len(ctx.rounds)} rounds)")
         if other_errors:
             print(f"  [Other errors]")
             for ctx, e in other_errors:
-                print(f"    {ctx.game_id}  {type(e).__name__}: {e}")
+                print(f"    {ctx.episode_uid}  {type(e).__name__}: {e}")
 
     print(f"{'='*60}")
 

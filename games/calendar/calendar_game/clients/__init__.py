@@ -1,4 +1,4 @@
-"""Client implementations for the calendar game."""
+"""Client implementations for the calendar environment."""
 
 from calendar_game.clients.scripted import ScriptedClient
 from calendar_game.clients.llm import LLMClient

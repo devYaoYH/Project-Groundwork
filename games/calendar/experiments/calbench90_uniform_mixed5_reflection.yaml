@@ -2,7 +2,7 @@ name: calbench90_uniform_mixed5_reflection
 description: Mixed five-model CalBench 90 uniform run with per-agent ADC routing and round-level
   reflection measurement.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   task_path: tasks/calbench_90_uniform.jsonl
   num_agents: 5
   num_slots: 16
@@ -54,7 +54,7 @@ defaults:
     vertex_adc_file: ${A2A_VERTEX_ANTHROPIC_ADC_FILE}
     temperature: 0.0
     max_tokens: 1024
-batches:
+cells:
 - label: b001_easy_5a_3p_d0p6_c1_1
   count: 1
   config:

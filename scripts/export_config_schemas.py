@@ -12,23 +12,23 @@ import argparse
 import json
 from pathlib import Path
 
-from a2a_engine.environment import EnvironmentConfig, ExperimentConfig
+from a2a_engine.environment import ReleaseDeclaration, ExperimentConfig
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export EnvironmentConfig and ExperimentConfig JSON Schemas."
+        description="Export ReleaseDeclaration and ExperimentConfig JSON Schemas."
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("schemas"),
-        help="directory for environment-config.v1.json and experiment-config.v1.json",
+        help="directory for release-config.v1.json and experiment-config.v1.json",
     )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for filename, model in (
-        ("environment-config.v1.json", EnvironmentConfig),
+        ("release-config.v1.json", ReleaseDeclaration),
         ("experiment-config.v1.json", ExperimentConfig),
     ):
         path = args.output_dir / filename

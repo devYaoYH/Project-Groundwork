@@ -1,7 +1,7 @@
 name: uniform_full_dsm
 description: DSM agents on all uniform_full calendar benchmark tasks.
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_slots: 16
   max_turns_per_round: 15
   dm_cap: 1000000
@@ -13,7 +13,7 @@ defaults:
   dsm_displacement_targets: 4
   dsm_exhaustive_search: true
   dsm_stop_on_perfect: true
-batches:
+cells:
 - label: b001_easy_2a_2p_d0p6_c1_1
   count: 1
   config:

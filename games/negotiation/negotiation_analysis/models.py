@@ -1,4 +1,4 @@
-"""Consolidated data models and metrics for negotiation game analysis.
+"""Consolidated data models and metrics for negotiation environment analysis.
 
 This module provides a structured representation layer that sits between 
 raw Firestore JSON documents and research scripts. It handles normalization, 
@@ -25,8 +25,8 @@ BUDGET = 15.0
 
 
 class NegotiationEvent(BaseModel):
-    """An atomic event in the game log."""
-    game_id: str
+    """An atomic event in the environment log."""
+    episode_uid: str
     round_number: int
     turn_number: int
     speaker: str  # "agent_a", "agent_b", "system"
@@ -49,8 +49,8 @@ class NegotiationEvent(BaseModel):
 class NegotiationTurn:
     """A collection of events emitted by one agent during a single turn."""
 
-    def __init__(self, game_id: str, round_number: int, turn_number: int, speaker: str):
-        self.game_id = game_id
+    def __init__(self, episode_uid: str, round_number: int, turn_number: int, speaker: str):
+        self.episode_uid = episode_uid
         self.round_number = round_number
         self.turn_number = turn_number
         self.speaker = speaker
@@ -90,8 +90,8 @@ class NegotiationTurn:
 class NegotiationRound:
     """Encapsulates data and metrics for a single round of negotiation."""
 
-    def __init__(self, game: 'NegotiationGame', data: Dict[str, Any]):
-        self.game = game
+    def __init__(self, environment: 'NegotiationGame', data: Dict[str, Any]):
+        self.environment = environment
         self.data = data
         self.round_number = data["round_number"]
         self._turns: Optional[List[NegotiationTurn]] = None
@@ -104,8 +104,8 @@ class NegotiationRound:
             return self._events
 
         round_events = []
-        # Reconstruct from game-level events
-        for event in self.game.all_events:
+        # Reconstruct from environment-level events
+        for event in self.environment.all_events:
             etype = event.get("type")
             edata = event.get("data", {})
             if edata.get("round") != self.round_number and edata.get("round_number") != self.round_number:
@@ -116,7 +116,7 @@ class NegotiationRound:
             content = edata.get("content") or edata.get("message") or ""
 
             round_events.append(NegotiationEvent(
-                game_id=self.game.game_id,
+                episode_uid=self.environment.episode_uid,
                 round_number=self.round_number,
                 turn_number=turn_num,
                 speaker=speaker,
@@ -129,7 +129,7 @@ class NegotiationRound:
         if not round_events and "cheap_talk_transcript" in self.data:
             for t in self.data["cheap_talk_transcript"]:
                 round_events.append(NegotiationEvent(
-                    game_id=self.game.game_id,
+                    episode_uid=self.environment.episode_uid,
                     round_number=self.round_number,
                     turn_number=t.get("turn", 0),
                     speaker=t["speaker"],
@@ -160,7 +160,7 @@ class NegotiationRound:
         # _is_decision_turn() correctly flags that turn's speech for suppression.
         last_real_turn: Dict[str, int] = {}
         early_decision_turn: Dict[str, int] = {}  # speaker -> corrected turn number
-        for raw_event in self.game.all_events:
+        for raw_event in self.environment.all_events:
             edata = raw_event.get("data", {})
             if edata.get("round") != self.round_number and edata.get("round_number") != self.round_number:
                 continue
@@ -179,7 +179,7 @@ class NegotiationRound:
                 turn_num = early_decision_turn[e.speaker]
             key = (turn_num, e.speaker)
             if key not in turn_map:
-                turn_map[key] = NegotiationTurn(e.game_id, e.round_number, turn_num, e.speaker)
+                turn_map[key] = NegotiationTurn(e.episode_uid, e.round_number, turn_num, e.speaker)
             turn_map[key].add_event(e)
 
         self._turns = sorted(turn_map.values(), key=lambda x: (float('inf') if x.turn_number == -1 else x.turn_number, x.speaker))
@@ -286,12 +286,12 @@ class NegotiationRound:
 
     @property
     def oracle_stats(self) -> Optional[Dict[str, Any]]:
-        prs = self.game.result.get("per_round_scenarios")
+        prs = self.environment.result.get("per_round_scenarios")
         idx = self.round_number - 1
         if prs and idx < len(prs):
             oracle = prs[idx].get("oracle_stats")
             if oracle: return oracle
-        return self.game.oracle_stats
+        return self.environment.oracle_stats
 
     @property
     def collab_max(self) -> float:
@@ -336,17 +336,17 @@ class NegotiationRound:
 
 
 class NegotiationGame:
-    """Encapsulates a full negotiation game trace from Firestore.
+    """Encapsulates a full negotiation environment trace from Firestore.
     
     This is the definitive parser for the Firestore document schema.
     """
 
     def __init__(self, raw_trace: Dict[str, Any]):
         self.raw = raw_trace
-        self.game_id = raw_trace.get("game_id", "")
+        self.episode_uid = raw_trace.get("episode_uid", "")
         self.schema_version = raw_trace.get("schema_version", 1)
 
-        # Support both raw Firestore traces (game_config/result) and
+        # Support both raw Firestore episodes (game_config/result) and
         # converted dicts from _trace_to_game() where fields are at top level.
         is_raw = "game_config" in raw_trace
         if is_raw:
@@ -384,7 +384,7 @@ class NegotiationGame:
                 json_bytes = gzip.decompress(compressed_bytes)
                 self._all_events = json.loads(json_bytes.decode('utf-8'))
             except Exception as e:
-                log.error(f"Failed to decompress events for {self.game_id}: {e}")
+                log.error(f"Failed to decompress events for {self.episode_uid}: {e}")
                 self._all_events = []
         # Priority 2: events (V1/V2 schema)
         elif "events" in self.raw:
@@ -479,7 +479,7 @@ class NegotiationGame:
 
     @property
     def is_baseline(self) -> bool:
-        """True if the game was run without multi-turn interaction (no-talk baseline)."""
+        """True if the environment was run without multi-turn interaction (no-talk baseline)."""
         return not self.config.get("enable_cheap_talk", True)
 
     @property
@@ -558,15 +558,15 @@ class NegotiationDataset:
         self.games = games
 
     @classmethod
-    def from_traces(cls, traces: List[Dict[str, Any]]) -> 'NegotiationDataset':
-        return cls([NegotiationGame(t) for t in traces])
+    def from_traces(cls, episodes: List[Dict[str, Any]]) -> 'NegotiationDataset':
+        return cls([NegotiationGame(t) for t in episodes])
 
     def to_round_df(self) -> pd.DataFrame:
         rows = []
         for g in self.games:
             for r in g.rounds:
                 rows.append({
-                    "game_id": g.game_id,
+                    "episode_uid": g.episode_uid,
                     "experiment_label": g.label,
                     "model_a": g.model_a,
                     "model_b": g.model_b,
@@ -610,9 +610,9 @@ class NegotiationDataset:
                 })
         df = pd.DataFrame(rows)
 
-        # --- Lag columns: compare each round to the previous within the same game ---
+        # --- Lag columns: compare each round to the previous within the same environment ---
         # Sort so shift is in round order
-        df = df.sort_values(["game_id", "round_number"]).reset_index(drop=True)
+        df = df.sort_values(["episode_uid", "round_number"]).reset_index(drop=True)
 
         def _alloc_key(row):
             """Canonical string for the combined joint allocation of both agents."""
@@ -624,14 +624,14 @@ class NegotiationDataset:
             return str(sorted(combined.items()))
 
         alloc_keys = df.apply(_alloc_key, axis=1)
-        prev_alloc_keys = alloc_keys.groupby(df["game_id"]).shift(1)
+        prev_alloc_keys = alloc_keys.groupby(df["episode_uid"]).shift(1)
         # Use nullable boolean so first-round rows are pd.NA, not False
         df["alloc_same_as_prev"] = pd.array(
             np.where(prev_alloc_keys.isna(), pd.NA, alloc_keys == prev_alloc_keys),
             dtype="boolean",
         )
 
-        prev_joint_reward = df.groupby("game_id")["joint_reward"].shift(1)
+        prev_joint_reward = df.groupby("episode_uid")["joint_reward"].shift(1)
         df["joint_reward_improved"] = pd.array(
             np.where(prev_joint_reward.isna(), pd.NA, df["joint_reward"] > prev_joint_reward),
             dtype="boolean",
@@ -670,7 +670,7 @@ class NegotiationDataset:
                 joint = r.joint_reward
 
                 shared = {
-                    "game_id": g.game_id,
+                    "episode_uid": g.episode_uid,
                     "experiment_label": g.label,
                     "round_number": r.round_number,
                     "pair": g.pair_name,
@@ -724,7 +724,7 @@ class NegotiationDataset:
         rows = []
         for g in self.games:
             rows.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "model_a": g.model_a,
                 "model_b": g.model_b,
                 "pair": g.pair_name,
@@ -757,7 +757,7 @@ class NegotiationDataset:
                     if speech_only and e.type != "speech":
                         continue
                     rows.append({
-                        "game_id": g.game_id,
+                        "episode_uid": g.episode_uid,
                         "experiment_label": g.label,
                         "model_a": g.model_a,
                         "model_b": g.model_b,

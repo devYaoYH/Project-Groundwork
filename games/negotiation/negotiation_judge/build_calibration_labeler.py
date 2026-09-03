@@ -133,7 +133,7 @@ function esc(s) {{
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }}
 
-function keyFor(item) {{ return item.game_id + ':' + item.round_number; }}
+function keyFor(item) {{ return item.episode_uid + ':' + item.round_number; }}
 
 function entryFor(item) {{
   const key = keyFor(item);
@@ -250,7 +250,7 @@ function render() {{
     </div>
     <div class="layout">
       <section class="panel">
-        <h1>${{esc(item.game_id)}} · Round ${{esc(item.round_number)}}</h1>
+        <h1>${{esc(item.episode_uid)}} · Round ${{esc(item.round_number)}}</h1>
         <div class="meta">
           <span class="tag ${{outcomeClass(rnd.round_outcome)}}">${{esc(rnd.round_outcome)}}</span>
           <span class="tag">eff ${{((rnd.joint_efficiency || 0) * 100).toFixed(1)}}%</span>
@@ -354,7 +354,7 @@ function wideRows() {{
   return ROUNDS.map(item => {{
     const e = labels[keyFor(item)] || {{checked: {{}}, aux: {{}}, notes: '', submitted: false}};
     const row = [
-      item.game_id,
+      item.episode_uid,
       item.round_number,
       item.round.round_outcome || '',
       item.round.joint_efficiency ?? '',
@@ -382,19 +382,19 @@ function download(filename, text) {{
 
 function downloadWide() {{
   const auxHeader = AUX_IDS.flatMap(id => [id, id + '_agent_a', id + '_agent_b']);
-  const header = ['game_id', 'round_number', 'round_outcome', 'joint_efficiency', 'human_submitted', 'human_notes', ...LABEL_IDS, ...auxHeader];
+  const header = ['episode_uid', 'round_number', 'round_outcome', 'joint_efficiency', 'human_submitted', 'human_notes', ...LABEL_IDS, ...auxHeader];
   const csv = [header, ...wideRows()].map(row => row.map(csvEscape).join(',')).join('\\n');
   download('human_taxonomy_labels_v3_calibration.csv', csv);
 }}
 
 function downloadLong() {{
-  const rows = [['game_id', 'round_number', 'item_id', 'item_type', 'answer', 'agent_a', 'agent_b', 'notes']];
+  const rows = [['episode_uid', 'round_number', 'item_id', 'item_type', 'answer', 'agent_a', 'agent_b', 'notes']];
   ROUNDS.forEach(item => {{
     const e = labels[keyFor(item)] || {{checked: {{}}, aux: {{}}, notes: ''}};
-    LABEL_IDS.forEach(id => rows.push([item.game_id, item.round_number, id, 'core_label', e.checked && e.checked[id] ? 'yes' : 'no', '', '', e.notes || '']));
+    LABEL_IDS.forEach(id => rows.push([item.episode_uid, item.round_number, id, 'core_label', e.checked && e.checked[id] ? 'yes' : 'no', '', '', e.notes || '']));
     AUX_IDS.forEach(id => {{
       const aux = e.aux?.[id] || {{present: false, agent_a: false, agent_b: false}};
-      rows.push([item.game_id, item.round_number, id, 'auxiliary_tag', aux.present ? 'yes' : 'no', aux.agent_a ? 'yes' : 'no', aux.agent_b ? 'yes' : 'no', e.notes || '']);
+      rows.push([item.episode_uid, item.round_number, id, 'auxiliary_tag', aux.present ? 'yes' : 'no', aux.agent_a ? 'yes' : 'no', aux.agent_b ? 'yes' : 'no', e.notes || '']);
     }});
   }});
   download('human_taxonomy_labels_v3_calibration_long.csv', rows.map(row => row.map(csvEscape).join(',')).join('\\n'));

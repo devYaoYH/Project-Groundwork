@@ -172,7 +172,7 @@ def test_initiator_prefers_fully_feasible_slot():
     assert client._agreed_slot == 1
 
 
-def test_initiator_tries_next_batch_when_no_fully_feasible_slot():
+def test_initiator_tries_next_cell_when_no_fully_feasible_slot():
     client = DSMClient()
     client.register(0, _make_config(0, num_slots=6))
     meeting = _make_meeting(participants=[0, 1, 2])
@@ -639,7 +639,7 @@ def test_paper_dsm_theta_and_beta_tune_offer_size():
     assert len(welfare_payload["slots"]) > len(private_payload["slots"])
 
 
-def test_paper_dsm_stops_when_current_batch_has_feasible_agreement():
+def test_paper_dsm_stops_when_current_cell_has_feasible_agreement():
     client = PaperDSMClient()
     client.register(0, _make_config(
         0,

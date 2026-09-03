@@ -1,4 +1,4 @@
-"""RunManifest — the reproducibility contract for a single game run.
+"""EpisodeManifest — the reproducibility contract for a single environment run.
 
 Previously this was an ad-hoc dict built inline in ``expt_runner.run_experiment``.
 Promoting it to a schema makes the rule enforceable:
@@ -90,7 +90,7 @@ def git_hash(cwd: str | Path | None = None) -> str | None:
     return result.stdout.strip() or None
 
 
-class AgentManifest(BaseModel):
+class ParticipantManifest(BaseModel):
     """Per-agent record of what actually drove the model."""
 
     model_config = ConfigDict(extra="allow")
@@ -113,7 +113,7 @@ class StorageManifest(BaseModel):
     error: str | None = None
 
 
-class RunManifest(BaseModel):
+class EpisodeManifest(BaseModel):
     """Everything needed to identify, locate, and reproduce one run."""
 
     model_config = ConfigDict(extra="allow")
@@ -122,11 +122,11 @@ class RunManifest(BaseModel):
 
     # --- identity ---
     experiment_name: str
-    experiment_run_id: str
-    batch_label: str
-    run_idx: int
-    game_name: str
-    game_id: str
+    episode_id: str
+    cell_id: str
+    episode_idx: int
+    environment_id: str
+    episode_uid: str
 
     # --- provenance ---
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -143,13 +143,13 @@ class RunManifest(BaseModel):
     dataset_sha256: str | None = None
     task_id: str | None = None
     prompt_variant_id: str | None = None
-    environment_id: str | None = None
-    environment_revision: str | None = None
-    environment_content_sha256: str | None = None
+    release_id: str | None = None
+    release_version: str | None = None
+    release_content_sha256: str | None = None
 
     # --- agents ---
     num_agents: int | None = None
-    agents: list[AgentManifest] = Field(default_factory=list)
+    agents: list[ParticipantManifest] = Field(default_factory=list)
 
     # --- storage ---
     local_trace_path: str | None = None
@@ -162,29 +162,29 @@ class RunManifest(BaseModel):
         *,
         config: dict[str, Any],
         experiment_name: str,
-        batch_label: str,
-        run_idx: int,
-        game_id: str,
+        cell_id: str,
+        episode_idx: int,
+        episode_uid: str,
         game_package: str | None = None,
         repo_root: str | Path | None = None,
-    ) -> RunManifest:
+    ) -> EpisodeManifest:
         """Build a manifest from a resolved run config.
 
         ``dataset_path`` is resolved relative to the process cwd, matching how
         games themselves open ``task_path``.
         """
         agents = [
-            AgentManifest(**_agent_fields(spec)) for spec in config.get("agents", [])
+            ParticipantManifest(**_agent_fields(spec)) for spec in config.get("agents", [])
         ]
         dataset_path = config.get("task_path") or config.get("dataset_path")
-        environment = config.get("environment") if isinstance(config.get("environment"), dict) else {}
+        release = config.get("release") if isinstance(config.get("release"), dict) else {}
         return cls(
             experiment_name=experiment_name,
-            experiment_run_id=str(config.get("experiment_run_id") or ""),
-            batch_label=batch_label,
-            run_idx=run_idx,
-            game_name=str(config.get("game_name") or ""),
-            game_id=game_id,
+            episode_id=str(config.get("episode_id") or ""),
+            cell_id=cell_id,
+            episode_idx=episode_idx,
+            environment_id=str(config.get("environment_id") or ""),
+            episode_uid=episode_uid,
             git_hash=config.get("git_hash") or git_hash(repo_root),
             a2a_engine_version=package_version("a2a-engine"),
             game_package_version=package_version(game_package) if game_package else None,
@@ -196,9 +196,9 @@ class RunManifest(BaseModel):
             dataset_sha256=file_sha256(dataset_path) if dataset_path else None,
             task_id=config.get("task_id"),
             prompt_variant_id=config.get("prompt_variant") or config.get("prompt_variant_id"),
-            environment_id=environment.get("id"),
-            environment_revision=environment.get("revision"),
-            environment_content_sha256=environment.get("content_sha256"),
+            release_id=release.get("id"),
+            release_version=release.get("release"),
+            release_content_sha256=release.get("content_sha256"),
             num_agents=config.get("num_agents"),
             agents=agents,
         )

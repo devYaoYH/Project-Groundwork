@@ -1,4 +1,4 @@
-"""Calendar scheduling game for a2a-engine."""
+"""Calendar scheduling environment for a2a-engine."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import random
 import uuid
 from pathlib import Path
 
-from a2a_engine import EventLog, GameConfigBase, GameTraceBase, register_game
+from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from pydantic import Field
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
@@ -36,7 +36,8 @@ from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeti
 from calendar_game.observability import InstrumentedCalendarClient
 from calendar_game.ratings import CalendarRatingAdapter
 from calendar_game.trace_contract import build_calendar_rating_context
-from calendar_game.calendar import Calendar, apply_batch, validate_batch
+from calendar_game.declaration import DECLARATION
+from calendar_game.calendar import Calendar, apply_cell, validate_cell
 from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible, find_fallback_slot
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import cost_by_agent_for_assignments, solve_greedy, solve_optimal
@@ -48,10 +49,10 @@ from a2a_engine.llm.factory import make_llm_client
 # ---------------------------------------------------------------------------
 
 
-class CalendarGameConfig(GameConfigBase):
+class CalendarGameConfig(EpisodeConfigBase):
     """Config for the calendar scheduling benchmark."""
 
-    game_name: str = "calendar"
+    environment_id: str = "calendar"
     num_agents: int = 2
     num_slots: int = 16
     density: float = 0.5
@@ -353,12 +354,31 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 
 
 class CalendarGame:
-    """Calendar scheduling benchmark game."""
+    """Calendar scheduling benchmark environment."""
 
     def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False) -> None:
         self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
+
+    def _participant_id_for_agent(self, agent_id: int) -> str:
+        """Use the same seat-to-identity mapping the pinned roster records."""
+        if agent_id < len(self.config.agents):
+            entry = self.config.agents[agent_id]
+            spec = entry.model_dump() if hasattr(entry, "model_dump") else dict(entry)
+            return str(spec.get("name") or spec.get("id") or f"participant_{agent_id}")
+        return f"participant_{agent_id}"
+
+    def _append_event(self, event_type: str, *, data: dict) -> None:
+        """Emit Calendar data with stable participant and chat aliases."""
+        payload = dict(data)
+        agent_id = payload.get("agent_id")
+        if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
+            payload.setdefault("participant_id", self._participant_id_for_agent(agent_id))
+            if event_type.endswith("_sent"):
+                payload.setdefault("speaker", payload["participant_id"])
+                payload.setdefault("text", payload.get("content", ""))
+        self.events.append(event_type, data=payload)
 
     @staticmethod
     def _meeting_participants(scenario: dict) -> dict[int, list[int]]:
@@ -486,7 +506,7 @@ class CalendarGame:
         tool: object,
         reason: str,
     ) -> None:
-        self.events.append("invalid_tool_call", data={
+        self._append_event("invalid_tool_call", data={
             "round": round_num,
             "turn": turn,
             "phase": phase,
@@ -547,7 +567,7 @@ class CalendarGame:
         """Filter raw decision tool calls down to applicable actions.
 
         Dropped calls are recorded as ``invalid_tool_call`` events. The filtering
-        itself is unchanged — a dropped call is still dropped, so game behavior
+        itself is unchanged — a dropped call is still dropped, so environment behavior
         and historical results are unaffected — but without the event a model
         that emitted ``{"type": "schedule"}`` with no ``meeting_id`` was
         indistinguishable in the trace from one that emitted nothing at all.
@@ -576,7 +596,7 @@ class CalendarGame:
                 reason = f"unsupported decision tool type {tool.get('type')!r}"
 
             if reason is not None:
-                self.events.append("invalid_tool_call", data={
+                self._append_event("invalid_tool_call", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id, "attempt": attempt,
                     "tool_call": tool, "reason": reason,
@@ -710,7 +730,7 @@ class CalendarGame:
         ]
 
     def generate_scenario(self) -> dict:
-        """Generate a scenario from this game's config. Can be inspected or modified before run_with_scenario()."""
+        """Generate a scenario from this environment's config. Can be inspected or modified before run_with_scenario()."""
         if self.config.task_path:
             return self._load_task_scenario()
 
@@ -798,10 +818,10 @@ class CalendarGame:
 
         raise ValueError(f"task_id {self.config.task_id!r} not found in {task_path}")
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         return self.run_with_scenario(self.generate_scenario())
 
-    def run_with_scenario(self, scenario: dict) -> GameTraceBase:
+    def run_with_scenario(self, scenario: dict) -> EpisodeTrace:
         return asyncio.run(self._run_async(scenario))
 
     def _build_agents(self, scenario: dict) -> list[Agent]:
@@ -837,7 +857,7 @@ class CalendarGame:
                     client = LLMClient(make_llm_client(cfg))
             # Calendar's long-standing BaseClient protocol remains the domain
             # seam.  The adapter adds lifecycle spans around it rather than
-            # changing client behavior or making the game depend on one agent
+            # changing client behavior or making the environment depend on one agent
             # implementation style.
             agent = Agent(InstrumentedCalendarClient(client, agent_id=agent_id))
             cal = Calendar(num_slots=self.config.num_slots)
@@ -907,14 +927,14 @@ class CalendarGame:
                     self.config.num_slots,
                     round_num=round_num,
                 )
-                self.events.append("reflection_start", data={
+                self._append_event("reflection_start", data={
                     "round": event_round,
                     "turn": 0,
                     "phase": "REFLECTION",
                     "agent_id": agent_id,
                     "target_agent_id": target_agent_id,
                     "num_slots": self.config.num_slots,
-                    "reflection_scope": "game" if round_num is None else "round",
+                    "reflection_scope": "environment" if round_num is None else "round",
                     "prompt_sent": prompt_sent,
                 })
                 task = asyncio.create_task(call_reflection(agent_id, target_agent_id))
@@ -932,20 +952,20 @@ class CalendarGame:
                     {
                         "agent_id": agent_id,
                         "round": event_round,
-                        "reflection_scope": "game" if round_num is None else "round",
+                        "reflection_scope": "environment" if round_num is None else "round",
                         **estimate,
                     }
                     for estimate in result.estimates
                 ]
                 reflection_estimates.extend(estimates)
-                self.events.append("reflection_end", data={
+                self._append_event("reflection_end", data={
                     "round": event_round,
                     "turn": 0,
                     "phase": "REFLECTION",
                     "agent_id": agent_id,
                     "target_agent_id": target_agent_id,
                     "num_slots": self.config.num_slots,
-                    "reflection_scope": "game" if round_num is None else "round",
+                    "reflection_scope": "environment" if round_num is None else "round",
                     "estimates": estimates,
                     "text": result.text,
                     "usage": result.usage.__dict__ if result.usage else None,
@@ -958,7 +978,7 @@ class CalendarGame:
                         "agent_id": agent_id,
                         "target_agent_id": target_agent_id,
                         "round": event_round,
-                        "reflection_scope": "game" if round_num is None else "round",
+                        "reflection_scope": "environment" if round_num is None else "round",
                         "slot": slot,
                         "estimate_state": None,
                         "probability_free": None,
@@ -968,14 +988,14 @@ class CalendarGame:
                     }
                     for slot in range(self.config.num_slots)
                 ]
-                self.events.append("reflection_end", data={
+                self._append_event("reflection_end", data={
                     "round": event_round,
                     "turn": 0,
                     "phase": "REFLECTION",
                     "agent_id": agent_id,
                     "target_agent_id": target_agent_id,
                     "num_slots": self.config.num_slots,
-                    "reflection_scope": "game" if round_num is None else "round",
+                    "reflection_scope": "environment" if round_num is None else "round",
                     "estimates": estimates,
                     "text": None,
                     "usage": None,
@@ -984,11 +1004,11 @@ class CalendarGame:
                 })
         return reflection_estimates, client_call_counts
 
-    def _run_with_agents(self, agents: list[Agent], scenario: dict) -> GameTraceBase:
-        """Run the full game loop with a pre-built agent list. Exposed for testing."""
+    def _run_with_agents(self, agents: list[Agent], scenario: dict) -> EpisodeTrace:
+        """Run the full environment loop with a pre-built agent list. Exposed for testing."""
         return asyncio.run(self._run_async(scenario, agents=agents))
 
-    async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> GameTraceBase:
+    async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> EpisodeTrace:
         self._ensure_speaker_orders(scenario)
         optimal = (
             scenario.get("optimal")
@@ -1014,7 +1034,7 @@ class CalendarGame:
         representation_elo_by_agent = self._representation_elo_by_agent(initial_calendar_densities)
 
         # 3. game_start event — emitted before agent registration so it is always first
-        self.events.append("game_start", data={
+        self._append_event("game_start", data={
             "round": -1, "turn": -1, "phase": "GAME_START", "agent_id": None,
             "scenario_seed": self.config.seed,
             "num_agents": self.config.num_agents,
@@ -1073,7 +1093,7 @@ class CalendarGame:
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
                 dataclasses.asdict(game_config)
             )
-            self.events.append("agent_registered", data={
+            self._append_event("agent_registered", data={
                 "round": -1, "turn": -1, "phase": "GAME_START", "agent_id": agent_id,
                 "is_nosy_agent": agent_id in nosy_agent_ids,
                 "nosy_agent_ids": nosy_agent_ids,
@@ -1085,7 +1105,7 @@ class CalendarGame:
                 "calendar_render": agent.calendar.render(),
             })
 
-        # 5. Per-game accumulators
+        # 5. Per-environment accumulators
         displacement_cost: dict[int, int] = {i: 0 for i in range(self.config.num_agents)}
         fallback_displacement_cost: dict[int, int] = {i: 0 for i in range(self.config.num_agents)}
         total_client_calls: dict[int, int] = {i: 0 for i in range(self.config.num_agents)}
@@ -1110,7 +1130,7 @@ class CalendarGame:
         round_outcomes: list[dict] = []
         reflection_estimates: list[dict] = []
         reflection_frequency = str(self.config.reflection_frequency or "round").casefold()
-        if reflection_frequency not in {"round", "game"}:
+        if reflection_frequency not in {"round", "environment"}:
             reflection_frequency = "round"
         registered_meetings: dict[int, dict] = {
             int(meeting["id"]): meeting
@@ -1201,7 +1221,7 @@ class CalendarGame:
                 total_dms_sent += 1
                 total_dm_chars += dm_chars
                 max_dm_chars = max(max_dm_chars, dm_chars)
-                self.events.append("dm_sent", data={
+                self._append_event("dm_sent", data={
                     "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                     "agent_id": agent_id,
                     "from_agent": agent_id, "to_agent": to,
@@ -1254,7 +1274,7 @@ class CalendarGame:
                     total_all_groupchat_messages_sent += 1
                     total_all_groupchat_chars += msg_chars
                     max_all_groupchat_chars = max(max_all_groupchat_chars, msg_chars)
-                self.events.append(event_type, data={
+                self._append_event(event_type, data={
                     "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                     "agent_id": agent_id,
                     "from_agent": agent_id,
@@ -1274,7 +1294,7 @@ class CalendarGame:
                 if agent.inbox_queue:
                     dropped_messages = list(agent.inbox_queue)
                     agent.inbox_queue.clear()
-                    self.events.append("inbox_cleared", data={
+                    self._append_event("inbox_cleared", data={
                         "round": round_num, "turn": 0, "phase": "ROUND_START",
                         "agent_id": agent_id,
                         "reason": "discard_unread_messages_from_previous_round",
@@ -1282,7 +1302,7 @@ class CalendarGame:
                     })
 
             speaker_order = self._speaker_order(meeting)
-            self.events.append("round_start", data={
+            self._append_event("round_start", data={
                 "round": round_num, "turn": 0, "phase": "CHEAP_TALK", "agent_id": None,
                 "meeting": meeting,
                 "speaker_order": speaker_order,
@@ -1335,7 +1355,7 @@ class CalendarGame:
                             communication_protocol=communication_protocol,
                         )
                     )
-                    self.events.append("turn_start", data={
+                    self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id,
                         "inbox_drained": inbox_snapshot,
@@ -1345,7 +1365,7 @@ class CalendarGame:
                     result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
                     round_turn_agent_ids.add(agent_id)
                     total_client_calls[agent_id] += 1
-                    self.events.append("turn_end", data={
+                    self._append_event("turn_end", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id,
                         "tool_calls": result.tool_calls,
@@ -1393,7 +1413,7 @@ class CalendarGame:
                         self.config.max_turns_per_round,
                         communication_protocol=communication_protocol,
                     )
-                    self.events.append("turn_start", data={
+                    self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id,
                         "inbox_drained": inbox_snapshot,
@@ -1403,7 +1423,7 @@ class CalendarGame:
                     result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
                     round_turn_agent_ids.add(agent_id)
                     total_client_calls[agent_id] += 1
-                    self.events.append("turn_end", data={
+                    self._append_event("turn_end", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
                         "agent_id": agent_id,
                         "tool_calls": result.tool_calls,
@@ -1436,7 +1456,7 @@ class CalendarGame:
                 calendar_render = agents[agent_id].calendar.render()
                 prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                self.events.append("decide_start", data={
+                self._append_event("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                     "agent_id": agent_id,
                     "calendar_render": prompt_calendar_render,
@@ -1444,7 +1464,7 @@ class CalendarGame:
                 })
                 result = agents[agent_id].voluntary_decide(meeting)
                 total_client_calls[agent_id] += 1
-                self.events.append("decide_end", data={
+                self._append_event("decide_end", data={
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                     "agent_id": agent_id,
                     "tool_calls": result.tool_calls, "text": result.text,
@@ -1464,15 +1484,15 @@ class CalendarGame:
                         phase="VOLUNTARY",
                         attempt=attempt,
                     ))
-                    ok, conflict = validate_batch(agents[agent_id].calendar, actions, require_schedule=False)
+                    ok, conflict = validate_cell(agents[agent_id].calendar, actions, require_schedule=False)
                     if ok:
                         for action in actions:
                             from_slot = int(action["from_slot"])
                             item = agents[agent_id].calendar.get(from_slot)
                             if isinstance(item, dict) and "cost" in item:
                                 displacement_cost[agent_id] += int(item["cost"])
-                        apply_batch(agents[agent_id].calendar, actions)
-                        self.events.append("batch_applied", data={
+                        apply_cell(agents[agent_id].calendar, actions)
+                        self._append_event("cell_applied", data={
                             "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                             "agent_id": agent_id,
                             "actions": actions,
@@ -1480,7 +1500,7 @@ class CalendarGame:
                         })
                         break
                     else:
-                        self.events.append("batch_rejected", data={
+                        self._append_event("cell_rejected", data={
                             "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                             "agent_id": agent_id,
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
@@ -1504,7 +1524,7 @@ class CalendarGame:
                 prompt_snapshot_render = self._prompt_calendar_for_agent(agent, snapshot_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
                 decision_prompt = build_decision_message(prompt_meeting, prompt_snapshot_render)
-                self.events.append("decide_start", data={
+                self._append_event("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id,
                     "calendar_snapshot_render": prompt_snapshot_render,
@@ -1512,7 +1532,7 @@ class CalendarGame:
                 })
                 result = agents[agent_id].decide(meeting)
                 total_client_calls[agent_id] += 1
-                self.events.append("decide_end", data={
+                self._append_event("decide_end", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id,
                     "tool_calls": result.tool_calls, "text": result.text,
@@ -1522,8 +1542,8 @@ class CalendarGame:
                     "retry_count": result.retry_count, "status": "pending",
                 })
 
-                # validate and apply batch with retries
-                # Inject meeting cost into schedule actions so apply_batch can store it
+                # validate and apply cell with retries
+                # Inject meeting cost into schedule actions so apply_cell can store it
                 actions = self._decision_actions(
                     result.tool_calls, meeting,
                     round_num=round_num, turn_index=turn_index,
@@ -1537,7 +1557,7 @@ class CalendarGame:
                         phase="DECISION",
                         attempt=attempt,
                     ))
-                    ok, conflict = validate_batch(agents[agent_id].calendar, actions)
+                    ok, conflict = validate_cell(agents[agent_id].calendar, actions)
                     if ok:
                         staged_calendar = agents[agent_id].calendar.snapshot()
                         pending_displacement_cost = 0
@@ -1547,7 +1567,7 @@ class CalendarGame:
                                 item = agents[agent_id].calendar.get(from_slot)
                                 if isinstance(item, dict) and "cost" in item:
                                     pending_displacement_cost += int(item["cost"])
-                        apply_batch(staged_calendar, actions)
+                        apply_cell(staged_calendar, actions)
                         staged_decisions[agent_id] = (
                             staged_calendar,
                             actions,
@@ -1555,7 +1575,7 @@ class CalendarGame:
                         )
                         break
                     else:
-                        self.events.append("batch_rejected", data={
+                        self._append_event("cell_rejected", data={
                             "round": round_num, "turn": turn_index, "phase": "DECISION",
                             "agent_id": agent_id,
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
@@ -1569,7 +1589,7 @@ class CalendarGame:
                                 agent_id=agent_id, attempt=attempt + 1,
                             )
                         else:
-                            self.events.append("decision_failed", data={
+                            self._append_event("decision_failed", data={
                                 "round": round_num, "turn": turn_index, "phase": "DECISION",
                                 "agent_id": agent_id,
                                 "attempts_exhausted": self.config.decision_retries + 1,
@@ -1587,7 +1607,7 @@ class CalendarGame:
                     agents[agent_id].calendar.slots = staged_calendar.slots
                     agents[agent_id].calendar.meeting_participants = staged_calendar.meeting_participants
                     displacement_cost[agent_id] += pending_displacement_cost
-                    self.events.append("batch_applied", data={
+                    self._append_event("cell_applied", data={
                         "round": round_num, "turn": turn_index, "phase": "DECISION",
                         "agent_id": agent_id,
                         "actions": actions,
@@ -1600,7 +1620,7 @@ class CalendarGame:
                     else "another participant failed decision validation"
                 )
                 for agent_id, (_staged_calendar, actions, _pending_cost) in staged_decisions.items():
-                    self.events.append("batch_rolled_back", data={
+                    self._append_event("cell_rolled_back", data={
                         "round": round_num, "turn": turn_index, "phase": "DECISION",
                         "agent_id": agent_id,
                         "actions": actions,
@@ -1662,7 +1682,7 @@ class CalendarGame:
                 if len(slot_set) > 1 or None in slot_set:
                     consistency_violated_ids.add(reg_mid)
                     for pid, s in agent_reg_slots.items():
-                        self.events.append("consistency_violation", data={
+                        self._append_event("consistency_violation", data={
                             "round": round_num, "turn": turn_index, "phase": "RESOLUTION",
                             "agent_id": pid,
                             "meeting_id": reg_mid,
@@ -1694,7 +1714,7 @@ class CalendarGame:
             if coordinated:
                 meeting_registry[meeting["id"]] = slots_chosen[0]
 
-            self.events.append("resolution", data={
+            self._append_event("resolution", data={
                 "round": round_num, "turn": turn_index, "phase": "RESOLUTION",
                 "agent_id": None,
                 "meeting_id": meeting["id"],
@@ -1707,7 +1727,7 @@ class CalendarGame:
 
             # --- FALLBACK PHASE ---
             if not coordinated and not blocked_slot_violations and self.config.enable_fallback and not self.dry_run:
-                self.events.append("fallback_start", data={
+                self._append_event("fallback_start", data={
                     "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                     "agent_id": None,
                     "meeting_id": meeting["id"],
@@ -1759,7 +1779,7 @@ class CalendarGame:
                     meeting_registry[meeting["id"]] = chosen_slot
                     coordinated = True
                     per_agent_slot = {str(pid): chosen_slot for pid in meeting["participants"]}
-                    self.events.append("fallback_applied", data={
+                    self._append_event("fallback_applied", data={
                         "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                         "agent_id": None,
                         "meeting_id": meeting["id"],
@@ -1773,7 +1793,7 @@ class CalendarGame:
                         },
                     })
                 except FallbackDepthExceeded as exc:
-                    self.events.append("fallback_error", data={
+                    self._append_event("fallback_error", data={
                         "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                         "agent_id": None,
                         "meeting_id": meeting["id"],
@@ -1782,7 +1802,7 @@ class CalendarGame:
                         "detail": str(exc),
                     })
                 except FallbackImpossible as exc:
-                    self.events.append("fallback_error", data={
+                    self._append_event("fallback_error", data={
                         "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                         "agent_id": None,
                         "meeting_id": meeting["id"],
@@ -1811,7 +1831,7 @@ class CalendarGame:
                 for agent_id, count in reflection_call_counts.items():
                     total_client_calls[agent_id] += count
 
-        if reflection_frequency == "game":
+        if reflection_frequency == "environment":
             game_reflections, reflection_call_counts = await self._run_reflection_measurement(
                 agents=agents,
                 all_agent_ids=all_agent_ids,
@@ -2130,13 +2150,13 @@ class CalendarGame:
         }
         metrics.update(compute_headline_scores(metrics, self.config))
 
-        self.events.append("game_end", data={
+        self._append_event("game_end", data={
             "round": len(scenario["meetings"]), "turn": 0, "phase": "GAME_END", "agent_id": None,
             **metrics,
         })
 
-        return GameTraceBase(
-            game_id=str(uuid.uuid4()),
+        return EpisodeTrace(
+            episode_uid=str(uuid.uuid4()),
             config=self.config,
             events=self.events.all(),
             final_state={
@@ -2173,10 +2193,11 @@ class CalendarGame:
         )
 
 
-register_game(
+register_environment(
     "calendar",
     CalendarGame,
+    declaration=DECLARATION,
     storage={"backend": "sqlite"},
-    package="calendar-game",
+    package="calendar-environment",
     rating_adapter=CalendarRatingAdapter(),
 )

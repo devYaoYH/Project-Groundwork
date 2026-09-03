@@ -1,10 +1,10 @@
 """PROPOSAL — not yet wired in. The shared core vocabulary for a2a-comm.
 
-Design in one sentence: `metrics` stays a free-form per-game bag, and everything
-that must be comparable moves into a typed, validated `core` field that a game
+Design in one sentence: `metrics` stays a free-form per-environment bag, and everything
+that must be comparable moves into a typed, validated `core` field that a environment
 physically cannot get wrong.
 
-Scope: exactly one `CoreMetrics` per `GameTraceBase`, i.e. per run. The run is
+Scope: exactly one `CoreMetrics` per `EpisodeTrace`, i.e. per run. The run is
 the unit of everything downstream — one leaderboard row, one judgment, one
 rating event, one row in `to_core_df()`. Per-round detail stays in
 `metrics`/`final_state`.
@@ -19,7 +19,7 @@ The polarity law, which is the whole point:
 
 That law exists because `efficiency` currently means "joint surplus over
 first-best" in buyer-seller (higher better) and "turns consumed over budget" in
-word-guess (higher WORSE). A cross-game groupby on it returns a number that
+word-guess (higher WORSE). A cross-environment groupby on it returns a number that
 looks fine and means nothing.
 """
 
@@ -39,9 +39,9 @@ _SCORE_TOLERANCE = 1e-6
 class AgentOutcome(BaseModel):
     """Per-agent result within one run.
 
-    WHY FIRST-CLASS: this is the join key between per-game analytics ("which
+    WHY FIRST-CLASS: this is the join key between per-environment analytics ("which
     agent did what"), OpenSkill ratings (`player_id` + `score` + `rank`), and
-    the eventual cross-game leaderboard. Deriving it later from free-form
+    the eventual cross-environment leaderboard. Deriving it later from free-form
     metrics would mean re-deriving it three times, differently.
 
     WHY NOT PARALLEL LISTS: calendar currently stores ~20 per-agent quantities
@@ -58,7 +58,7 @@ class AgentOutcome(BaseModel):
         description=(
             "Engine-level index, 0..num_agents-1. WHEN: always. WHY: the stable "
             "key the engine, viewer and event stream all use to refer to this "
-            "agent. HOW: the same index the game passes to its own observation "
+            "agent. HOW: the same index the environment passes to its own observation "
             "builders — it must match `config.agents[agent_id]`."
         )
     )
@@ -67,13 +67,13 @@ class AgentOutcome(BaseModel):
         default=None,
         description=(
             "Semantic role, e.g. 'seller', 'guesser', 'agent_a'. WHEN: whenever "
-            "the game gives agents distinct, named jobs — which is most of them. "
+            "the environment gives agents distinct, named jobs — which is most of them. "
             "WHY: games disagree on what an agent is. Calendar has interchangeable "
             "indexed agents; buyer-seller and word-guess have asymmetric roles "
             "where 'mean score across agents' is meaningless but 'mean score by "
-            "role' is the actual result. Role is what a per-game analyst groups "
+            "role' is the actual result. Role is what a per-environment analyst groups "
             "by; agent_id is what the engine joins on. HOW: a short stable "
-            "lowercase string, identical across every run of the game."
+            "lowercase string, identical across every run of the environment."
         ),
     )
 
@@ -95,7 +95,7 @@ class AgentOutcome(BaseModel):
         description=(
             "This agent's contribution to the outcome, [0,1] higher better. "
             "WHEN: always. WHY: the per-agent analogue of `CoreMetrics.score`, "
-            "and the quantity OpenSkill consumes. HOW: game-defined, but it must "
+            "and the quantity OpenSkill consumes. HOW: environment-defined, but it must "
             "be comparable across agents WITHIN a run — that is what makes "
             "ranking meaningful. It need NOT be comparable across games. For "
             "symmetric games this is usually the agent's share of the joint "
@@ -110,9 +110,9 @@ class AgentOutcome(BaseModel):
         default=None,
         description=(
             "1-based finishing position within this run; ties share a rank. "
-            "WHEN: set it whenever the game has a defensible ordering. WHY: "
+            "WHEN: set it whenever the environment has a defensible ordering. WHY: "
             "OpenSkill updates on ORDERING, not magnitudes, so an explicit rank "
-            "lets a game state the ordering it means rather than having the "
+            "lets a environment state the ordering it means rather than having the "
             "rating layer infer it by sorting `score` — which would silently "
             "invent an order for genuinely tied or non-comparable agents. HOW: "
             "leave None for cooperative games where all agents share one outcome "
@@ -144,11 +144,11 @@ class AgentOutcome(BaseModel):
 
 
 class CoreMetrics(BaseModel):
-    """Run-level outcome, in a vocabulary shared by every game.
+    """Run-level outcome, in a vocabulary shared by every environment.
 
-    Everything here is either (a) required for reproducible per-game analytics,
-    or (b) required to compare/aggregate runs. Anything game-specific belongs in
-    `GameTraceBase.metrics`, which stays free-form and unbounded — calendar's
+    Everything here is either (a) required for reproducible per-environment analytics,
+    or (b) required to compare/aggregate runs. Anything environment-specific belongs in
+    `EpisodeTrace.metrics`, which stays free-form and unbounded — calendar's
     100+ metrics do not move and nothing is taken away.
     """
 
@@ -170,14 +170,14 @@ class CoreMetrics(BaseModel):
 
     success: bool = Field(
         description=(
-            "Did the run achieve the game's stated objective. WHEN: always. "
+            "Did the run achieve the environment's stated objective. WHEN: always. "
             "WHY: the single unambiguous filter every analyst reaches for first, "
             "and the thing 'won'/'agreement'/'coordination_rate' currently say "
-            "in four incompatible ways. HOW: GAME-DEFINED, and the game must say "
+            "in four incompatible ways. HOW: GAME-DEFINED, and the environment must say "
             "what it means in `terminated_reason` — do NOT define it as "
             "`success_gate == 1.0`. Calendar scheduling 2 of 3 meetings is a "
             "partial success worth 0.67 whose bool-ness is a judgement only the "
-            "game can make."
+            "environment can make."
         )
     )
 
@@ -200,9 +200,9 @@ class CoreMetrics(BaseModel):
             "WHEN: always. WHY: 'score = 0' has many causes — deadline, protocol "
             "violation, API failure, agent forfeit — and they demand completely "
             "different follow-up. Without this, failure analysis starts by "
-            "re-reading raw event logs. It is also where a game documents what "
+            "re-reading raw event logs. It is also where a environment documents what "
             "`success` means for it. HOW: a short stable snake_case token from a "
-            "small vocabulary the game defines and holds fixed across runs; "
+            "small vocabulary the environment defines and holds fixed across runs; "
             "prose belongs in `metrics`."
         )
     )
@@ -214,9 +214,9 @@ class CoreMetrics(BaseModel):
         description=(
             "Headline result: `success_gate * score_ungated`. [0,1] higher "
             "better. WHEN: always. WHY: the one number a leaderboard, a "
-            "regression or a sanity check can use without knowing the game. HOW: "
+            "regression or a sanity check can use without knowing the environment. HOW: "
             "never compute it independently — it is a derived quantity, and the "
-            "validator below enforces consistency with the parts, so a game "
+            "validator below enforces consistency with the parts, so a environment "
             "cannot report a headline that disagrees with its own components."
         )
     )
@@ -248,7 +248,7 @@ class CoreMetrics(BaseModel):
             "are stored, changing the weighting never requires re-running. HOW: "
             "clip to [0,1] and INVERT anything cost-like, so 'communication "
             "cost' becomes a 'communication efficiency' component. Names are "
-            "game-defined but must be stable across runs. Calendar's "
+            "environment-defined but must be stable across runs. Calendar's "
             "cost/privacy/efficiency triple is the reference."
         ),
     )
@@ -280,7 +280,7 @@ class CoreMetrics(BaseModel):
             "is set and by `total_comm + meetings_scheduled` when it is not — "
             "same component name, completely different denominators, chosen by "
             "whether config happened to set a field. Averaging across a mixed "
-            "batch without this produces a confident, meaningless number. HOW: a "
+            "cell without this produces a confident, meaningless number. HOW: a "
             "short stable token naming the branch taken; make it a groupby key in "
             "any analysis that aggregates that component."
         ),
@@ -293,7 +293,7 @@ class CoreMetrics(BaseModel):
         description=(
             "Rounds/turns actually consumed. WHEN: always. WHY: time-to-outcome "
             "is a first-order result in every one of these games, and it is the "
-            "denominator-free companion to the deadline. HOW: count the game's "
+            "denominator-free companion to the deadline. HOW: count the environment's "
             "own natural round unit, not LLM calls."
         )
     )
@@ -301,7 +301,7 @@ class CoreMetrics(BaseModel):
     rounds_budget: int | None = Field(
         default=None,
         description=(
-            "Maximum rounds allowed. WHEN: whenever the game has a deadline. "
+            "Maximum rounds allowed. WHEN: whenever the environment has a deadline. "
             "WHY: `rounds_used` alone is uninterpretable across configs — 8 "
             "rounds is fast under a 20 budget and at the wire under 8, and only "
             "the pair distinguishes 'converged quickly' from 'ran out of time'. "
@@ -317,7 +317,7 @@ class CoreMetrics(BaseModel):
         description=(
             "Messages exchanged in the run. WHEN: always. WHY: this framework's "
             "subject IS agent-to-agent communication, so volume is a result, not "
-            "instrumentation. It is also the one quantity every game here "
+            "instrumentation. It is also the one quantity every environment here "
             "genuinely shares. HOW: count events carrying {speaker, text} — the "
             "same definition `to_messages_df()` uses, so the number always "
             "reconciles with the transcript. Calendar currently has ~8 different "
@@ -371,7 +371,7 @@ class CoreMetrics(BaseModel):
     def _score_is_consistent_with_its_parts(self) -> "CoreMetrics":
         """The headline must equal what its own parts imply.
 
-        This is the validator that earns the whole design. A game can no longer
+        This is the validator that earns the whole design. A environment can no longer
         report a headline that disagrees with the components it published —
         which is otherwise an easy and completely invisible bug, since both
         numbers look plausible in isolation.
@@ -404,7 +404,7 @@ class CoreMetrics(BaseModel):
     def _communication_totals_reconcile(self) -> "CoreMetrics":
         """Run totals must equal the sum over agents, when agents report any.
 
-        Catches the classic mismatch where a game counts broadcasts once at the
+        Catches the classic mismatch where a environment counts broadcasts once at the
         run level and once per recipient at the agent level.
         """
         if not self.agents:
@@ -438,9 +438,9 @@ class Invocation(BaseModel):
 
     mode: Literal["live", "dry_run", "smoke_test", "replay"] = Field(
         description=(
-            "WHEN: always, set by the runner not the game. WHY: a scripted-agent "
+            "WHEN: always, set by the runner not the environment. WHY: a scripted-agent "
             "trace and a live-model trace are otherwise indistinguishable in the "
-            "corpus, and `--smoke-test` persists real traces. HOW: the runner "
+            "corpus, and `--smoke-test` persists real episodes. HOW: the runner "
             "derives it; games must not override it."
         )
     )

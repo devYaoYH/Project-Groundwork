@@ -5,7 +5,7 @@ reschedule/fallback actions. Optimal per-round cost is reconstructed by
 replaying the task fixture's global oracle assignment. The plotted quantity is
 mean cumulative realized cost minus cumulative oracle replay cost at each
 meeting index. Prefix values can still be negative because the oracle is global,
-but final values are standard full-game excess costs.
+but final values are standard full-environment excess costs.
 
 Usage:
     cd games/calendar
@@ -95,7 +95,7 @@ def analyze_trace(path: Path, model: str, tasks: dict[str, dict]) -> list[dict]:
             {
                 "model": model,
                 "setting": setting,
-                "game_id": trace.get("game_id") or path.stem,
+                "episode_uid": trace.get("episode_uid") or path.stem,
                 "task_id": tid,
                 "trace_path": str(path),
                 "meeting_index": meeting_index,
@@ -134,7 +134,7 @@ def summarize(rows: list[dict]) -> list[dict]:
                 "model": model,
                 "setting": setting,
                 "meeting_index": meeting_index,
-                "traces": len(group),
+                "episodes": len(group),
                 "mean_cumulative_excess_cost": mean(vals),
                 "median_cumulative_excess_cost": sorted(vals)[len(vals) // 2] if vals else math.nan,
             }
@@ -175,7 +175,7 @@ def plot(summary: list[dict], rows_for_order: list[dict], out: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--traces-root", default=str(default_traces_root()))
+    parser.add_argument("--episodes-root", default=str(default_traces_root()))
     parser.add_argument("--out", default="rq9_cumulative_excess_cost_by_meeting_index")
     args = parser.parse_args()
 

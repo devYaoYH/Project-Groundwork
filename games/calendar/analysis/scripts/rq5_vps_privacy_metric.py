@@ -1,7 +1,7 @@
-"""RQ5: post-hoc VPS-style constraint privacy leakage for calendar traces.
+"""RQ5: post-hoc VPS-style constraint privacy leakage for calendar episodes.
 
 This script implements an offline, auditable adaptation of the Valuation of
-Possible States (VPS) privacy metric for calendar scheduling traces.
+Possible States (VPS) privacy metric for calendar scheduling episodes.
 
 Private state:
     Whether each slot/agreement is locally feasible for a target agent.
@@ -20,7 +20,7 @@ Blocked slots:
     stops, so learning about one is treated as maximally sensitive calendar
     state rather than as a low-cost movable errand.
 
-This is not an online mechanism component. It replays already-run traces and
+This is not an online mechanism component. It replays already-run episodes and
 scores leakage from messages that were visible in the trace.
 """
 
@@ -334,7 +334,7 @@ def _language_evidence(
 
     Each tuple is (target, slot, evidence, strength, source). DSM and IMAP JSON
     messages are handled separately. This parser is deterministic by design:
-    it targets the slot-indexed phrasing used by the calendar game rather than
+    it targets the slot-indexed phrasing used by the calendar environment rather than
     broad real-world temporal expressions.
     """
     text = content.casefold()
@@ -374,7 +374,7 @@ def _language_evidence(
         if negative.search(clause):
             evidence, strength, source = 0.20, 0.55, "language_negative_slot_hint"
         elif occupied.search(clause):
-            # Occupied slots are not impossible in this game, but they reveal a
+            # Occupied slots are not impossible in this environment, but they reveal a
             # need to move something and therefore reduce feasibility belief.
             evidence, strength, source = 0.35, 0.45, "language_occupied_slot_hint"
         elif positive.search(clause):
@@ -435,7 +435,7 @@ def _rows_for_trace(
     language_hint_strength_override: float | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     trace = _load_json(trace_path)
-    game_id = str(trace.get("game_id") or trace_path.stem)
+    episode_uid = str(trace.get("episode_uid") or trace_path.stem)
     num_agents = _num_agents(trace)
     calendar_by_round_agent = _calendar_by_round_agent(trace)
     participants_by_round = _participants_by_round(trace)
@@ -476,7 +476,7 @@ def _rows_for_trace(
         after = state.posterior[slot] if 0 <= slot < len(state.posterior) else None
         evidence_rows.append({
             "trace_path": str(trace_path),
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "event_index": event_index,
             "round": round_idx,
             "target_agent": target,
@@ -725,7 +725,7 @@ def _rows_for_trace(
         participants = participants_by_round.get(round_idx, set())
         pair_rows.append({
             "trace_path": str(trace_path),
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "round": round_idx,
             "target_agent": target,
             "observer_agent": observer,
@@ -750,11 +750,11 @@ def _game_rows(pair_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_game: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in pair_rows:
         by_game.setdefault(
-            (row["trace_path"], row["game_id"], str(row.get("weight_mode") or "")),
+            (row["trace_path"], row["episode_uid"], str(row.get("weight_mode") or "")),
             [],
         ).append(row)
     rows: list[dict[str, Any]] = []
-    for (trace_path, game_id, weight_mode), game_pair_rows in sorted(by_game.items()):
+    for (trace_path, episode_uid, weight_mode), game_pair_rows in sorted(by_game.items()):
         total = sum(float(row["vps_loss"]) for row in game_pair_rows)
         weight_sum = sum(float(row.get("weight_sum") or 0.0) for row in game_pair_rows)
         participant_rows = [
@@ -768,7 +768,7 @@ def _game_rows(pair_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         participant_weight_sum = sum(float(row.get("weight_sum") or 0.0) for row in participant_rows)
         rows.append({
             "trace_path": trace_path,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "weight_mode": weight_mode,
             "pair_round_count": len(game_pair_rows),
             "vps_loss_total": total,
@@ -788,13 +788,13 @@ def _game_rows(pair_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _target_game_rows(pair_rows: list[dict[str, Any]], *, vps_floor: float) -> list[dict[str, Any]]:
+def _target_environment_rows(pair_rows: list[dict[str, Any]], *, vps_floor: float) -> list[dict[str, Any]]:
     by_target: dict[tuple[str, str, str, int], list[dict[str, Any]]] = {}
     for row in pair_rows:
         by_target.setdefault(
             (
                 row["trace_path"],
-                row["game_id"],
+                row["episode_uid"],
                 str(row.get("weight_mode") or ""),
                 int(row["target_agent"]),
             ),
@@ -802,7 +802,7 @@ def _target_game_rows(pair_rows: list[dict[str, Any]], *, vps_floor: float) -> l
         ).append(row)
 
     rows: list[dict[str, Any]] = []
-    for (trace_path, game_id, weight_mode, target_agent), target_rows in sorted(by_target.items()):
+    for (trace_path, episode_uid, weight_mode, target_agent), target_rows in sorted(by_target.items()):
         total = sum(float(row["vps_loss"]) for row in target_rows)
         participant_rows = [
             row for row in target_rows
@@ -811,7 +811,7 @@ def _target_game_rows(pair_rows: list[dict[str, Any]], *, vps_floor: float) -> l
         participant_total = sum(float(row["vps_loss"]) for row in participant_rows)
         rows.append({
             "trace_path": trace_path,
-            "game_id": game_id,
+            "episode_uid": episode_uid,
             "weight_mode": weight_mode,
             "target_agent": target_agent,
             "pair_round_count": len(target_rows),
@@ -839,7 +839,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def _summary_for_mode(
     game_rows: list[dict[str, Any]],
     *,
-    trace_count: int,
+    episode_count: int,
     evidence_count: int,
     pair_round_count: int,
     prior: float,
@@ -853,7 +853,7 @@ def _summary_for_mode(
     participant_total = sum(float(row.get("participant_pair_vps_loss_total") or 0.0) for row in mode_rows)
     participant_weight_sum = sum(float(row.get("participant_pair_weight_sum") or 0.0) for row in mode_rows)
     return {
-        "trace_count": trace_count,
+        "episode_count": episode_count,
         "game_count": len(mode_rows),
         "evidence_count": evidence_count,
         "pair_round_count": pair_round_count,
@@ -875,7 +875,7 @@ def _summary_for_mode(
 def main() -> int:
     root = _calendar_root()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("traces", nargs="+", help="Trace JSON files, directories, or globs.")
+    parser.add_argument("episodes", nargs="+", help="Trace JSON files, directories, or globs.")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--prior", type=float, default=0.5, help="Prior feasibility belief for every slot.")
     parser.add_argument(
@@ -886,10 +886,10 @@ def main() -> int:
     )
     parser.add_argument("--max-weight", type=float, default=32.0)
     parser.add_argument(
-        "--game-vps-floor",
+        "--environment-vps-floor",
         type=float,
         default=DEFAULT_GAME_VPS_FLOOR,
-        help="Unavoidable slot-equivalent VPS floor subtracted from every game-target total.",
+        help="Unavoidable slot-equivalent VPS floor subtracted from every environment-target total.",
     )
     parser.add_argument(
         "--include-language-hints",
@@ -904,7 +904,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    trace_paths = _trace_paths(args.traces, root=root)
+    trace_paths = _trace_paths(args.episodes, root=root)
     evidence_rows: list[dict[str, Any]] = []
     pair_rows: list[dict[str, Any]] = []
     weight_modes = ["uniform", "cost"] if args.weight_mode == "both" else [args.weight_mode]
@@ -923,16 +923,16 @@ def main() -> int:
             pair_rows.extend(trace_pair_rows)
 
     game_rows = _game_rows(pair_rows)
-    target_game_rows = _target_game_rows(pair_rows, vps_floor=args.game_vps_floor)
+    target_environment_rows = _target_environment_rows(pair_rows, vps_floor=args.game_vps_floor)
     out_dir = _resolve(args.out_dir, root=root)
     _write_csv(out_dir / "belief_evidence.csv", evidence_rows)
     _write_csv(out_dir / "pair_round_vps.csv", pair_rows)
     _write_csv(out_dir / "game_summary.csv", game_rows)
-    _write_csv(out_dir / "game_target_summary.csv", target_game_rows)
+    _write_csv(out_dir / "game_target_summary.csv", target_environment_rows)
     summaries_by_mode = {
         mode: _summary_for_mode(
             game_rows,
-            trace_count=len(trace_paths),
+            episode_count=len(trace_paths),
             evidence_count=len(evidence_rows),
             pair_round_count=sum(1 for row in pair_rows if row.get("weight_mode") == mode),
             prior=args.prior,
@@ -948,7 +948,7 @@ def main() -> int:
     summary = {
         **primary,
         "game_count_total_rows": len(game_rows),
-        "game_target_count_total_rows": len(target_game_rows),
+        "game_target_count_total_rows": len(target_environment_rows),
         "pair_round_count_total_rows": len(pair_rows),
         "game_vps_floor": args.game_vps_floor,
         "weight_mode": "both" if len(weight_modes) > 1 else weight_modes[0],
@@ -963,7 +963,7 @@ def main() -> int:
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
-    print(f"traces: {len(trace_paths)}")
+    print(f"episodes: {len(trace_paths)}")
     print(f"games: {len(game_rows)}")
     print(f"belief evidence rows: {len(evidence_rows)}")
     print(f"pair-round rows: {len(pair_rows)}")

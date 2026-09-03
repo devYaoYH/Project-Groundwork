@@ -1,7 +1,7 @@
 """
 Simulated annealing scenario generator for project-based resource allocation games.
 
-Ported from frontend/static/optimizer.html. Generates balanced game scenarios
+Ported from frontend/static/optimizer.html. Generates balanced environment scenarios
 targeting a specific M/C ratio (collaboration efficiency metric).
 """
 
@@ -757,7 +757,7 @@ def name_projects(agent_projects: list[list[dict]]) -> list[list[dict]]:
         project_lines.append(f"- Project {i+1}: requires [{reqs}], reward={p['reward']}")
 
     prompt = (
-        "You are naming projects in a resource trading game. "
+        "You are naming projects in a resource trading environment. "
         f"There are {len(all_projects)} projects total. "
         "Given their resource requirements and rewards, "
         "generate a creative, thematic 2-word name for each.\n\n"

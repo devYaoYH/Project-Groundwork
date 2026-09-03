@@ -123,7 +123,7 @@ def extract_strategy_examples(
                         continue
                     if pattern.search(msg):
                         examples[strat].append({
-                            "game_id": g["game_id"],
+                            "episode_uid": g["episode_uid"],
                             "condition": g["condition"],
                             "round": r["round_number"],
                             "speaker": speaker,
@@ -146,7 +146,7 @@ def analyze_strategies(raw_games: list[dict]) -> dict:
                 if e.get("type") != "thinking"
             ]
             meta = {
-                "game_id": g["game_id"],
+                "episode_uid": g["episode_uid"],
                 "round_number": r["round_number"],
                 "condition": g["condition"],
                 "mode": g["mode"],

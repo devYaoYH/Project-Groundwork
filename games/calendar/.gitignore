@@ -59,7 +59,7 @@ overleaf_conversion/
 .vscode/
 *.iml
 
-# Node (a2a-viewer)
+# Node
 node_modules/
 dist/
 .parcel-cache/

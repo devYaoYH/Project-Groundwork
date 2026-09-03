@@ -1,6 +1,6 @@
-"""Aggregation module: flatten judgments into a one-row-per-game CSV.
+"""Aggregation module: flatten judgments into a one-row-per-environment CSV.
 
-Schema: one row per game, with flat game-level columns + a single
+Schema: one row per environment, with flat environment-level columns + a single
 `rounds_summary` JSON column holding per-round breakdowns.
 
 Pattern classification uses a deterministic alias lookup built from the
@@ -135,10 +135,10 @@ def build_judgments_csv(
     taxonomy: Optional[Taxonomy] = None,
     contexts: Optional[list] = None,
 ) -> pd.DataFrame:
-    """Build a one-row-per-game CSV.
+    """Build a one-row-per-environment CSV.
 
     Accepts list[GameJudgment] or list[RoundJudgment] (legacy per-round,
-    grouped by game_id).
+    grouped by episode_uid).
 
     If `taxonomy` is provided, pattern_name → canonical_id is resolved
     deterministically via alias matching. Otherwise every pattern is tagged
@@ -148,7 +148,7 @@ def build_judgments_csv(
     oracle_optimum are pulled from the matching context.
 
     Columns:
-        game_id, model_a, model_b, mode, shifting_agent, mc_ratio,
+        episode_uid, model_a, model_b, mode, shifting_agent, mc_ratio,
         oracle_optimum, num_rounds, avg_joint_efficiency,
         total_positive_instances, total_negative_instances, total_neutral_instances,
         unique_negative_patterns, unique_positive_patterns,
@@ -161,20 +161,20 @@ def build_judgments_csv(
     ctx_lookup: dict[str, dict] = {}
     if contexts:
         for ctx in contexts:
-            ctx_lookup[ctx.game_id] = {
+            ctx_lookup[ctx.episode_uid] = {
                 "shifting_agent": ctx.shifting_agent,
                 "oracle_optimum": ctx.oracle_optimum,
             }
 
-    # Normalize input: group into game_id → (game_meta, [round_judgments])
+    # Normalize input: group into episode_uid → (game_meta, [round_judgments])
     games: dict[str, dict] = {}
 
     for j in judgments:
         if isinstance(j, GameJudgment):
-            gid = j.game_id
+            gid = j.episode_uid
             ctx_info = ctx_lookup.get(gid, {})
             games.setdefault(gid, {
-                "game_id": j.game_id,
+                "episode_uid": j.episode_uid,
                 "model_a": j.model_a,
                 "model_b": j.model_b,
                 "mode": j.mode,
@@ -186,11 +186,11 @@ def build_judgments_csv(
             })
             games[gid]["rounds"].extend(j.rounds)
         else:
-            # Legacy per-round: group by game_id
-            gid = j.game_id
+            # Legacy per-round: group by episode_uid
+            gid = j.episode_uid
             ctx_info = ctx_lookup.get(gid, {})
             games.setdefault(gid, {
-                "game_id": j.game_id,
+                "episode_uid": j.episode_uid,
                 "model_a": j.model_a,
                 "model_b": j.model_b,
                 "mode": j.mode,
@@ -207,7 +207,7 @@ def build_judgments_csv(
         rounds_sorted = sorted(g["rounds"], key=lambda r: r.round_number)
         round_summaries = [_summarize_round(r, alias_index) for r in rounds_sorted]
 
-        # Game-level aggregates
+        # Environment-level aggregates
         total_pos = sum(r["n_positive_instances"] for r in round_summaries)
         total_neg = sum(r["n_negative_instances"] for r in round_summaries)
         total_neu = sum(r["n_neutral_instances"] for r in round_summaries)
@@ -226,7 +226,7 @@ def build_judgments_csv(
         avg_eff = sum(effs) / len(effs) if effs else None
 
         rows.append({
-            "game_id": g["game_id"],
+            "episode_uid": g["episode_uid"],
             "model_a": g["model_a"],
             "model_b": g["model_b"],
             "mode": g["mode"],
@@ -248,12 +248,12 @@ def build_judgments_csv(
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)
-        log.info("Wrote %d game rows to %s", len(df), output_path)
+        log.info("Wrote %d environment rows to %s", len(df), output_path)
     return df
 
 
 def load_judgments_csv(path: Path) -> pd.DataFrame:
-    """Load the per-game CSV. `rounds_summary`, `unique_negative_patterns`,
+    """Load the per-environment CSV. `rounds_summary`, `unique_negative_patterns`,
     and `unique_positive_patterns` columns remain JSON strings; call
     `json.loads` in your notebook to work with them as Python objects.
     """

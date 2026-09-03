@@ -23,15 +23,15 @@ def test_committed_denylist_entries_are_actually_loaded():
 
 def test_denylist_actually_removes_the_games_it_names():
     prefix = sorted(data_loader.load_denylist())[0]
-    games = [{"game_id": f"{prefix}-run-1"}, {"game_id": "keep-this-one"}]
+    games = [{"episode_uid": f"{prefix}-run-1"}, {"episode_uid": "keep-this-one"}]
 
     kept = data_loader.apply_denylist(games)
 
-    assert [game["game_id"] for game in kept] == ["keep-this-one"]
+    assert [environment["episode_uid"] for environment in kept] == ["keep-this-one"]
 
 
 def test_analysis_data_dir_sits_beside_the_packages_that_ship_it():
-    """REPO_ROOT points at whatever repository vendored the game, which is not
-    where the game's own data lives."""
+    """REPO_ROOT points at whatever repository vendored the environment, which is not
+    where the environment's own data lives."""
     assert data_loader.DATA_DIR.name == "data"
     assert data_loader.DATA_DIR.parent.name == "negotiation"

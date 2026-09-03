@@ -1,11 +1,11 @@
 name: projects_study_crossplay_009
 description: 'V2 cross-play study: 3 model pairs x 4 paradigms x 3 MC ratios x 10
-  games = 360 games. Agent A ordered to balance provider parallelism (12 batches per
+  games = 360 games. Agent A ordered to balance provider parallelism (12 cells per
   thread).'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: sonnet-gpt5m_stable_fixed_mc05
   count: 10
   config:

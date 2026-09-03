@@ -2,9 +2,9 @@ name: projects_study_notalk_baseline_009
 description: "V2 no-talk baseline: 3 models \xD7 4 paradigms \xD7 3 MC ratios \xD7\
   \ 2 speaker swap = 72 games (enable_cheap_talk=false)"
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: sonnet_notalk_stable_fixed_mc05
   count: 4
   config:

@@ -43,7 +43,7 @@ def main() -> int:
     failures += scan(r"(?:^|\s)(?:gcp_project:\s*)(?!\$\{)[A-Za-z0-9][A-Za-z0-9-]+", "literal GCP project id", configurations)
     failures += scan(r"vertex_adc_file:\s*(?:/|~|\\\\)", "absolute ADC credential path", public_content)
     failures += scan(r"/(?:Users|home)/[^\s'\"]*(?:adc|credential)", "personal credential path", public_content)
-    failures += scan(r"(?:hs-soil-gemini|hs-social-interaction-lab|calbench-traces|calbench-openskill-ratings)", "account-specific cloud identifier", public_content)
+    failures += scan(r"(?:hs-soil-gemini|hs-social-interaction-lab|calbench-episodes|calbench-openskill-ratings)", "account-specific cloud identifier", public_content)
     failures += scan(r"scripts/cloud/|s3_calendar_traces\.sh|\baws-t3\b", "reference to unshipped cloud script or host", public_content)
     failures += scan(r"(?:from|import)\s+backend(?:\.|\s)", "stale pre-vendoring backend import", [p for p in all_files if p.suffix == ".py"])
 

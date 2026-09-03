@@ -1,7 +1,7 @@
 [project]
 name = "a2a-judge"
 version = "0.1.0"
-description = "LLM-as-judge analysis layer for a2a-engine traces."
+description = "LLM-as-judge analysis layer for a2a-engine episodes."
 requires-python = ">=3.11"
 dependencies = [
     "a2a-engine",

@@ -1,9 +1,9 @@
 name: v2_projects_gemini31pro_smoke
 description: 'Tiny smoke test for v2 projects using Gemini 3.1 Pro through Vertex AI ADC.'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: gemini31pro_stable_rotate_share_named_tom_mc08_smoke
   count: 1
   config:

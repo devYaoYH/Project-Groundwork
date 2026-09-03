@@ -1,7 +1,7 @@
 [project]
-name = "calendar-game"
+name = "calendar-environment"
 version = "0.1.0"
-description = "Calendar scheduling benchmark game for a2a-engine."
+description = "Calendar scheduling benchmark environment for a2a-engine."
 requires-python = ">=3.11"
 dependencies = [
     "a2a-engine",
@@ -19,8 +19,8 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Lets `a2a-run` discover the game without the caller importing it first.
-[project.entry-points."a2a_engine.games"]
+# Lets `a2a-run` discover the environment without the caller importing it first.
+[project.entry-points."a2a_engine.environments"]
 calendar = "calendar_game"
 
 [tool.hatch.build.targets.wheel]

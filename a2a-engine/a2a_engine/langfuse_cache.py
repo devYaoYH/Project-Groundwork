@@ -1,11 +1,11 @@
 """Langfuse -> local trace cache.
 
-Pulls Langfuse traces (via the official `langfuse` SDK when available, else
+Pulls Langfuse episodes (via the official `langfuse` SDK when available, else
 HTTP fallback against `/api/public`) and best-effort converts each into a
-`GameTraceBase` so that the local `GameDataset` analysis pipeline can ingest
+`EpisodeTrace` so that the local `EpisodeDataset` analysis pipeline can ingest
 them.
 
-NOTE: Langfuse cache is for cross-session aggregation; local JSON traces
+NOTE: Langfuse cache is for cross-session aggregation; local JSON episodes
 remain authoritative for `final_state` / `metrics`. Conversion is lossy.
 """
 
@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 import requests
 
-from a2a_engine.schemas import GameConfigBase, GameEvent, GameTraceBase
+from a2a_engine.schemas import EpisodeConfigBase, Event, EpisodeTrace
 
 try:  # optional dep
     from langfuse import Langfuse  # type: ignore
@@ -59,7 +59,7 @@ def _fetch_traces_http(
 ) -> list[dict]:
     auth = _basic_auth()
     base = _base_url().rstrip("/")
-    url = f"{base}/api/public/traces"
+    url = f"{base}/api/public/episodes"
     params: dict[str, Any] = {}
     if from_timestamp:
         params["fromTimestamp"] = (
@@ -190,14 +190,14 @@ def _to_dict(x: Any) -> dict:
 _AGENT_NAME_RE = re.compile(r"invoke_agent\s+(\S+)")
 
 
-def langfuse_trace_to_game_trace(lf_trace: dict, observations: list[dict]) -> GameTraceBase:
-    """Best-effort reconstruction of a GameTraceBase from a Langfuse trace.
+def langfuse_trace_to_game_trace(lf_trace: dict, observations: list[dict]) -> EpisodeTrace:
+    """Best-effort reconstruction of a EpisodeTrace from a Langfuse trace.
 
-    Lossy: `final_state` and `metrics` are left empty — the local JSON traces
+    Lossy: `final_state` and `metrics` are left empty — the local JSON episodes
     remain authoritative for those.
     """
     session_id = lf_trace.get("sessionId") or lf_trace.get("session_id")
-    game_id = session_id or lf_trace.get("id") or str(uuid.uuid4())
+    episode_uid = session_id or lf_trace.get("id") or str(uuid.uuid4())
 
     tags = lf_trace.get("tags") or []
     experiment_name: str | None = None
@@ -218,7 +218,7 @@ def langfuse_trace_to_game_trace(lf_trace: dict, observations: list[dict]) -> Ga
         or datetime.min,
     )
 
-    events: list[GameEvent] = []
+    events: list[Event] = []
     # Map invoke_agent observation id -> agent name.
     agent_by_obs: dict[str, str] = {}
     for obs in obs_sorted:
@@ -235,7 +235,7 @@ def langfuse_trace_to_game_trace(lf_trace: dict, observations: list[dict]) -> Ga
         m = _AGENT_NAME_RE.match(name)
         if m:
             events.append(
-                GameEvent(type="invoke_agent", timestamp=ts, data={"agent": m.group(1)})
+                Event(type="invoke_agent", timestamp=ts, data={"agent": m.group(1)})
             )
             continue
 
@@ -246,22 +246,22 @@ def langfuse_trace_to_game_trace(lf_trace: dict, observations: list[dict]) -> Ga
             text = _extract_text(output)
             if text is not None:
                 events.append(
-                    GameEvent(
+                    Event(
                         type="message",
                         timestamp=ts,
                         data={"speaker": speaker or "unknown", "text": text},
                     )
                 )
 
-    config = GameConfigBase(
-        game_name=str(lf_trace.get("name") or "unknown"),
+    config = EpisodeConfigBase(
+        environment_id=str(lf_trace.get("name") or "unknown"),
         num_agents=len(set(agent_by_obs.values())) or 0,
         experiment_name=experiment_name,
-        experiment_run_id=lf_trace.get("id"),
+        episode_id=lf_trace.get("id"),
     )
 
-    return GameTraceBase(
-        game_id=str(game_id),
+    return EpisodeTrace(
+        episode_uid=str(episode_uid),
         config=config,
         events=events,
         final_state={},
@@ -306,12 +306,12 @@ def fetch_and_convert(
     tags: list[str] | None = None,
     from_timestamp: str | datetime | None = None,
     limit: int | None = None,
-) -> list[GameTraceBase]:
-    """One-call helper: fetch raw traces + observations and convert all."""
+) -> list[EpisodeTrace]:
+    """One-call helper: fetch raw episodes + observations and convert all."""
     raw = fetch_traces(
         session_ids=session_ids, tags=tags, from_timestamp=from_timestamp, limit=limit
     )
-    out: list[GameTraceBase] = []
+    out: list[EpisodeTrace] = []
     for lf in raw:
         tid = lf.get("id")
         obs = fetch_observations(tid) if tid else []

@@ -1,12 +1,12 @@
-This protocol specification defines a sequential, multi-item bargaining game between two agents under asymmetric information. It uses an alternating-offers format with a fixed depreciation penalty to incentivize truth-telling and prevent infinite bargaining gridlock.
+This protocol specification defines a sequential, multi-item bargaining environment between two agents under asymmetric information. It uses an alternating-offers format with a fixed depreciation penalty to incentivize truth-telling and prevent infinite bargaining gridlock.
 ------------------------------
 ## 1. Protocol Architecture & Structural Constants
 
 * Seller ($S$): Holds an inventory of $k$ identical items. Minimum reservation cost per item is $c$ (Private to $S$).
 * Buyer ($B$): Wants up to $k$ items. Maximum valuation per item is $v$ (Private to $B$).
-* Rounds ($t$): The game runs for a maximum of $T$ rounds ($t = 1, 2, \dots, T$).
+* Rounds ($t$): The environment runs for a maximum of $T$ rounds ($t = 1, 2, \dots, T$).
 * Discount Factor ($\delta$): A decay parameter $0 < \delta < 1$. Delays reduce payoff; a payout in round $t$ is multiplied by $\delta^{t-1}$.
-* Terminal Rule: If no agreement is reached by $t = T$, the game terminates with zero utility for both agents.
+* Terminal Rule: If no agreement is reached by $t = T$, the environment terminates with zero utility for both agents.
 
 ------------------------------
 ## 2. State Space Variables

@@ -1,6 +1,6 @@
 # Calendar Scheduling Benchmark
 
-A multi-agent coordination game where agents must schedule meetings by communicating privately and independently managing their own calendars. Scheduling correctness is **observed, not enforced** — it is the primary object of study.
+A multi-agent coordination environment where agents must schedule meetings by communicating privately and independently managing their own calendars. Scheduling correctness is **observed, not enforced** — it is the primary object of study.
 
 ---
 
@@ -36,15 +36,15 @@ Agents communicate via direct messages to coordinate on a slot. Runs until quies
 
 All participants act **simultaneously**. Each agent's context is built from a frozen snapshot of their calendar taken before any decisions are applied — no agent sees another's decision. The inbox is **empty by construction** at this point (all DMs were drained during CHEAP_TALK turns) and is not included in the DECISION context.
 
-Each agent submits a **batch** of `schedule` and `reschedule` calls which are resolved **atomically as a transaction**. The entire batch is validated together — order within the list is irrelevant. Validation checks:
+Each agent submits a **cell** of `schedule` and `reschedule` calls which are resolved **atomically as a transaction**. The entire cell is validated together — order within the list is irrelevant. Validation checks:
 
 - All `reschedule` source slots contain the claimed items
-- All target slots are free after accounting for all other moves in the same batch (no two moves compete for the same slot)
-- The `schedule` target slot is free after all reschedules in the batch are applied
+- All target slots are free after accounting for all other moves in the same cell (no two moves compete for the same slot)
+- The `schedule` target slot is free after all reschedules in the cell are applied
 
-If the batch is globally consistent → all mutations are applied atomically to the agent's calendar.
+If the cell is globally consistent → all mutations are applied atomically to the agent's calendar.
 
-If not → the agent receives a conflict description and may resubmit the **entire batch** from scratch. Up to **k=3 retries** are allowed. After k failed attempts, the agent's decision is dropped and logged as `decision_failed`.
+If not → the agent receives a conflict description and may resubmit the **entire cell** from scratch. Up to **k=3 retries** are allowed. After k failed attempts, the agent's decision is dropped and logged as `decision_failed`.
 
 **Tools:**
 - `{"type": "schedule", "meeting_id": <id>, "slot": <int>}` — place the new meeting on this agent's calendar at the chosen slot
@@ -67,9 +67,9 @@ Outcomes are recorded as metrics. Nothing is corrected or enforced.
 
 ### Two-Layer Design: Agent vs Client
 
-**`Agent`** — stateful, game-facing wrapper. The engine only ever talks to this layer. It owns the protocol (when to call what on the client) and holds all mutable per-agent state.
+**`Agent`** — stateful, environment-facing wrapper. The engine only ever talks to this layer. It owns the protocol (when to call what on the client) and holds all mutable per-agent state.
 
-**`BaseClient`** — swappable decision-making backend. Knows nothing about the game engine. Receives structured context, returns tool calls and metadata. Three concrete implementations are supported:
+**`BaseClient`** — swappable decision-making backend. Knows nothing about the environment engine. Receives structured context, returns tool calls and metadata. Three concrete implementations are supported:
 
 | Client type | Description |
 |-------------|-------------|
@@ -91,10 +91,10 @@ class Agent:
 
 `Agent.turn()` drains `inbox_queue` itself before calling `client.turn(messages)` — the flush is an internal responsibility of `Agent`, not the engine's.
 
-### Engine-Facing Protocol (called by game loop)
+### Engine-Facing Protocol (called by environment loop)
 
 ```python
-agent.register(agent_id, game_config)           # game start — once
+agent.register(agent_id, game_config)           # environment start — once
 agent.start_round(meeting, calendar_snapshot)   # round start, participant only
 agent.turn() -> TurnResult                      # each CHEAP_TALK turn; drains inbox internally
 agent.decide(meeting, calendar_snapshot) -> DecideResult  # DECISION phase
@@ -114,7 +114,7 @@ class BaseClient:
 
 ### GameConfig (replaces system_prompt)
 
-Structured game parameters passed to `client.register()`. LLM/Agentic clients parse this into a system prompt via `prompts.py`; `AlgorithmClient` consumes it directly.
+Structured environment parameters passed to `client.register()`. LLM/Agentic clients parse this into a system prompt via `prompts.py`; `AlgorithmClient` consumes it directly.
 
 ```python
 @dataclass
@@ -122,7 +122,7 @@ class GameConfig:
     num_agents: int
     num_slots: int
     agent_id: int             # this agent's identity
-    participants: list[int]   # all agent ids in the game
+    participants: list[int]   # all agent ids in the environment
     dm_cap: int               # max DMs per round (default 100)
     decision_retries: int     # max retries in DECISION phase (default 3)
 ```
@@ -165,9 +165,9 @@ class DecideResult(TurnResult):
 
 ## Agent Context Windows
 
-### A) Start of Game — via `client.register()`
+### A) Start of Environment — via `client.register()`
 Delivered once as the static system prompt (LLM/Agentic) or structured config (Algorithm):
-- `agent_id` and game parameters (`num_slots`, `num_agents`, `dm_cap`, `decision_retries`)
+- `agent_id` and environment parameters (`num_slots`, `num_agents`, `dm_cap`, `decision_retries`)
 - Rules: available tools, phase descriptions, objective
 
 ### B) Start of Each Round — via `agent.start_round()`
@@ -196,7 +196,7 @@ New `user` message appended to history:
 - `[RETRY <n>/<k>]` header
 - Conflict description: which validation check failed and why
 
-Agent resubmits the entire batch from scratch.
+Agent resubmits the entire cell from scratch.
 
 ---
 
@@ -221,7 +221,7 @@ class Calendar:
 
 ## Engine State
 
-### Persistent across entire game
+### Persistent across entire environment
 | State | Description |
 |-------|-------------|
 | `agents` | List of `Agent` objects; each owns its calendar and inbox |
@@ -266,15 +266,15 @@ Every meaningful event is appended to an **`EventLog`** as a structured, immutab
 ### Event Schema (target contract)
 
 This section describes the Calendar-specific target contract. The current shared
-`GameEvent` persists an ordered list with `type`, `timestamp`, and game-defined
+`Event` persists an ordered list with `type`, `timestamp`, and environment-defined
 `data`; the standalone viewer derives `seq` from array position. Do not treat the
-fields below as a completed cross-game wire schema until the typed event-envelope
+fields below as a completed cross-environment wire schema until the typed event-envelope
 RFC is approved and implemented.
 
 ```python
 @dataclass
 class Event:
-    seq: int                  # monotonically increasing, total ordering across entire game
+    seq: int                  # monotonically increasing, total ordering across entire environment
     turn: int                 # turn index within current round (one loop over participants + queue drain)
     round: int                # round index (one meeting per round)
     phase: str                # GAME_START | CHEAP_TALK | DECISION | RESOLUTION | GAME_END
@@ -298,8 +298,8 @@ class Event:
 | `dm_rejected` | `from`, `to`, `reason` (e.g. `dm_cap_exceeded`) |
 | `decide_start` | `agent_id`, `calendar_snapshot_render: str`, `meeting` |
 | `decide_end` | `agent_id`, `tool_calls_raw: list`, `text: str`, `thinking: str\|None`, `usage: dict`, `latency_ms: float`, `raw_api_response: dict` |
-| `batch_applied` | `agent_id`, `actions: list`, `calendar_render_after: str` |
-| `batch_rejected` | `agent_id`, `attempt: int`, `conflict_description: str`, `actions: list` |
+| `cell_applied` | `agent_id`, `actions: list`, `calendar_render_after: str` |
+| `cell_rejected` | `agent_id`, `attempt: int`, `conflict_description: str`, `actions: list` |
 | `decision_failed` | `agent_id`, `attempts_exhausted: int` |
 | `resolution` | `meeting_id`, `per_agent_slot: dict[agent_id, slot\|None]`, `coordinated: bool`, `slot_conflicts: dict[agent_id, list[int]]` |
 | `game_end` | all summary metrics |
@@ -310,15 +310,15 @@ The current Calendar implementation records the complete provider response in
 `raw_api_response` for calibration analyses. Local research runs deliberately
 use full capture by default, including this evidence. A future reduction policy
 must be backward-compatible: viewers and analysis tolerate the field being
-absent, but full-capture traces retain it.
+absent, but full-capture episodes retain it.
 
 ### Why This Is Sufficient for Frontend Replay
 
 The `seq` field gives total ordering. The frontend can:
-1. **Scrub through events** by `seq` — reconstruct exact calendar state at any point by replaying `batch_applied` events in order
+1. **Scrub through events** by `seq` — reconstruct exact calendar state at any point by replaying `cell_applied` events in order
 2. **Show message threads** — join `dm_sent` events by `meeting_id` to reconstruct per-meeting conversation threads
 3. **Show per-agent LLM context** — `turn_start.calendar_render` and `turn_start.inbox_drained` are the exact strings sent to the model; no re-computation needed
-4. **Show thinking traces** — `turn_end.thinking` alongside `turn_end.tool_calls_raw`
+4. **Show thinking episodes** — `turn_end.thinking` alongside `turn_end.tool_calls_raw`
 5. **Show full API responses** — surface token usage, latency, stop reasons per turn
 6. **Highlight resolution outcomes** — color-code slots by coordination success/failure using `resolution.per_agent_slot` and `resolution.slot_conflicts`
 7. **Reconstruct turn ordering** — `turn` and `seq` together show exactly who acted when within each round
@@ -327,14 +327,14 @@ The `seq` field gives total ordering. The frontend can:
 
 ## Test Plan
 
-Tests are organized into three layers: **unit** (no LLM, no game loop), **integration** (full game loop with mock clients), and **context verification** (assert on exact LLM inputs).
+Tests are organized into three layers: **unit** (no LLM, no environment loop), **integration** (full environment loop with mock clients), and **context verification** (assert on exact LLM inputs).
 
 ### Calendar Object (unit)
 
 - `test_snapshot_isolation` — mutating a snapshot does not affect the original calendar
-- `test_atomic_batch_valid` — a consistent batch (reschedule clears slot, schedule fills it) is applied fully
-- `test_atomic_batch_invalid_conflict` — two moves targeting the same slot → nothing applied, conflict returned
-- `test_atomic_batch_order_irrelevant` — same batch submitted in reversed order produces identical outcome
+- `test_atomic_cell_valid` — a consistent cell (reschedule clears slot, schedule fills it) is applied fully
+- `test_atomic_cell_invalid_conflict` — two moves targeting the same slot → nothing applied, conflict returned
+- `test_atomic_cell_order_irrelevant` — same cell submitted in reversed order produces identical outcome
 - `test_render_deterministic` — same calendar state always produces identical `render()` string
 
 ### Prompt Builders (unit, pure functions)
@@ -350,7 +350,7 @@ Tests are organized into three layers: **unit** (no LLM, no game loop), **integr
 - `test_phase_ordering` — assert CHEAP_TALK turns fire before DECISION, DECISION before RESOLUTION, across event log `seq` order
 - `test_dm_cap_still_gets_turns` — agent hits 100 DM cap mid-round; assert agent continues to receive turns but all subsequent `dm` tool calls are rejected and logged as `dm_rejected`; calendar and inbox of other agents unaffected by rejected calls
 - `test_decision_simultaneous` — two agents both read identical pre-decision snapshots; assert neither sees the other's mutations during DECISION
-- `test_decision_atomicity` — batch with internal conflict triggers no partial application; calendar state identical before and after failed batch
+- `test_decision_atomicity` — cell with internal conflict triggers no partial application; calendar state identical before and after failed cell
 - `test_decision_retry_exhaustion` — agent fails k=3 times; assert `decision_failed` event logged, calendar unchanged
 - `test_inbox_empty_at_decision` — after CHEAP_TALK quiescence, assert all agent inboxes are empty before DECISION phase starts
 - `test_non_participant_queued_once` — participant DMs same non-participant twice in one turn; assert non-participant receives exactly one turn that round
@@ -365,7 +365,7 @@ Tests are organized into three layers: **unit** (no LLM, no game loop), **integr
 - `test_context_checkpoint_B` — after `start_round()`, assert captured messages contain round number, calendar render, meeting, inbox, CHEAP_TALK signal; assert nothing else present
 - `test_context_checkpoint_C` — after second `turn()`, assert new message contains only inbox delta; assert calendar not re-sent
 - `test_context_checkpoint_D` — after `decide()`, assert message contains meeting + calendar snapshot render, DECISION signal; assert no inbox field present
-- `test_context_checkpoint_E` — after failed batch, assert retry message contains `[RETRY n/k]` and conflict description; assert prior decision message is in history
+- `test_context_checkpoint_E` — after failed cell, assert retry message contains `[RETRY n/k]` and conflict description; assert prior decision message is in history
 - `test_history_grows_within_round` — assert `message_history` length increases by 2 (user + assistant) each turn within a round
 - `test_history_resets_between_rounds` — assert `message_history` is empty at the start of round 2's first turn
 
@@ -375,9 +375,9 @@ Tests are organized into three layers: **unit** (no LLM, no game loop), **integr
   then, insertion order is the replay order
 - `test_turn_index_correct` — `turn` field increments once per complete participant loop + queue drain, resets each round
 - `test_raw_api_response_logged` — only for an explicit full-capture run;
-  standard-capture traces must remain replayable without it
+  standard-capture episodes must remain replayable without it
 - `test_calendar_render_in_turn_start` — `turn_start.calendar_render` matches `agent.calendar.render()` at that point in time
-- `test_replay_reconstructs_state` — replaying all `batch_applied` events from the log produces the same final calendar state as `agent.calendar` at game end
+- `test_replay_reconstructs_state` — replaying all `cell_applied` events from the log produces the same final calendar state as `agent.calendar` at environment end
 
 ---
 

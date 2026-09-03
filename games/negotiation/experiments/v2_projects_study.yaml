@@ -2,9 +2,9 @@ name: v2_projects_study
 description: 'V2 multi-model negotiation study: 5 models × 4 paradigms × 3 MC ratios
   × 2 speaker swap = 120 games'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: haiku_stable_fixed_mc05
   count: 2
   config:

@@ -9,7 +9,7 @@ Full protocol: [`SPEC.md`](SPEC.md).
 ## What it measures
 
 Bargaining is where communication has a *price*. Every round of haggling costs
-both sides `δ` of their surplus, so the game separates agents that extract value
+both sides `δ` of their surplus, so the environment separates agents that extract value
 from agents that destroy it by talking too long. It also has a clean
 efficiency benchmark — the first-best is computable in closed form — which most
 open-ended communication games lack.
@@ -23,7 +23,7 @@ behavior rather than from stated intent.
 ```bash
 uv pip install -e games/buyer-seller
 
-# no API keys: scripted agents, traces into SQLite
+# no API keys: scripted agents, episodes into SQLite
 a2a-run games/buyer-seller/experiments/example.yaml --smoke-test
 
 # the real thing
@@ -62,7 +62,7 @@ quietly understate every agent.
 
 ## Two interpretation choices
 
-`SPEC.md` is silent on both; the game states them and the tests pin them.
+`SPEC.md` is silent on both; the environment states them and the tests pin them.
 
 **The clock advances on accepts.** A round is one offer/response exchange, and
 `t` increments whether or not the unit sold. Otherwise several units could settle
@@ -77,7 +77,7 @@ error, and the flag keeps the violation measurable.
 ## Suggested conditions
 
 The shipped `experiments/example.yaml` varies surplus width and includes a
-`no_gains_control` batch where `v < c`. That control is the one worth keeping:
+`no_gains_control` cell where `v < c`. That control is the one worth keeping:
 any units sold there are loss-making trades, which is a clean measure of whether
 an agent is actually reasoning about its reservation value or just being
 agreeable.

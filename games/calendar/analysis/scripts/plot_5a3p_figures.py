@@ -3,8 +3,8 @@
 Examples:
     cd games/calendar
     uv run python analysis/scripts/plot_5a3p_figures.py \
-      --coord-traces results/uniform_full_gemini3flash results/varied_5a3p_b041_gpt55_medium \
-      --redteam-traces results/redteam_c006_uniform_5a3p_c020 \
+      --coord-episodes results/uniform_full_gemini3flash results/varied_5a3p_b041_gpt55_medium \
+      --redteam-episodes results/redteam_c006_uniform_5a3p_c020 \
       --out-dir analysis/figures/5a3p
 """
 
@@ -22,7 +22,7 @@ from typing import Any, Iterable
 try:
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
-except ImportError as exc:  # pragma: no cover - environment/dependency guard
+except ImportError as exc:  # pragma: no cover - release/dependency guard
     raise SystemExit(
         "matplotlib is required for plotting. Install/sync calendar dependencies "
         "with `uv sync` from games/calendar, then rerun this script."
@@ -314,9 +314,9 @@ def _excess_cost(trace: dict[str, Any]) -> float | None:
     return float(realized) - float(optimal)
 
 
-def plot_average_dms_by_meeting(traces: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
+def plot_average_dms_by_meeting(episodes: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
     counts: dict[str, dict[SeriesKey, dict[int, list[int]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for path, trace in traces:
+    for path, trace in episodes:
         case = _dataset_case(trace)
         if case not in {"uniform", "varied"}:
             continue
@@ -373,9 +373,9 @@ def plot_average_dms_by_meeting(traces: list[tuple[Path, dict[str, Any]]], out_p
     plt.close(fig)
 
 
-def plot_communication_efficiency(traces: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
+def plot_communication_efficiency(episodes: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
     points: dict[str, dict[SeriesKey, list[tuple[float, float]]]] = defaultdict(lambda: defaultdict(list))
-    for path, trace in traces:
+    for path, trace in episodes:
         if _is_baseline_trace(path, trace):
             continue
         case = _dataset_case(trace)
@@ -472,9 +472,9 @@ def _speaker_orders(trace: dict[str, Any]) -> dict[int, list[int]]:
     return orders
 
 
-def plot_average_dms_by_speaker_position(traces: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
+def plot_average_dms_by_speaker_position(episodes: list[tuple[Path, dict[str, Any]]], out_path: Path) -> None:
     counts: dict[str, dict[SeriesKey, dict[int, list[int]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for path, trace in traces:
+    for path, trace in episodes:
         case = _dataset_case(trace)
         if case not in {"uniform", "varied"}:
             continue
@@ -554,7 +554,7 @@ def _load_privacy_module(root: Path):
 
 
 def plot_privacy_leakage_ratio(
-    traces: list[tuple[Path, dict[str, Any]]],
+    episodes: list[tuple[Path, dict[str, Any]]],
     *,
     root: Path,
     out_path: Path,
@@ -565,7 +565,7 @@ def plot_privacy_leakage_ratio(
         root / rq1.DEFAULT_MEETING_BANK,
     )
     totals: dict[str, dict[str, int]] = defaultdict(lambda: {"dms": 0, "leaks": 0})
-    for path, trace in traces:
+    for path, trace in episodes:
         model = _model_label(trace)
         rows = rq1._message_rows_for_trace(path, leakage_terms=leakage_terms, public_terms=public_terms)
         regular_rows = [row for row in rows if not row["from_is_adversarial"]]
@@ -628,13 +628,13 @@ def main() -> int:
     root = _calendar_root()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--coord-traces",
+        "--coord-episodes",
         nargs="+",
         default=[],
         help="Trace files/directories for non-red-team uniform/varied coordination figures.",
     )
     parser.add_argument(
-        "--redteam-traces",
+        "--redteam-episodes",
         nargs="+",
         default=[],
         help="Red-team trace files/directories for privacy leakage figure.",
@@ -644,12 +644,12 @@ def main() -> int:
     parser.add_argument(
         "--include-redteam-in-coord",
         action="store_true",
-        help="Include red-team traces in Figures 1 and 2 instead of filtering them out.",
+        help="Include red-team episodes in Figures 1 and 2 instead of filtering them out.",
     )
     parser.add_argument(
         "--include-non-redteam-privacy",
         action="store_true",
-        help="Include non-red-team traces in Figure 3 instead of filtering them out.",
+        help="Include non-red-team episodes in Figure 3 instead of filtering them out.",
     )
     args = parser.parse_args()
 
@@ -674,8 +674,8 @@ def main() -> int:
     if redteam_traces:
         plot_privacy_leakage_ratio(redteam_traces, root=root, out_path=out_dir / "figure3_privacy_leakage_ratio.png")
 
-    print(f"coordination traces: {len(coord_traces)}")
-    print(f"red-team traces: {len(redteam_traces)}")
+    print(f"coordination episodes: {len(coord_traces)}")
+    print(f"red-team episodes: {len(redteam_traces)}")
     print(f"wrote figures to: {out_dir}")
     return 0
 

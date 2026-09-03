@@ -2,9 +2,9 @@ name: projects_study_qwen36_run_009
 description: 'V2 multi-model negotiation study: 1 models × 4 paradigms × 3 MC ratios
   × 2 speaker swap = 24 games'
 defaults:
-  game_name: negotiation
+  environment_id: negotiation
   preset: v2_projects
-batches:
+cells:
 - label: qwen36_stable_fixed_mc05
   count: 10
   config:

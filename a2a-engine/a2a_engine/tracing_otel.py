@@ -120,7 +120,7 @@ def _should_export() -> bool:
 def _should_capture_content() -> bool:
     """Whether OTel spans retain model input/output content.
 
-    Local research traces are full-fidelity by default so the SQLite episode
+    Local research episodes are full-fidelity by default so the SQLite episode
     record and its OTel projection can be inspected together. Deployments that
     need a smaller logging surface opt out explicitly with
     ``A2A_CAPTURE_CONTENT=false``; this is deliberately an override rather
@@ -142,7 +142,7 @@ def init_tracing(service_name: str = "a2a-engine") -> None:
     exporter_env = os.environ.get("OTEL_TRACES_EXPORTER", "").lower()
     local_file = os.environ.get("A2A_OTEL_TRACES_FILE")
     if exporter_env == "file" and not local_file:
-        local_file = "results/otel-traces.jsonl"
+        local_file = "results/otel-episodes.jsonl"
 
     if exporter_env == "console":
         _provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))

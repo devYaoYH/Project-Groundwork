@@ -1,6 +1,6 @@
 name: calendar_example
 defaults:
-  game_name: calendar
+  environment_id: calendar
   num_agents: 2
   num_slots: 16
   density: 0.5
@@ -10,7 +10,7 @@ defaults:
   agents:
     - {type: llm, model: gpt-4o-mini}
     - {type: llm, model: gpt-4o-mini}
-batches:
+cells:
   - label: low_density
     count: 5
     config: {seed: 1, density: 0.3}

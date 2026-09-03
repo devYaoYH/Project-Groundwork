@@ -81,7 +81,7 @@ def analyze_perfunctory_fairness(
             ]
 
             records.append({
-                "game_id": g.game_id,
+                "episode_uid": g.episode_uid,
                 "round_number": r.round_number,
                 "model_a": g.model_a,
                 "model_b": g.model_b,
@@ -148,7 +148,7 @@ def analyze_perfunctory_fairness(
     samples = []
     for _, row in pf_rows.iterrows():
         samples.append({
-            "game_id": row["game_id"],
+            "episode_uid": row["episode_uid"],
             "round_number": row["round_number"],
             "pair": row["pair"],
             "joint_efficiency": row["joint_efficiency"],
@@ -191,7 +191,7 @@ def print_summary(results: dict) -> None:
     if samples:
         print(f"\nSample perfunctory fair rounds ({min(len(samples), 5)}/{len(samples)}):")
         for s in samples[:5]:
-            print(f"\n  --- {s['game_id'][:8]} R{s['round_number']} "
+            print(f"\n  --- {s['episode_uid'][:8]} R{s['round_number']} "
                   f"[{s['pair']}] eff={s['joint_efficiency']:.2f} ---")
             print(f"  A alloc: {s['a_alloc']}")
             print(f"  B alloc: {s['b_alloc']}")

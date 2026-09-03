@@ -1,4 +1,4 @@
-"""Wrapper: imports buyer_seller (registers the game), then defers to expt-runner CLI.
+"""Wrapper: imports buyer_seller (registers the environment), then defers to expt-runner CLI.
 
 Usage:
 

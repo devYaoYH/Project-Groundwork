@@ -53,7 +53,7 @@ def test_save_and_load_round_trip(tmp_path):
 
     records = store.load_all()
     assert len(records) == 1
-    assert records[0]["game_id"] == "g1"
+    assert records[0]["episode_uid"] == "g1"
     assert records[0]["score"] == 3
     assert records[0]["judged_at"]
 
@@ -110,7 +110,7 @@ def test_corrupt_lines_are_skipped_not_fatal(tmp_path):
         f.write("{not json\n")
     store.save("g2", JUDGMENT, judge_model="m", prompt_version="v1")
 
-    assert {r["game_id"] for r in store.load_all()} == {"g1", "g2"}
+    assert {r["episode_uid"] for r in store.load_all()} == {"g1", "g2"}
 
 
 # --- resume ------------------------------------------------------------------

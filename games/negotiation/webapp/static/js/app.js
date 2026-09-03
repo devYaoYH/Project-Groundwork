@@ -4,7 +4,7 @@ import { applyProvider, initConfigListeners, handleModelSelect, generateScenario
 import { launchGame, openLiveView, stopGame, sendHumanInput, exportGameLog } from './live.js';
 import { loadHistory, loadLocalGameDetail, loadGameDetail, exportLocalGame } from './history.js';
 import { loadDataset, exportCurrentTrace, exportDatasetJSONL, initDatasetListeners } from './dataset.js';
-import { launchBatch } from './batch.js';
+import { launchCell } from './cell.js';
 import { handleJSONLImport } from './export.js';
 import { launchQuickGame, initQuickstart } from './quickstart.js';
 
@@ -138,7 +138,7 @@ window.handleJSONLImport = async (event) => {
     const imported = await handleJSONLImport(event);
     if (imported > 0) loadHistory();
 };
-window.launchBatch = launchBatch;
+window.launchCell = launchCell;
 window.generateScenario = generateScenario;
 window.exportCurrentTrace = exportCurrentTrace;
 window.exportDatasetJSONL = exportDatasetJSONL;

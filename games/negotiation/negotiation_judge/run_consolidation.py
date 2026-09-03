@@ -85,7 +85,7 @@ def main():
     else:
         api_key = get_api_key_for_provider(provider_name)
     if not api_key and not args.dry_run:
-        log.error("No API key found for provider '%s'. Check your environment variables.", provider_name)
+        log.error("No API key found for provider '%s'. Check your release variables.", provider_name)
         sys.exit(1)
 
     if not firestore_available():
@@ -124,7 +124,7 @@ def main():
             judgments.append(GameJudgment.model_validate(clean))
         except Exception as e:
             parse_errors += 1
-            log.warning("Failed to parse judgment %s: %s", doc.get("game_id", "?"), e)
+            log.warning("Failed to parse judgment %s: %s", doc.get("episode_uid", "?"), e)
 
     log.info("Parsed %d judgments (%d parse errors)", len(judgments), parse_errors)
 
@@ -211,7 +211,7 @@ def main():
     raw_dir = output_dir / "raw"
     raw_dir.mkdir(exist_ok=True)
     for j in judgments:
-        path = raw_dir / f"{j.game_id}.json"
+        path = raw_dir / f"{j.episode_uid}.json"
         if not path.exists():
             with open(path, "w") as f:
                 json.dump(j.model_dump(), f, indent=2)

@@ -1,4 +1,4 @@
-"""Game-agnostic rating utilities."""
+"""Environment-agnostic rating utilities."""
 
 from a2a_engine.ratings.openskill import OpenSkillRater
 from a2a_engine.ratings.pipeline import (

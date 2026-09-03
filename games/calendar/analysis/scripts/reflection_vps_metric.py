@@ -12,9 +12,9 @@ it moves toward the target's actual calendar state:
 * actual free + negative occupied delta -> loss
 * wrong-direction movement -> 0 calibrated loss
 
-The uncalibrated movement is also reported as ``raw_vps_loss``. Per-game target
+The uncalibrated movement is also reported as ``raw_vps_loss``. Per-environment target
 summaries include ``excess_calibrated_vps_loss_total``, which subtracts the
-unavoidable five-slot communication floor for a five-round calendar game.
+unavoidable five-slot communication floor for a five-round calendar environment.
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ def _slot_rows(rows: list[dict[str, str]], *, source: str) -> list[dict[str, Any
         calibrated_loss = max(0.0, truth_sign * delta) / DELTA_MAX
         out.append({
             "trace_path": row.get("trace_path"),
-            "game_id": row.get("game_id"),
+            "episode_uid": row.get("episode_uid"),
             "round": row.get("round"),
             "observer_agent": observer_agent,
             "target_agent": target_agent,
@@ -153,17 +153,17 @@ def main() -> int:
     parser.add_argument("--out-dir", default="analysis/outputs/reflection_vps_metric")
     parser.add_argument("--source", choices=["sampled", "floor", "upper"], default="sampled")
     parser.add_argument(
-        "--game-vps-floor",
+        "--environment-vps-floor",
         type=float,
         default=DEFAULT_GAME_VPS_FLOOR,
-        help="Unavoidable slot-equivalent VPS floor subtracted from every game-target total.",
+        help="Unavoidable slot-equivalent VPS floor subtracted from every environment-target total.",
     )
     args = parser.parse_args()
 
     input_path = Path(args.reflection_slot_csv)
     out_dir = Path(args.out_dir)
     rows = _slot_rows(_read_rows(input_path), source=args.source)
-    by_game_target = _group(rows, ("game_id", "target_agent"), vps_floor=args.game_vps_floor)
+    by_game_target = _group(rows, ("episode_uid", "target_agent"), vps_floor=args.game_vps_floor)
     by_target = _group(rows, ("target_agent",))
     by_observer = _group(rows, ("observer_agent",))
 

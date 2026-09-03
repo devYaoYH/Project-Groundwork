@@ -1,19 +1,19 @@
 """NegotiationGame — the a2a-engine plugin wrapper around the existing engine.
 
-This is an *adapter*, not a reimplementation. All game logic stays in
+This is an *adapter*, not a reimplementation. All environment logic stays in
 ``negotiation_game.backend.engine.GameEngine``, which was already headless: it
 takes a resolved ``GameConfig`` plus two agent implementations and exposes
 ``on_event(callback)`` / ``await run_game()``. The only things this module adds are:
 
-1. a ``GameConfigBase`` subclass so experiment YAML validates,
-2. an event adapter turning engine events into ``GameEvent``s (with cheap talk
-   normalized to the ``{speaker, text}`` shape the judge and ``GameDataset``
+1. a ``EpisodeConfigBase`` subclass so experiment YAML validates,
+2. an event adapter turning engine events into ``Event``s (with cheap talk
+   normalized to the ``{speaker, text}`` shape the judge and ``EpisodeDataset``
    expect), and
 3. the sync ``run()`` the runner contract wants, wrapping ``asyncio.run``.
 
 The previous HTTP path (``scripts/run_experiment.py`` POSTing to a live server
-and polling ``/api/batch/status``) is gone: the runner now executes games
-in-process like every other game.
+and polling ``/api/cell/status``) is gone: the runner now executes games
+in-process like every other environment.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Any
 
 from pydantic import Field
 
-from a2a_engine import GameConfigBase, GameEvent, GameTraceBase, register_game
+from a2a_engine import EpisodeConfigBase, Event, EpisodeTrace, register_environment
 from a2a_engine.redis_stream import publisher_from_config
 
 from negotiation_game.backend.agents import make_agent
@@ -43,14 +43,14 @@ from negotiation_game.backend.defaults import (
 
 #: Engine event types that carry natural-language utterances. These are
 #: re-emitted with ``{speaker, text}`` so ``to_messages_df()`` and the judge's
-#: transcript builder work on negotiation traces without game-specific code.
+#: transcript builder work on negotiation episodes without environment-specific code.
 MESSAGE_EVENT_TYPES = {"cheap_talk", "message", "talk_turn"}
 
 
-class NegotiationConfig(GameConfigBase):
+class NegotiationConfig(EpisodeConfigBase):
     """Experiment-facing config. Mirrors ``backend.engine.GameConfig`` fields."""
 
-    game_name: str = "negotiation"
+    environment_id: str = "negotiation"
     num_agents: int = 2
 
     # --- economy ---
@@ -76,6 +76,7 @@ class NegotiationConfig(GameConfigBase):
     scenario_synergy: dict | None = None
     agent_shifting: list[bool] = Field(default_factory=lambda: [False, False])
     scenario_pool_path: str | None = None
+    mc_ratio: float | None = None
     target_mc_ratio: float | None = None
     rotate_projects: bool = False
     named_projects: bool = False
@@ -106,7 +107,7 @@ def _to_engine_config(cfg: NegotiationConfig) -> GameConfig:
 #: Fields ``GameConfig.__post_init__`` overwrites unconditionally. They are not
 #: settable knobs: the engine always shows an agent its own projects and always
 #: hides the opponent's reward. Listing them here keeps the trace honest instead
-#: of recording a requested value the game ignored.
+#: of recording a requested value the environment ignored.
 ENGINE_PINNED_FIELDS = ("visible_utilities", "visible_opponent_reward")
 
 
@@ -117,21 +118,21 @@ def _sync_effective_config(cfg: NegotiationConfig, engine_cfg: GameConfig) -> No
 
 
 class NegotiationGame:
-    """Runs one negotiation game and returns a ``GameTraceBase``."""
+    """Runs one negotiation environment and returns a ``EpisodeTrace``."""
 
     def __init__(self, config: dict, dry_run: bool = False) -> None:
         self.config = NegotiationConfig(**config)
         self.dry_run = dry_run
-        self.events: list[GameEvent] = []
+        self.events: list[Event] = []
         self._publisher = publisher_from_config(self.config)
 
     # --- event adaptation ---
 
     def _record(self, event_type: str, data: dict) -> None:
-        """Translate one engine event into a GameEvent.
+        """Translate one engine event into a Event.
 
         Cheap-talk events get a ``{speaker, text}`` projection layered on top of
-        their original payload; nothing is dropped, so game-specific analysis
+        their original payload; nothing is dropped, so environment-specific analysis
         that reads the raw fields keeps working.
         """
         payload = dict(data)
@@ -141,7 +142,7 @@ class NegotiationGame:
             if speaker is not None and text is not None:
                 payload.setdefault("speaker", speaker)
                 payload.setdefault("text", text)
-        event = GameEvent(type=event_type, timestamp=datetime.now(timezone.utc), data=payload)
+        event = Event(type=event_type, timestamp=datetime.now(timezone.utc), data=payload)
         self.events.append(event)
         if self._publisher is not None:
             self._publisher.publish(event)
@@ -162,12 +163,12 @@ class NegotiationGame:
 
     # --- runner contract ---
 
-    def run(self) -> GameTraceBase:
+    def run(self) -> EpisodeTrace:
         started = datetime.now(timezone.utc)
         engine_config = _to_engine_config(self.config)
         # The engine's __post_init__ pins some fields regardless of what was
         # requested. Copy the effective values back so the trace records the
-        # config the game was actually played under, not the one asked for.
+        # config the environment was actually played under, not the one asked for.
         _sync_effective_config(self.config, engine_config)
         agent_a, agent_b = self._make_agents()
 
@@ -179,8 +180,8 @@ class NegotiationGame:
         if self._publisher is not None:
             self._publisher.flush()
 
-        return GameTraceBase(
-            game_id="",  # the runner assigns this
+        return EpisodeTrace(
+            episode_uid="",  # the runner assigns this
             config=self.config,
             events=self.events,
             final_state=result,
@@ -199,7 +200,7 @@ def _metrics_from_result(result: dict) -> dict[str, Any]:
     """Lift headline numbers out of the engine's result dict.
 
     Kept deliberately small: ``final_state`` already holds the full result, so
-    ``metrics`` only carries what cross-game comparison and leaderboards need.
+    ``metrics`` only carries what cross-environment comparison and leaderboards need.
     """
     rounds = result.get("rounds", []) or []
     a_total = result.get("agent_a_cumulative_reward")

@@ -17,7 +17,7 @@ from negotiation_analysis.models import NegotiationDataset
 
 
 def analyze_anchoring(dataset: NegotiationDataset) -> pd.DataFrame:
-    """One row per consecutive round pair (game-level, not per-agent).
+    """One row per consecutive round pair (environment-level, not per-agent).
 
     Draws allocation columns from NegotiationDataset.to_round_df() so that
     alloc_same_as_prev and joint_reward_improved stay in sync with the SQL
@@ -32,9 +32,9 @@ def analyze_anchoring(dataset: NegotiationDataset) -> pd.DataFrame:
     if pairs.empty:
         return pd.DataFrame()
 
-    # Bring in per-game metadata already in round_df; add prev-round columns via shift
-    round_df_sorted = round_df.sort_values(["game_id", "round_number"])
-    prev_cols = round_df_sorted.groupby("game_id")[
+    # Bring in per-environment metadata already in round_df; add prev-round columns via shift
+    round_df_sorted = round_df.sort_values(["episode_uid", "round_number"])
+    prev_cols = round_df_sorted.groupby("episode_uid")[
         ["overdrawn", "joint_efficiency", "joint_reward"]
     ].shift(1)
     prev_cols.columns = ["prev_overdrawn", "prev_joint_efficiency", "prev_joint_reward"]
@@ -48,7 +48,7 @@ def analyze_anchoring(dataset: NegotiationDataset) -> pd.DataFrame:
     )
 
     return pairs[[
-        "game_id", "experiment_label", "model_a", "model_b", "pair",
+        "episode_uid", "experiment_label", "model_a", "model_b", "pair",
         "mode", "is_shifting", "mc_bucket", "share_projects", "think_about_opponent",
         "round_number",
         "prev_overdrawn", "prev_joint_efficiency", "prev_joint_reward", "prev_joint_optimal",
@@ -61,8 +61,8 @@ def analyze_anchoring(dataset: NegotiationDataset) -> pd.DataFrame:
 def _slice_summary(df: pd.DataFrame, label: str, groupby: str, total_pairs: int) -> None:
     """Print anchoring + improvement + stubborn-anchor rates grouped by a single column."""
     grp = df.groupby(groupby).agg(
-        n=("game_id", "count"),
-        pct_of_all_pairs=("game_id", lambda x: len(x) / total_pairs),
+        n=("episode_uid", "count"),
+        pct_of_all_pairs=("episode_uid", lambda x: len(x) / total_pairs),
         pct_same_alloc=("alloc_same_as_prev", "mean"),
         pct_improved=("joint_reward_improved", "mean"),
         pct_prev_optimal=("prev_joint_optimal", "mean"),
