@@ -18,16 +18,19 @@ DECLARATION = ReleaseDeclaration(
     source_url="https://github.com/devYaoYH/Project-Groundwork/tree/main/games/buyer-seller",
     engine=EngineConfig(environment_id="buyer_seller", defaults={"num_agents": 2}),
     parameters=[
-        # The valuation triple travels with the closed-form oracle result, so
-        # a design selects rows on it rather than writing it.  ``num_items``
-        # varies 2/3 across the bank: a design that neither factors nor pins
-        # it must say so, because otherwise it varies inside every cell.
+        # These four values are the complete frozen tuple for the configured
+        # bargaining oracle. A design selects rows on them rather than writing
+        # them. In particular, discount_factor changes the discounted optimum
+        # and therefore belongs to the item alongside its oracle result.
         ParameterConfig(name="seller_cost", type="continuous", source="item"),
         ParameterConfig(name="buyer_value", type="continuous", source="item"),
         ParameterConfig(name="num_items", type="integer", source="item"),
-        ParameterConfig(name="discount_factor", type="continuous", domain=(0.01, 1.0)),
+        ParameterConfig(name="discount_factor", type="continuous", source="item"),
         ParameterConfig(name="enforce_monotonic_offers", type="boolean", domain=[True, False]),
-        ParameterConfig(name="max_rounds", type="integer", domain=(1.0, 50.0)),
+        # The release fixes its 10-round protocol horizon. Every bank row has
+        # at most three units, so the frozen horizon admits the row's complete
+        # discounted first-best.
+        ParameterConfig(name="max_rounds", type="integer", domain=(1.0, 50.0), fixed=True),
     ],
     roles=[
         RoleConfig(id="seller", accepts=["llm", "scripted", "human"]),
@@ -42,5 +45,5 @@ DECLARATION = ReleaseDeclaration(
         MeasureConfig(name="efficiency", producer="environment", direction="maximize"),
         MeasureConfig(name="joint_utility", producer="environment", direction="maximize"),
     ],
-    oracle_version="closed-form-v1",
+    oracle_version="closed-form-v3",
 )

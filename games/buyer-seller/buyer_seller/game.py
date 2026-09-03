@@ -49,6 +49,28 @@ SOLD_OUT = "inventory_exhausted"
 DEADLINE = "deadline_reached"
 
 
+def undiscounted_total_surplus(
+    seller_cost: float, buyer_value: float, num_items: int
+) -> float:
+    """Informational total surplus before the configured discount is applied.
+
+    This is not the configured-game oracle optimum. The item-bank oracle is the
+    discounted first-best for the complete frozen item tuple, including
+    ``discount_factor``.
+    """
+
+    return max(0.0, buyer_value - seller_cost) * num_items
+
+
+def best_joint_utility(
+    seller_cost: float, buyer_value: float, num_items: int, discount_factor: float
+) -> float:
+    """First-best under the row's discount and the release-fixed horizon."""
+
+    gains = max(0.0, buyer_value - seller_cost)
+    return sum(discount_factor ** index * gains for index in range(num_items))
+
+
 class BuyerSellerConfig(EpisodeConfigBase):
     """Config for the buyer-seller bargaining environment.
 
@@ -351,8 +373,8 @@ class BuyerSellerGame:
         # it can, one per round. Not k*(v-c) — that would ignore the discounting
         # the protocol imposes and make efficiency unreachable by construction.
         gains = max(0.0, cfg.buyer_value - cfg.seller_cost)
-        best_joint = sum(
-            cfg.discount_factor ** i * gains for i in range(cfg.num_items)
+        best_joint = best_joint_utility(
+            cfg.seller_cost, cfg.buyer_value, cfg.num_items, cfg.discount_factor
         )
 
         return {
@@ -363,6 +385,10 @@ class BuyerSellerGame:
             "buyer_utility": round(buyer_utility, 6),
             "seller_utility": round(seller_utility, 6),
             "joint_utility": round(joint, 6),
+            "best_joint_utility": round(best_joint, 6),
+            "undiscounted_total_surplus": round(
+                undiscounted_total_surplus(cfg.seller_cost, cfg.buyer_value, cfg.num_items), 6
+            ),
             "efficiency": round(joint / best_joint, 6) if best_joint > 0 else None,
             "gains_from_trade": round(gains, 6),
             "buyer_share": round(buyer_utility / joint, 6) if joint > 0 else None,

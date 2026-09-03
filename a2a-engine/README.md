@@ -83,7 +83,7 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from calendar_game.ratings import CalendarRatingAdapter
 
-store = SQLiteEpisodeStore(path="./results/a2a_traces.db")
+store = SQLiteEpisodeStore(path="./results/a2a.db")
 snapshot = rebuild_rating_snapshot(store, CalendarRatingAdapter()).snapshot
 ```
 

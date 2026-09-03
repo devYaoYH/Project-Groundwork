@@ -22,7 +22,7 @@ owns the scheduling protocol; the engine owns persistence and reporting:
 ```bash
 uv run python games/calendar/analysis/scripts/ingest_vps_artifacts.py \
   analysis/outputs/reflection_vps_metric/game_target_summary.csv \
-  --database ./results/a2a_traces.db --rebuild
+  --database ./results/a2a.db --rebuild
 ```
 
 The local Compose stack is the supported default. It uses SQLite and no cloud

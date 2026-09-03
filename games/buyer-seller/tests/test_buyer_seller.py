@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from buyer_seller.game import DEADLINE, SOLD_OUT, BuyerSellerConfig, BuyerSellerGame
+from buyer_seller.game import (
+    DEADLINE,
+    SOLD_OUT,
+    BuyerSellerConfig,
+    BuyerSellerGame,
+    best_joint_utility,
+    undiscounted_total_surplus,
+)
 
 
 def run(**overrides):
@@ -74,6 +81,17 @@ def test_later_trades_are_discounted_more():
     discounts = [tr["discount"] for tr in trades]
     assert discounts == sorted(discounts, reverse=True)
     assert discounts[0] > discounts[-1]
+
+
+def test_best_joint_utility_matches_the_item_tuple_discount_factor():
+    """The configured-game optimum includes delta; total surplus is informational."""
+    assert undiscounted_total_surplus(8.0, 30.0, 3) == 66.0
+    assert best_joint_utility(8.0, 30.0, 3, 1.0) == 66.0
+    assert best_joint_utility(8.0, 30.0, 3, 0.5) == pytest.approx(38.5)
+
+    trace = run(seller_cost=8.0, buyer_value=30.0, num_items=3, discount_factor=0.5)
+    assert trace.metrics["best_joint_utility"] == pytest.approx(38.5)
+    assert trace.metrics["undiscounted_total_surplus"] == 66.0
 
 
 def test_no_trade_yields_zero_utility():

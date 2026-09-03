@@ -6,17 +6,32 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from a2a_engine.event_sink import JsonlEventSink, current_event_sink
 from a2a_engine.schemas import Event, EpisodeTrace
 
 
 class EventLog:
-    """Thread-safe in-memory event accumulator."""
+    """Thread-safe event accumulator with a durable local sink.
 
-    def __init__(self, on_event: Callable[[Event], None] | None = None) -> None:
+    Appending writes to the local event log *before* publishing anywhere else,
+    so an episode interrupted between two events is still recoverable as a
+    partial trace with no Redis in the picture.  The Redis stream, when one is
+    configured, is now a second copy rather than the only incremental one.
+    """
+
+    def __init__(
+        self,
+        on_event: Callable[[Event], None] | None = None,
+        *,
+        sink: JsonlEventSink | None = None,
+    ) -> None:
         self._events: list[Event] = []
         self._lock = threading.Lock()
         self._on_event = on_event
         self._publisher = None
+        # The runner owns the sink for the episode it is running; a environment built
+        # outside a runner (a test, a notebook) simply has none.
+        self._sink = sink if sink is not None else current_event_sink.get()
 
     @classmethod
     def from_config(cls, config: Any) -> "EventLog":
@@ -36,11 +51,18 @@ class EventLog:
         ev = Event(type=type, data=data or {}, **extra)
         with self._lock:
             self._events.append(ev)
+        if self._sink is not None:
+            self._sink.write(ev)
         if self._on_event is not None:
             self._on_event(ev)
         return ev
 
     def all(self) -> list[Event]:
+        # Games call this once, when assembling the trace they return, so the
+        # episode's event log is complete and the file can be released. The
+        # runner closes it again in a finally; both are idempotent.
+        if self._sink is not None:
+            self._sink.close()
         if self._publisher is not None:
             self._publisher.flush()
         with self._lock:

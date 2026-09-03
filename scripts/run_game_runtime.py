@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", required=True, help="runtime/release.json")
     parser.add_argument("--experiment", help="override the release's experiment path")
-    parser.add_argument("--storage-path", default="/data/a2a_traces.db")
+    parser.add_argument("--storage-path", default="/data/a2a.db")
     parser.add_argument("--max-parallelism", type=int, default=1)
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

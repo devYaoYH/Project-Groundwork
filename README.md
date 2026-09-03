@@ -74,7 +74,7 @@ covers the per-environment runtime images and replay apps.
 
 ```
 [1/3] Sink reachability
-      OK   sqlite [./results/a2a_traces.db] (4ms): write/read/delete round-trip succeeded
+      OK   sqlite [./results/a2a.db] (4ms): write/read/delete round-trip succeeded
 [2/3] Experiment expansion
       OK   word_guess -> environment=word_guess
       OK   buyer_seller -> environment=buyer_seller

@@ -1,3 +1,6 @@
-{"item_id":"buyer_seller.low_cost","params":{"seller_cost":8.0,"buyer_value":30.0,"num_items":3},"oracle_result":{"joint_utility":60.0}}
-{"item_id":"buyer_seller.narrow_surplus","params":{"seller_cost":18.0,"buyer_value":24.0,"num_items":2},"oracle_result":{"joint_utility":12.0}}
-{"item_id":"buyer_seller.no_gains","params":{"seller_cost":25.0,"buyer_value":20.0,"num_items":2},"oracle_result":{"joint_utility":0.0}}
+{"item_id":"buyer_seller.low_cost.delta_050","params":{"seller_cost":8.0,"buyer_value":30.0,"num_items":3,"discount_factor":0.5},"oracle_result":{"best_joint_utility":38.5}}
+{"item_id":"buyer_seller.low_cost.delta_100","params":{"seller_cost":8.0,"buyer_value":30.0,"num_items":3,"discount_factor":1.0},"oracle_result":{"best_joint_utility":66.0}}
+{"item_id":"buyer_seller.moderate_cost.delta_050","params":{"seller_cost":12.0,"buyer_value":30.0,"num_items":3,"discount_factor":0.5},"oracle_result":{"best_joint_utility":31.5}}
+{"item_id":"buyer_seller.moderate_cost.delta_100","params":{"seller_cost":12.0,"buyer_value":30.0,"num_items":3,"discount_factor":1.0},"oracle_result":{"best_joint_utility":54.0}}
+{"item_id":"buyer_seller.narrow_surplus.delta_090","params":{"seller_cost":18.0,"buyer_value":24.0,"num_items":2,"discount_factor":0.9},"oracle_result":{"best_joint_utility":11.4}}
+{"item_id":"buyer_seller.no_gains.delta_090","params":{"seller_cost":25.0,"buyer_value":20.0,"num_items":2,"discount_factor":0.9},"oracle_result":{"best_joint_utility":0.0}}

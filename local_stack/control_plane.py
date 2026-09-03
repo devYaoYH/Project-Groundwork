@@ -5,6 +5,18 @@ browser.  A researcher selects an installed ``Release`` and an experiment
 YAML already present in the checked-out workspace; the existing ``a2a-run``
 contract remains the only episode executor.  The same records and ``Launcher``
 boundary are intended to be reused by a later Cloud Run implementation.
+
+It shares **one database** with the episode store (DDL in
+``a2a_engine.storage.schema``), which is what makes progress an identity join
+in SQL rather than a regex over the runner's stdout: the entire fan-out is
+materialised at launch time and ``episode_id`` is deterministic, so "which of
+these planned episodes exist" is a question the database can answer.  Stdout
+parsing survives only as a latency hint for the live event feed.
+
+Because that join needs no live process handle, reconciling after a restart
+follows for free: a launch whose runner died is resolved from the same query,
+and an attempt with no episode row is looked for in the durable event log
+before it is written off.
 """
 
 from __future__ import annotations
@@ -19,14 +31,24 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
+from a2a_engine.compiler import ExecutionPlan as CompiledExecutionPlan
+from a2a_engine.compiler import compile as compile_design
+from a2a_engine.compiler import validate as validate_design
+from a2a_engine.design import DesignValidationError, ValidationIssue, parse_design_text
+from a2a_engine.event_sink import iter_event_sinks, read_event_sink
 from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.items import ItemBank, derive_item_domain
+from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.registry import get_environment_spec, installed_environments
+from a2a_engine.storage.schema import apply_schema
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
+from a2a_engine.stream_projection import project_events_to_trace
 import yaml
 
 
@@ -62,6 +84,10 @@ def _digest(path: Path) -> str:
 class Release:
     id: str
     environment_id: str
+    version: str | None
+    declaration_sha256: str | None
+    item_bank_sha256: str | None
+    oracle_version: str | None
     package: str | None
     source_ref: str
     metadata: dict[str, Any]
@@ -77,6 +103,10 @@ class Experiment:
     yaml_path: str
     config_sha256: str
     created_at: str
+    design_text: str | None = None
+    design_sha256: str | None = None
+    locked_at: str | None = None
+    forked_from: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +117,10 @@ class Launch:
     max_parallelism: int
     trace_database: str
     created_at: str
+    mode: str = "live"
+    execution_path: str | None = None
+    shard_index: int | None = None
+    shard_count: int | None = None
     started_at: str | None = None
     ended_at: str | None = None
     error: str | None = None
@@ -94,11 +128,22 @@ class Launch:
 
 @dataclass(frozen=True)
 class Attempt:
+    """One execution of an episode.
+
+    ``episode_id`` is stable across attempts and ``attempt`` is monotonic per
+    episode across launches, which is what cleanly attributes every attempt
+    back to its experiment and cell.  A failed attempt is kept rather than
+    tombstoned: it is diagnostically valuable, and "the result for this
+    episode" is a query -- the completed attempt with the highest number -- not
+    a stored flag two analyses can disagree about.
+    """
+
     id: str
     launch_id: str
     episode_id: str
     cell_id: str
     episode_idx: int
+    attempt: int
     status: str
     episode_uri: str | None = None
     error: str | None = None
@@ -108,6 +153,10 @@ class Attempt:
 
 class OracleUnavailable(ValueError):
     """Raised when a release ships an item bank without an oracle."""
+
+class DesignDigestMismatch(ValueError):
+    """A lock or launch received text different from the preregistered digest."""
+
 
 
 class Launcher(Protocol):
@@ -130,7 +179,7 @@ class LocalLauncher:
             sys.executable,
             "-m",
             "expt_runner.run_experiment",
-            experiment.yaml_path,
+            launch.execution_path or experiment.yaml_path,
             "--storage-path",
             launch.trace_database,
             "--max-parallelism",
@@ -142,6 +191,8 @@ class LocalLauncher:
         ]
         if smoke_test:
             command += ["--smoke-test", "--smoke-episodes-per-cell", str(SMOKE_EPISODES_PER_CELL)]
+        if launch.mode == "dry_run":
+            command.append("--dry-run")
         env = dict(os.environ)
         env.setdefault("A2A_CAPTURE_CONTENT", "true")
         env.setdefault("OTEL_TRACES_EXPORTER", "file")
@@ -194,59 +245,59 @@ class ControlPlane:
     """Persistence, validation, and event log for local releases and launches."""
 
     def __init__(self, path: str | Path, *, workspace: str | Path,
-                 trace_database: str | Path) -> None:
+                 results_dir: str | Path | None = None) -> None:
         self.path = Path(path)
         self.workspace = Path(workspace).resolve()
-        self.trace_database = Path(trace_database).resolve()
+        # One database. The episode store writes ``episodes`` into the same
+        # file, which is what lets the fact table join its dimensions in SQL
+        # and retires the ``trace_uri`` regex entirely.
+        self.trace_database = self.path
+        self.results_dir = Path(results_dir) if results_dir else self.path.parent / "results"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self.launcher: Launcher = LocalLauncher(self.workspace, self)
+        # A launcher persists no PID and its watcher thread dies with the
+        # process, so a launch interrupted by a restart would otherwise read
+        # RUNNING forever. Nothing is live yet at construction time, so every
+        # non-terminal launch found here is by definition stranded.
+        self.reconcile()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        # The runner subprocess writes episodes into this same file, so the two
+        # owners must agree on journal mode from the first connection: changing
+        # it needs an exclusive lock, and a runner that finds the database in
+        # rollback mode fails its sink preflight with "database is locked"
+        # while the server merely has it open. WAL also lets the viewer read
+        # while a launch is writing.
+        connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        """One short-lived connection, committed and then actually closed.
+
+        ``with sqlite3.connect(...)`` commits but does not close, which leaked
+        a connection per request. That was survivable while this file was the
+        control plane's alone; sharing it with a runner subprocess makes every
+        lingering handle something the writer has to wait behind.
+        """
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    def _store(self) -> SQLiteEpisodeStore:
+        return SQLiteEpisodeStore(path=self.path, results_dir=self.results_dir)
+
     def _init_db(self) -> None:
-        with self._connect() as db:
-            db.executescript("""
-                PRAGMA foreign_keys = ON;
-                CREATE TABLE IF NOT EXISTS releases (
-                    id TEXT PRIMARY KEY, environment_id TEXT NOT NULL UNIQUE,
-                    package TEXT, source_ref TEXT NOT NULL, metadata TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS experiments (
-                    id TEXT PRIMARY KEY, name TEXT NOT NULL, environment_id TEXT NOT NULL,
-                    release_id TEXT NOT NULL REFERENCES releases(id),
-                    yaml_path TEXT NOT NULL, config_sha256 TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS launches (
-                    id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL REFERENCES experiments(id),
-                    status TEXT NOT NULL, max_parallelism INTEGER NOT NULL,
-                    trace_database TEXT NOT NULL, created_at TEXT NOT NULL,
-                    started_at TEXT, ended_at TEXT, error TEXT
-                );
-                CREATE TABLE IF NOT EXISTS attempts (
-                    id TEXT PRIMARY KEY, launch_id TEXT NOT NULL REFERENCES launches(id),
-                    episode_id TEXT NOT NULL, cell_id TEXT NOT NULL, episode_idx INTEGER NOT NULL,
-                    status TEXT NOT NULL, episode_uri TEXT, error TEXT,
-                    started_at TEXT, ended_at TEXT
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_episode_attempt_unique
-                    ON attempts(launch_id, episode_id);
-                CREATE TABLE IF NOT EXISTS launch_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    launch_id TEXT NOT NULL REFERENCES launches(id),
-                    kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
-                );
-            """)
-            columns = {
-                row["name"] for row in db.execute("PRAGMA table_info(experiments)").fetchall()
-            }
-            if "environment_id" not in columns:
-                db.execute("ALTER TABLE experiments ADD COLUMN environment_id TEXT")
+        with self._session() as db:
+            apply_schema(db)
             db.execute("""
                 UPDATE experiments
                 SET environment_id = (
@@ -258,8 +309,15 @@ class ControlPlane:
             """)
 
     def seed_installed_releases(self) -> list[Release]:
+        """Register every installed release as a dimension row.
+
+        The release id is the declaration's own id, not a launcher-local
+        invention: the runner stamps that same id into every episode's
+        provenance, so the fact table's ``release_id`` resolves here rather
+        than into a second namespace nothing can join.
+        """
         created: list[Release] = []
-        with self._connect() as db:
+        with self._session() as db:
             # Only entry-point games are releases. A environment registered directly at
             # runtime has no package behind it, so offering it as a launchable
             # release would present a release with nothing to run.
@@ -268,34 +326,49 @@ class ControlPlane:
                 declaration = spec.declaration
                 if declaration is None:
                     continue
-                metadata = {
-                    "launcher": "local",
-                    "entrypoint": environment_id,
-                    "version": declaration.version,
-                    "declaration_sha256": declaration.content_sha256(),
-                    "item_bank_sha256": declaration.item_policy.item_bank_sha256
-                    if declaration.item_policy is not None else None,
-                    "oracle_version": declaration.oracle_version,
-                    "source_url": declaration.source_url,
-                    "blurb": declaration.blurb,
-                }
+                release = Release(
+                    id=str(declaration.id or environment_id),
+                    environment_id=environment_id,
+                    version=declaration.version,
+                    declaration_sha256=declaration.content_sha256(),
+                    item_bank_sha256=(
+                        declaration.item_policy.item_bank_sha256
+                        if declaration.item_policy is not None else None
+                    ),
+                    oracle_version=declaration.oracle_version,
+                    package=spec.package,
+                    source_ref="local-workspace",
+                    metadata={
+                        "launcher": "local",
+                        "entrypoint": environment_id,
+                        "source_url": declaration.source_url,
+                        "blurb": declaration.blurb,
+                    },
+                    created_at=_now(),
+                )
                 row = db.execute(
-                    "SELECT id FROM releases WHERE environment_id = ?", (environment_id,)
+                    "SELECT id FROM releases WHERE id = ?", (release.id,)
                 ).fetchone()
                 if row:
+                    # An episode may have projected this row out of its own
+                    # provenance before the control plane ever saw the release;
+                    # fill in what only the installed package knows.
                     db.execute(
-                        "UPDATE releases SET package = ?, source_ref = ?, metadata = ? WHERE id = ?",
-                        (spec.package, "local-workspace", _json(metadata), row["id"]),
+                        "UPDATE releases SET environment_id = ?, version = ?,"
+                        " declaration_sha256 = ?, item_bank_sha256 = ?, oracle_version = ?,"
+                        " package = ?, source_ref = ?, metadata = ? WHERE id = ?",
+                        (release.environment_id, release.version, release.declaration_sha256,
+                         release.item_bank_sha256, release.oracle_version, release.package,
+                         release.source_ref, _json(release.metadata), release.id),
                     )
                     continue
-                release = Release(
-                    id=f"local-{environment_id}", environment_id=environment_id,
-                    package=spec.package, source_ref="local-workspace",
-                    metadata=metadata, created_at=_now(),
-                )
                 db.execute(
-                    "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?)",
-                    (release.id, release.environment_id, release.package, release.source_ref,
+                    "INSERT INTO releases (id, environment_id, version, declaration_sha256,"
+                    " item_bank_sha256, oracle_version, package, source_ref, metadata, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (release.id, release.environment_id, release.version,
+                     release.declaration_sha256, release.item_bank_sha256,
+                     release.oracle_version, release.package, release.source_ref,
                      _json(release.metadata), release.created_at),
                 )
                 created.append(release)
@@ -303,14 +376,14 @@ class ControlPlane:
 
     def releases(self) -> list[Release]:
         self.seed_installed_releases()
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute("SELECT * FROM releases ORDER BY environment_id").fetchall()
         return [self._release(row) for row in rows]
 
     def environment_summaries(self) -> list[dict[str, Any]]:
         """Return the registered, researcher-visible release catalog."""
         releases = {release.environment_id: release for release in self.releases()}
-        with self._connect() as db:
+        with self._session() as db:
             counts = {
                 row["environment_id"]: row["experiment_count"]
                 for row in db.execute(
@@ -543,8 +616,48 @@ class ControlPlane:
             ),
         }
 
-    def create_experiment(self, *, yaml_path: str, release_id: str | None = None,
-                          name: str | None = None) -> Experiment:
+    def create_experiment(self, *, yaml_path: str | None = None,
+                          release_id: str | None = None, name: str | None = None,
+                          design_text: str | None = None,
+                          forked_from: str | None = None) -> Experiment:
+        """Create either a legacy YAML input or an authored design experiment.
+
+        Direct YAML execution remains available for probing environments. A
+        design is the preregistration record instead: its text is retained
+        verbatim, while its canonical digest identifies the authored content.
+        """
+        if design_text is not None:
+            if not name:
+                raise ValueError("a design experiment needs a name")
+            if not release_id:
+                raise ValueError("a design experiment needs a release_id")
+            design = parse_design_text(design_text)
+            release = self._release_by_id(release_id)
+            declaration = self._declaration(release.environment_id)
+            bank = self._item_bank(release.environment_id)
+            errors = validate_design(design, declaration, bank, release_id=release.id)
+            if errors:
+                raise DesignValidationError(errors)
+            experiment = Experiment(
+                id=str(uuid.uuid4()), name=name, environment_id=release.environment_id,
+                release_id=release.id, yaml_path="", config_sha256=design.content_sha256(),
+                created_at=_now(), design_text=design_text,
+                design_sha256=design.content_sha256(), forked_from=forked_from,
+            )
+            with self._session() as db:
+                db.execute(
+                    "INSERT INTO experiments (id, name, environment_id, release_id, yaml_path, "
+                    "config_sha256, design_text, design_sha256, locked_at, forked_from, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (experiment.id, experiment.name, experiment.environment_id,
+                     experiment.release_id, experiment.yaml_path, experiment.config_sha256,
+                     experiment.design_text, experiment.design_sha256, experiment.locked_at,
+                     experiment.forked_from, experiment.created_at),
+                )
+            return experiment
+
+        if yaml_path is None:
+            raise ValueError("provide either design_text or yaml_path")
         path = self._workspace_path(yaml_path)
         if not path.is_file() or path.suffix not in {".yaml", ".yml"}:
             raise ValueError("yaml_path must identify an experiment YAML within the workspace")
@@ -559,62 +672,311 @@ class ControlPlane:
             release_id=release.id, yaml_path=str(path.relative_to(self.workspace)),
             config_sha256=_digest(path), created_at=_now(),
         )
-        with self._connect() as db:
+        with self._session() as db:
             db.execute(
-                "INSERT INTO experiments VALUES (?, ?, ?, ?, ?, ?, ?)",
-                tuple(asdict(experiment).values()),
+                "INSERT INTO experiments (id, name, environment_id, release_id, yaml_path, "
+                "config_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (experiment.id, experiment.name, experiment.environment_id,
+                 experiment.release_id, experiment.yaml_path, experiment.config_sha256,
+                 experiment.created_at),
             )
         return experiment
 
     def experiments(self) -> list[Experiment]:
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute("SELECT * FROM experiments ORDER BY created_at DESC").fetchall()
         return [self._experiment(row) for row in rows]
 
-    def launch_experiment(self, experiment_id: str, *, max_parallelism: int = 1,
-                       smoke_test: bool = False) -> Launch:
-        if max_parallelism < 1:
-            raise ValueError("max_parallelism must be >= 1")
+    def experiment_detail(self, experiment_id: str) -> dict[str, Any]:
         experiment = self.experiment(experiment_id)
-        attempts = self._planned_attempts(experiment, smoke_test=smoke_test)
-        launch = Launch(
-            id=str(uuid.uuid4()), experiment_id=experiment.id, status="QUEUED",
-            max_parallelism=max_parallelism, trace_database=str(self.trace_database),
-            created_at=_now(),
+        with self._session() as db:
+            cells = db.execute(
+                "SELECT cell_id, levels, episodes_planned FROM cells "
+                "WHERE experiment_id = ? ORDER BY cell_id", (experiment_id,),
+            ).fetchall()
+            participants = db.execute(
+                "SELECT participant_id, kind, binding, config_sha256 FROM participants "
+                "WHERE experiment_id = ? ORDER BY participant_id", (experiment_id,),
+            ).fetchall()
+            launches = db.execute(
+                "SELECT id FROM launches WHERE experiment_id = ? ORDER BY created_at DESC", (experiment_id,)
+            ).fetchall()
+        return {
+            "experiment": asdict(experiment),
+            "cells": [
+                {"cell_id": row["cell_id"], "levels": json.loads(row["levels"]),
+                 "episodes_planned": row["episodes_planned"]}
+                for row in cells
+            ],
+            "roster": [dict(row) for row in participants],
+            "launches": [self.launch_detail(row["id"]) for row in launches],
+        }
+
+    def validate_design_text(self, *, release_id: str, design_text: str) -> dict[str, Any]:
+        """Validate and preview a draft without writing an experiment record."""
+        try:
+            design = parse_design_text(design_text)
+            release = self._release_by_id(release_id)
+            declaration = self._declaration(release.environment_id)
+            bank = self._item_bank(release.environment_id)
+            errors = validate_design(design, declaration, bank, release_id=release.id)
+            if errors:
+                return {"valid": False, "errors": [error.as_dict() for error in errors], "plan": None}
+            preview = compile_design(
+                design, declaration, bank, experiment_id="preview", experiment_name="preview",
+                release_id=release.id,
+            )
+            return {"valid": True, "errors": [], "plan": preview.as_api_dict()}
+        except DesignValidationError as exc:
+            return {"valid": False, "errors": [error.as_dict() for error in exc.errors], "plan": None}
+
+    def update_experiment_design(self, experiment_id: str, *, design_text: str) -> Experiment:
+        """Save a draft or fork a locked preregistration; never amend a lock."""
+        experiment = self.experiment(experiment_id)
+        if experiment.design_text is None:
+            raise ValueError("a legacy YAML experiment has no design document to edit")
+        if experiment.locked_at is not None:
+            return self.create_experiment(
+                name=f"{experiment.name} fork", release_id=experiment.release_id,
+                design_text=design_text, forked_from=experiment.id,
+            )
+        design = parse_design_text(design_text)
+        release = self._release_by_id(experiment.release_id)
+        errors = validate_design(
+            design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
+            release_id=release.id,
         )
-        with self._connect() as db:
+        if errors:
+            raise DesignValidationError(errors)
+        digest = design.content_sha256()
+        with self._session() as db:
             db.execute(
-                "INSERT INTO launches VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                tuple(asdict(launch).values()),
+                "UPDATE experiments SET design_text = ?, design_sha256 = ?, config_sha256 = ? WHERE id = ?",
+                (design_text, digest, digest, experiment.id),
+            )
+        return self.experiment(experiment_id)
+
+    def lock_experiment(self, experiment_id: str, *, design_sha256: str) -> Experiment:
+        """Preregister a design and materialise its entire fixed execution plan."""
+        experiment = self.experiment(experiment_id)
+        if experiment.design_text is None:
+            raise ValueError("only a design experiment can be locked")
+        if experiment.locked_at is not None:
+            return experiment
+        design = parse_design_text(experiment.design_text)
+        actual_digest = design.content_sha256()
+        if design_sha256 != actual_digest or experiment.design_sha256 != actual_digest:
+            raise DesignDigestMismatch("the design text no longer matches its recorded digest; fork it instead")
+        release = self._release_by_id(experiment.release_id)
+        declaration = self._declaration(release.environment_id)
+        bank = self._item_bank(release.environment_id)
+        plan = compile_design(
+            design, declaration, bank, experiment_id=experiment.id,
+            experiment_name=experiment.name, release_id=release.id,
+        )
+        locked_at = _now()
+        with self._session() as db:
+            db.execute("DELETE FROM cells WHERE experiment_id = ?", (experiment.id,))
+            db.execute("DELETE FROM participants WHERE experiment_id = ?", (experiment.id,))
+            self._sync_items(db, bank)
+            db.executemany(
+                "INSERT INTO cells (cell_id, experiment_id, levels, episodes_planned, episode_configs, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (cell.cell_id, experiment.id, _json(cell.levels), len(cell.episodes),
+                     _json([episode.config for episode in cell.episodes]), locked_at)
+                    for cell in plan.cells
+                ],
             )
             db.executemany(
-                "INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO participants (participant_id, experiment_id, kind, binding, config_sha256) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (participant.id, experiment.id, participant.kind, participant.binding,
+                     hashlib.sha256(_json(participant.model_dump(mode="json")).encode("utf-8")).hexdigest())
+                    for participant in design.roster
+                ],
+            )
+            db.execute("UPDATE experiments SET locked_at = ? WHERE id = ?", (locked_at, experiment.id))
+        return self.experiment(experiment.id)
+
+    def launch_experiment(self, experiment_id: str, *, max_parallelism: int = 1,
+                          smoke_test: bool = False, mode: str | None = None,
+                          shard_index: int | None = None,
+                          shard_count: int | None = None) -> Launch:
+        """Launch direct YAML or a fixed design plan.
+
+        A locked design consumes its persisted episode configs.  Smoke and
+        dry-run can compile an unlocked draft for feedback, but live execution
+        is always gated on its preregistration lock.
+        """
+        if max_parallelism < 1:
+            raise ValueError("max_parallelism must be >= 1")
+        mode = "smoke" if smoke_test else (mode or "live")
+        if mode not in {"live", "smoke", "dry_run"}:
+            raise ValueError("mode must be live, smoke, or dry_run")
+        if shard_count is not None and shard_count < 1:
+            raise ValueError("shard_count must be >= 1")
+        if shard_index is not None and shard_index < 0:
+            raise ValueError("shard_index must be >= 0")
+        if shard_count is not None and (shard_index or 0) >= shard_count:
+            raise ValueError("shard_index must be less than shard_count")
+        experiment = self.experiment(experiment_id)
+        execution_path: str | None = None
+        design_configs: list[dict[str, Any]] | None = None
+        if experiment.design_text is not None:
+            if mode == "live" and experiment.locked_at is None:
+                raise ValueError("live launch requires a locked preregistration")
+            design_configs = self._design_episode_configs(experiment, mode=mode)
+            effective_shard_count = shard_count or 1
+            effective_shard_index = shard_index or 0
+            design_configs = [
+                config for index, config in enumerate(design_configs)
+                if index % effective_shard_count == effective_shard_index
+            ]
+            if not design_configs:
+                raise ValueError("this shard contains no planned episodes")
+        else:
+            effective_shard_count = None
+            effective_shard_index = None
+
+        launch_id = str(uuid.uuid4())
+        launch = Launch(
+            id=launch_id, experiment_id=experiment.id, status="QUEUED",
+            max_parallelism=max_parallelism, trace_database=str(self.trace_database),
+            created_at=_now(), mode=mode, shard_index=effective_shard_index,
+            shard_count=effective_shard_count,
+        )
+        attempt_rows: list[tuple[str, str, int, int]]
+        with self._session() as db:
+            if design_configs is not None:
+                attempt_rows = []
+                for config in design_configs:
+                    episode_id = str(config["episode_id"])
+                    cell_id = str(config["provenance"]["cell_id"])
+                    episode_idx = int(config["provenance"]["episode_idx"])
+                    attempt = self._next_attempt(db, episode_id)
+                    config["provenance"] = dict(config["provenance"])
+                    config["provenance"]["attempt"] = attempt
+                    attempt_rows.append((episode_id, cell_id, episode_idx, attempt))
+            else:
+                attempt_rows = [
+                    (episode_id, cell_id, episode_idx, self._next_attempt(db, episode_id))
+                    for episode_id, cell_id, episode_idx in self._planned_attempts(
+                        experiment, smoke_test=mode == "smoke"
+                    )
+                ]
+
+        if design_configs is not None:
+            execution_path = self._write_execution_plan(launch.id, experiment, design_configs)
+            launch = Launch(
+                **{**asdict(launch), "execution_path": execution_path}
+            )
+
+        with self._session() as db:
+            db.execute(
+                "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
+                "mode, execution_path, shard_index, shard_count, created_at, started_at, ended_at, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (launch.id, launch.experiment_id, launch.status, launch.max_parallelism,
+                 launch.trace_database, launch.mode, launch.execution_path, launch.shard_index,
+                 launch.shard_count, launch.created_at, launch.started_at, launch.ended_at, launch.error),
+            )
+            db.executemany(
+                "INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (str(uuid.uuid4()), launch.id, episode_id, cell_id, episode_idx,
-                     "QUEUED", None, None, None, None)
-                    for episode_id, cell_id, episode_idx in attempts
+                     attempt, "QUEUED", None, None, None, None)
+                    for episode_id, cell_id, episode_idx, attempt in attempt_rows
                 ],
             )
             self._event(db, launch.id, "launch.queued", {
-                "episode_count": len(attempts), "mode": "smoke" if smoke_test else "live",
+                "episode_count": len(attempt_rows), "mode": mode,
             })
         self.launcher.launch(
-            launch, experiment, lambda line: self._line(launch.id, line), smoke_test=smoke_test,
+            launch, experiment, lambda line: self._line(launch.id, line), smoke_test=mode == "smoke",
         )
         return self.launch(launch.id)
+
+    def _design_episode_configs(self, experiment: Experiment, *, mode: str) -> list[dict[str, Any]]:
+        """Read the locked fixed plan or compile an unlocked smoke/dry-run draft."""
+        if experiment.design_text is None:
+            return []
+        design = parse_design_text(experiment.design_text)
+        if experiment.locked_at is not None:
+            if experiment.design_sha256 != design.content_sha256():
+                raise DesignDigestMismatch(
+                    "the locked design text changed; fork it instead of launching a different plan"
+                )
+            with self._session() as db:
+                rows = db.execute(
+                    "SELECT cell_id, episode_configs FROM cells WHERE experiment_id = ? ORDER BY cell_id",
+                    (experiment.id,),
+                ).fetchall()
+            if not rows:
+                raise ValueError("locked experiment has no persisted execution plan")
+            configs = [
+                config for row in rows for config in json.loads(row["episode_configs"])
+            ]
+        else:
+            release = self._release_by_id(experiment.release_id)
+            plan = compile_design(
+                design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
+                experiment_id=experiment.id, experiment_name=experiment.name, release_id=release.id,
+            )
+            configs = [episode.config for cell in plan.cells for episode in cell.episodes]
+
+        if mode == "smoke":
+            seen_cells: set[str] = set()
+            configs = [
+                config for config in configs
+                if not (config["provenance"]["cell_id"] in seen_cells
+                        or seen_cells.add(config["provenance"]["cell_id"]))
+            ]
+        return [json.loads(_json(config)) for config in configs]
+
+    def _write_execution_plan(
+        self, launch_id: str, experiment: Experiment, configs: list[dict[str, Any]]
+    ) -> str:
+        """Write runner-native YAML from the fixed per-episode design plan."""
+        path = self.results_dir / "plans" / experiment.id / f"{launch_id}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cells = []
+        for config in configs:
+            provenance = config["provenance"]
+            cells.append({
+                "label": f"planned-{provenance['cell_id']}-{provenance['episode_idx']:03d}",
+                "count": 1,
+                "config": {
+                    **config,
+                    "_design_episode": {
+                        "cell_id": provenance["cell_id"],
+                        "episode_idx": provenance["episode_idx"],
+                        "episode_id": config["episode_id"],
+                        "seed": config["seed"],
+                        "attempt": provenance["attempt"],
+                        "provenance": provenance,
+                    },
+                },
+            })
+        path.write_text(
+            yaml.safe_dump({"name": experiment.name, "cells": cells}, sort_keys=False),
+            encoding="utf-8",
+        )
+        return str(path)
 
     def cancel_launch(self, launch_id: str) -> Launch:
         launch = self.launch(launch_id)
         if launch.status not in {"QUEUED", "RUNNING"}:
             return launch
         if self.launcher.cancel(launch_id):
-            with self._connect() as db:
+            with self._session() as db:
                 db.execute("UPDATE launches SET status = ? WHERE id = ?", ("CANCELLING", launch_id))
                 self._event(db, launch_id, "launch.cancelling", {})
         return self.launch(launch_id)
 
     def launch(self, launch_id: str) -> Launch:
-        with self._connect() as db:
+        with self._session() as db:
             row = db.execute("SELECT * FROM launches WHERE id = ?", (launch_id,)).fetchone()
         if row is None:
             raise KeyError(f"unknown launch {launch_id}")
@@ -622,7 +984,7 @@ class ControlPlane:
 
     def launch_detail(self, launch_id: str) -> dict[str, Any]:
         launch = self.launch(launch_id)
-        with self._connect() as db:
+        with self._session() as db:
             attempts = db.execute(
                 "SELECT * FROM attempts WHERE launch_id = ? ORDER BY cell_id, episode_idx",
                 (launch_id,),
@@ -634,15 +996,196 @@ class ControlPlane:
                 {**asdict(self._attempt(row)), "redis_stream": prefix + row["episode_id"]}
                 for row in attempts
             ],
+            "progress": self.progress(launch_id),
         }
 
+    def planned_episode_ids(self, launch_id: str) -> list[str]:
+        """Every episode this launch was planned to execute, written at plan time."""
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT episode_id FROM attempts WHERE launch_id = ? "
+                "ORDER BY cell_id, episode_idx",
+                (launch_id,),
+            ).fetchall()
+        return [row["episode_id"] for row in rows]
+
+    def progress(self, launch_id: str) -> dict[str, Any]:
+        """Progress as an identity join over deterministic episode ids.
+
+        The whole fan-out is materialised before any episode runs, and the
+        episode store answers "which of these ids do you hold" -- the same
+        question ``--resume`` asks. Because both tables now live in one
+        database that is one query, and because it reads persisted state rather
+        than a process's stdout it survives a server restart unchanged.
+
+        A ``PARTIAL`` episode is a recovered fragment, not a completed run, so
+        it is deliberately not counted.
+        """
+        with self._session() as db:
+            rows = db.execute(
+                """
+                SELECT a.cell_id AS cell_id,
+                       COUNT(*) AS planned,
+                       SUM(CASE WHEN done.episode_id IS NOT NULL THEN 1 ELSE 0 END) AS completed,
+                       SUM(CASE WHEN a.status = 'FAILED' THEN 1 ELSE 0 END) AS failed
+                FROM attempts a
+                LEFT JOIN (
+                    SELECT DISTINCT episode_id FROM episodes WHERE status = 'COMPLETED'
+                ) done ON done.episode_id = a.episode_id
+                WHERE a.launch_id = ?
+                GROUP BY a.cell_id
+                ORDER BY a.cell_id
+                """,
+                (launch_id,),
+            ).fetchall()
+        by_cell = [
+            {"cell_id": row["cell_id"], "planned": row["planned"],
+             "completed": row["completed"], "failed": row["failed"]}
+            for row in rows
+        ]
+        return {
+            "by_cell": by_cell,
+            "planned": sum(cell["planned"] for cell in by_cell),
+            "completed": sum(cell["completed"] for cell in by_cell),
+            "failed": sum(cell["failed"] for cell in by_cell),
+        }
+
+    def reconcile(self) -> list[str]:
+        """Resolve launches whose runner process did not survive.
+
+        Called at construction, when no launch this instance started can be
+        live, so a non-terminal row here means the process that owned it is
+        gone. Each attempt is resolved from the identity join; one with no
+        episode row is looked for in the durable event log first, because an
+        attempt that died mid-episode is recoverable as a partial trace and
+        that is evidence worth keeping rather than a gap to write off.
+        """
+        live = set(getattr(self.launcher, "_processes", {}) or {})
+        with self._session() as db:
+            stranded = [
+                self._launch(row) for row in db.execute(
+                    "SELECT * FROM launches WHERE status IN ('QUEUED', 'RUNNING', 'CANCELLING')"
+                ).fetchall()
+            ]
+        resolved: list[str] = []
+        for launch in stranded:
+            if launch.id in live:
+                continue
+            self._reconcile_launch(launch)
+            resolved.append(launch.id)
+        return resolved
+
+    def _reconcile_launch(self, launch: Launch) -> None:
+        cancelled = launch.status == "CANCELLING"
+        now = _now()
+        with self._session() as db:
+            attempts = [
+                self._attempt(row) for row in db.execute(
+                    "SELECT * FROM attempts WHERE launch_id = ? AND status IN ('QUEUED', 'RUNNING')",
+                    (launch.id,),
+                ).fetchall()
+            ]
+            completed = {
+                row["episode_id"]: row["episode_uid"]
+                for row in db.execute(
+                    "SELECT episode_id, episode_uid FROM episodes WHERE status = 'COMPLETED'"
+                ).fetchall()
+            }
+        recovered: list[str] = []
+        for attempt in attempts:
+            episode_uid = completed.get(attempt.episode_id)
+            if episode_uid is not None:
+                self._resolve_attempt(
+                    attempt, status="COMPLETED",
+                    episode_uri=self._store().uri(episode_uid), error=None, ended_at=now,
+                )
+                continue
+            partial_uri = self._recover_partial(attempt)
+            if partial_uri is not None:
+                recovered.append(attempt.episode_id)
+            self._resolve_attempt(
+                attempt,
+                status="CANCELLED" if cancelled else "UNREPORTED",
+                episode_uri=partial_uri,
+                error=(
+                    "the runner process did not survive; a partial trace was recovered "
+                    "from this episode's event log"
+                    if partial_uri else
+                    "the runner process did not survive and reported no result for this episode"
+                ),
+                ended_at=now,
+            )
+        with self._session() as db:
+            outstanding = db.execute(
+                "SELECT COUNT(*) AS n FROM attempts WHERE launch_id = ? AND status != 'COMPLETED'",
+                (launch.id,),
+            ).fetchone()["n"]
+            status = "CANCELLED" if cancelled else ("COMPLETED" if not outstanding else "FAILED")
+            db.execute(
+                "UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?",
+                (status, now,
+                 None if status == "COMPLETED" else "reconciled after restart: the runner "
+                 "process did not survive",
+                 launch.id),
+            )
+            self._event(db, launch.id, "launch.reconciled", {
+                "status": status, "recovered_episode_ids": recovered,
+            })
+            self._event(db, launch.id, f"launch.{status.lower()}", {"reconciled": True})
+
+    def _resolve_attempt(self, attempt: Attempt, *, status: str, episode_uri: str | None,
+                         error: str | None, ended_at: str) -> None:
+        with self._session() as db:
+            db.execute(
+                "UPDATE attempts SET status = ?, episode_uri = ?, error = ?, ended_at = ? "
+                "WHERE id = ?",
+                (status, episode_uri, error, ended_at, attempt.id),
+            )
+
+    def _recover_partial(self, attempt: Attempt) -> str | None:
+        """Persist whatever the interrupted episode's event log holds.
+
+        The sink was flushed event by event as the episode played, so a run
+        killed between two events still has everything up to that point. The
+        recovered trace is stored with ``status = PARTIAL``: it is evidence for
+        inspection and retry, never a successful experimental result.
+        """
+        for path in iter_event_sinks(self.results_dir):
+            entries = read_event_sink(path)
+            if not entries or entries[0].get("episode_id") != attempt.episode_id:
+                continue
+            try:
+                trace = project_events_to_trace(path)
+            except ValueError:
+                continue
+            experiment_name = path.parent.name
+            manifest = EpisodeManifest.from_run(
+                config=trace.config.model_dump(),
+                experiment_name=experiment_name,
+                cell_id=attempt.cell_id,
+                episode_idx=attempt.episode_idx,
+                episode_uid=trace.episode_uid,
+            )
+            manifest.episode_id = attempt.episode_id
+            manifest.environment_id = str(trace.config.environment_id or "")
+            return self._store().put_episode(trace, manifest)
+        return None
+
+    @staticmethod
+    def _next_attempt(db: sqlite3.Connection, episode_id: str) -> int:
+        row = db.execute(
+            "SELECT COALESCE(MAX(attempt), 0) + 1 AS next FROM attempts WHERE episode_id = ?",
+            (episode_id,),
+        ).fetchone()
+        return int(row["next"])
+
     def launches(self) -> list[Launch]:
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute("SELECT * FROM launches ORDER BY created_at DESC").fetchall()
         return [self._launch(row) for row in rows]
 
     def events(self, launch_id: str, *, after_id: int = 0) -> list[dict[str, Any]]:
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute(
                 "SELECT * FROM launch_events WHERE launch_id = ? AND id > ? ORDER BY id",
                 (launch_id, after_id),
@@ -654,7 +1197,7 @@ class ControlPlane:
         ]
 
     def experiment(self, experiment_id: str) -> Experiment:
-        with self._connect() as db:
+        with self._session() as db:
             row = db.execute("SELECT * FROM experiments WHERE id = ?", (experiment_id,)).fetchone()
         if row is None:
             raise KeyError(f"unknown experiment {experiment_id}")
@@ -699,9 +1242,30 @@ class ControlPlane:
             expected_sha256=declaration.item_policy.item_bank_sha256,
         )
 
+    @staticmethod
+    def _sync_items(db: sqlite3.Connection, bank: ItemBank) -> None:
+        """Project the frozen bank rows selected by a locked design into SQL."""
+        db.executemany(
+            "INSERT INTO items (item_id, item_bank_sha256, params, oracle_result) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(item_id) DO UPDATE SET item_bank_sha256 = excluded.item_bank_sha256, "
+            "params = excluded.params, oracle_result = excluded.oracle_result",
+            [
+                (item.item_id, bank.item_bank_sha256, _json(item.params), _json(item.oracle_result))
+                for item in bank.items
+            ],
+        )
+
+    def _release_by_id(self, release_id: str) -> Release:
+        self.seed_installed_releases()
+        with self._session() as db:
+            row = db.execute("SELECT * FROM releases WHERE id = ?", (release_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"no release registered as {release_id!r}")
+        return self._release(row)
+
     def _release_for(self, environment_id: str, release_id: str | None) -> Release:
         self.seed_installed_releases()
-        with self._connect() as db:
+        with self._session() as db:
             if release_id:
                 row = db.execute("SELECT * FROM releases WHERE id = ?", (release_id,)).fetchone()
                 if row is None:
@@ -720,15 +1284,30 @@ class ControlPlane:
                         f"but the experiment declares {environment_id!r}"
                     )
             else:
-                row = db.execute("SELECT * FROM releases WHERE environment_id = ?", (environment_id,)).fetchone()
+                # Only the latest release is launchable while per-release
+                # runtime images are deferred; the release is still recorded on
+                # every episode.
+                row = db.execute(
+                    "SELECT * FROM releases WHERE environment_id = ? "
+                    "ORDER BY created_at DESC, id LIMIT 1",
+                    (environment_id,),
+                ).fetchone()
         if row is None:
             raise ValueError(f"no local release registered for environment {environment_id!r}")
         return self._release(row)
 
     def _line(self, launch_id: str, line: str) -> None:
+        """Fold one runner stdout line into the launch event log.
+
+        This is a *latency* path, not a truth path: it is what makes a live
+        launch feel responsive before the next progress query. Whether an
+        episode actually exists is settled by the identity join in
+        :meth:`progress` and :meth:`_finish_launch`, which is why a lost line
+        can no longer strand an attempt that in fact completed.
+        """
         if not line:
             return
-        with self._connect() as db:
+        with self._session() as db:
             self._event(db, launch_id, "runner.log", {"line": line})
             result = _LIVE_RESULT.search(line) or _SMOKE_RESULT.search(line)
             if result:
@@ -756,19 +1335,37 @@ class ControlPlane:
 
     def _mark_launch_started(self, launch_id: str) -> None:
         now = _now()
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("UPDATE launches SET status = ?, started_at = ? WHERE id = ?", ("RUNNING", now, launch_id))
             db.execute("UPDATE attempts SET status = ?, started_at = ? WHERE launch_id = ? AND status = ?", ("RUNNING", now, launch_id, "QUEUED"))
             self._event(db, launch_id, "launch.started", {})
 
     def _finish_launch(self, launch_id: str, code: int) -> None:
-        with self._connect() as db:
+        with self._session() as db:
             current = db.execute("SELECT status FROM launches WHERE id = ?", (launch_id,)).fetchone()
             cancelled = current and current["status"] == "CANCELLING"
             status = "CANCELLED" if cancelled else ("COMPLETED" if code == 0 else "FAILED")
             error = None if code == 0 or cancelled else f"runner exited with status {code}"
             now = _now()
             db.execute("UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?", (status, now, error, launch_id))
+            # Settle every still-open attempt against the episodes table before
+            # judging it silent. A dropped stdout line is a reporting failure,
+            # not a missing episode, and the join can tell the two apart.
+            db.execute(
+                """
+                UPDATE attempts
+                SET status = 'COMPLETED', ended_at = ?,
+                    episode_uri = COALESCE(episode_uri, (
+                        SELECT ? || e.episode_uid FROM episodes e
+                        WHERE e.episode_id = attempts.episode_id AND e.status = 'COMPLETED'
+                        ORDER BY e.attempt DESC LIMIT 1
+                    ))
+                WHERE launch_id = ? AND status = 'RUNNING' AND episode_id IN (
+                    SELECT episode_id FROM episodes WHERE status = 'COMPLETED'
+                )
+                """,
+                (now, f"{self._store().uri()}#", launch_id),
+            )
             if code == 0 and not cancelled:
                 # The runner exits zero only after every scheduled run
                 # succeeded, so a still-RUNNING attempt means the CLI never
@@ -808,7 +1405,11 @@ class ControlPlane:
 
     @staticmethod
     def _release(row: sqlite3.Row) -> Release:
-        return Release(row["id"], row["environment_id"], row["package"], row["source_ref"], json.loads(row["metadata"]), row["created_at"])
+        return Release(
+            row["id"], row["environment_id"], row["version"], row["declaration_sha256"],
+            row["item_bank_sha256"], row["oracle_version"], row["package"],
+            row["source_ref"], json.loads(row["metadata"] or "{}"), row["created_at"],
+        )
 
     @staticmethod
     def _experiment(row: sqlite3.Row) -> Experiment:

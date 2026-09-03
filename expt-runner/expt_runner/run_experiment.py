@@ -45,23 +45,83 @@ from a2a_engine import (
     run_with_parallelism,
 )
 from a2a_engine._context import current_conversation_id
+from a2a_engine.event_sink import current_event_sink, open_event_sink
 from a2a_engine.experiment import resolve_storage
 from a2a_engine.manifest import EpisodeManifest, git_hash
+from a2a_engine.provenance import build_provenance
 from a2a_engine.registry import discover_environments
+from a2a_engine.seeds import derive_seed
 from a2a_engine.storage import check_store, make_store
 from a2a_engine.storage.local import LocalJSONStore
 from a2a_engine.tracing_otel import get_tracer, init_tracing, shutdown_tracing
 
 log = logging.getLogger("expt_runner")
 
+def _release_facts(environment_id: str | None) -> dict:
+    """What the registered release declaration contributes to provenance.
+
+    An environment registered at runtime without a declaration - a test double,
+    a scaffold in progress - contributes nothing, and the block records that
+    absence rather than inventing an identity for it.
+    """
+    if not environment_id:
+        return {}
+    try:
+        declaration = get_environment_spec(environment_id).declaration
+    except KeyError:
+        return {}
+    if declaration is None:
+        return {}
+    return {
+        "release_id": declaration.id,
+        "release_version": declaration.version,
+        "declaration_sha256": declaration.content_sha256(),
+        "item_bank_sha256": (
+            declaration.item_policy.item_bank_sha256
+            if declaration.item_policy is not None else None
+        ),
+        "oracle_version": declaration.oracle_version,
+    }
+
 
 def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
-                      episode_idx: int, dry_run: bool, persist: bool = True) -> dict:
+                      episode_idx: int, dry_run: bool, persist: bool = True,
+                      attempt: int = 1) -> dict:
+    # ``dict(resolved_cfg)`` is a *shallow* copy shared across the cell's
+    # episodes, so anything written per episode has to stay top level; a nested
+    # mutation would leak across siblings.
     cfg = dict(resolved_cfg)
+    # A locked research design is expanded once by the control plane. The
+    # execution YAML contains one already-materialised episode per runner cell
+    # plus this small marker, so the runner consumes the exact config that was
+    # reviewed at lock time instead of deriving a new identity or seed.
+    planned = cfg.pop("_design_episode", None)
+    if planned is not None and not isinstance(planned, dict):
+        raise ValueError("_design_episode must be a mapping when present")
+    logical_cell_id = str(planned.get("cell_id") if planned else cell_id)
+    logical_episode_idx = int(planned.get("episode_idx") if planned else episode_idx)
+    planned_attempt = int(planned.get("attempt") if planned else attempt)
     cfg["experiment_name"] = experiment_name
-    cfg["episode_id"] = f"{experiment_name}.{cell_id}.{episode_idx}"
+    cfg["episode_id"] = str(planned.get("episode_id")) if planned else (
+        f"{experiment_name}.{cell_id}.{episode_idx}"
+    )
     cfg.setdefault("environment_id", cfg.get("environment_id"))
     cfg.setdefault("git_hash", git_hash(Path.cwd()))
+
+    if planned:
+        cfg["seed"] = int(planned["seed"])
+        cfg["provenance"] = dict(planned["provenance"])
+    else:
+        # The cell's declared seed is the *root*, not the episode's seed. Without
+        # this the N episodes of a cell share one seed, so replicates differ only
+        # by sampling noise and an environment that draws a scenario from its seed
+        # draws the same one every time.
+        root_seed = resolved_cfg.get("seed")
+        if root_seed is not None:
+            mode = str(resolved_cfg.get("seed_mode") or "derived")
+            cfg["seed"] = derive_seed(int(root_seed), cell_id, episode_idx, mode=mode)
+            cfg["root_seed"] = int(root_seed)
+
     # Redis credentials remain process release only.  The resolved config
     # records the stream name so a completed trace can be joined to its
     # operational recovery/replay log without leaking a connection string.
@@ -75,9 +135,24 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
             "episode_id": episode_id,
             "launch_id": launch_id,
         }
+
+    # Stamped here, where identity is already stamped, and before any episode
+    # runs. An experiment, cell or release identifier not written at expansion
+    # is gone forever. ``experiment_id`` and ``design_sha256`` stay null until
+    # a design object exists, which is the shape a hand-written config keeps.
+    if not planned:
+        cfg["provenance"] = build_provenance(
+            config=cfg,
+            experiment_name=experiment_name,
+            cell_id=cell_id,
+            episode_idx=episode_idx,
+            attempt=attempt,
+            release=_release_facts(cfg.get("environment_id")),
+        )
     return {"config": cfg, "dry_run": dry_run, "persist": persist,
             "experiment_name": experiment_name,
-            "cell_id": cell_id, "episode_idx": episode_idx}
+            "cell_id": logical_cell_id, "episode_idx": logical_episode_idx,
+            "attempt": planned_attempt}
 
 
 def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
@@ -172,9 +247,30 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     if dry_run and persist is False and spec.dry_run_checks_keys:
         _check_api_keys(cfg)
 
+    # The attempt's identity is fixed before the environment is constructed, so
+    # its event log is open from the first event rather than from whenever the
+    # run happens to end.
+    episode_uid = str(uuid.uuid4())
+    sink = open_event_sink(
+        results_dir,
+        experiment_name=ctx["experiment_name"],
+        episode_uid=episode_uid,
+        episode_id=str(cfg.get("episode_id") or ""),
+        environment_id=environment_id,
+    ) if persist else None
+    sink_token = current_event_sink.set(sink)
+    try:
+        return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
+    finally:
+        if sink is not None:
+            sink.close()
+        current_event_sink.reset(sink_token)
+
+
+def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
+          episode_uid: str, persist: bool, dry_run: bool) -> str:
     environment = spec.cls(config=cfg, dry_run=dry_run)
 
-    episode_uid = str(uuid.uuid4())
     tracer = get_tracer()
     with tracer.start_as_current_span(f"environment {environment_id}") as span:
         span.set_attribute("gen_ai.conversation.id", episode_uid)

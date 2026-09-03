@@ -22,7 +22,7 @@ services:
       dockerfile: Dockerfile
     image: a2a-comm-local:latest
     environment:
-      A2A_TRACE_DB: /data/a2a_traces.db
+      A2A_TRACE_DB: /data/a2a.db
       # Local research runs retain the full OTel projection alongside the
       # canonical SQLite trace. Remote export is never required for replay.
       OTEL_TRACES_EXPORTER: file
@@ -67,7 +67,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      A2A_TRACE_DB: /data/a2a_traces.db
+      A2A_TRACE_DB: /data/a2a.db
       A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
       A2A_REDIS_URL: redis://redis:6379/0
       A2A_CAPTURE_CONTENT: "true"
@@ -92,7 +92,7 @@ services:
     ports:
       - "8080:8080"
     command:
-      ["python", "local_stack/server.py", "--database", "/data/a2a_traces.db", "--control-database", "/data/a2a_control.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
+      ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       redis:
         condition: service_healthy

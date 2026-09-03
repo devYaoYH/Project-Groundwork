@@ -23,7 +23,7 @@ API is intentionally small:
 ```python
 from a2a_engine import EpisodeDataset
 
-ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a_traces.db"})
+ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a.db"})
 games = ds.to_episodes_df()       # one row per run; metrics_* and final_* columns
 messages = ds.to_messages_df() # one row per speaker/text event
 events = ds.to_events_df()     # one row per raw event
@@ -32,7 +32,7 @@ calendar = ds.filter_by(environment_id="calendar")
 ```
 
 The loader is sink-agnostic, so the same code works for another configured
-backend. For a local stack volume, use `/data/a2a_traces.db` from inside a
+backend. For a local stack volume, use `/data/a2a.db` from inside a
 container or copy the volume's database out before opening it locally.
 
 ## SQL
@@ -52,7 +52,7 @@ FROM episodes
 GROUP BY environment_id;
 ```
 
-Use a SQLite client or `sqlite3 ./results/a2a_traces.db`; no application
+Use a SQLite client or `sqlite3 ./results/a2a.db`; no application
 service is required for querying.
 
 ## Post-episode metrics
@@ -64,7 +64,7 @@ keeps live execution independent from reporting and makes backfills safe:
 
 ```bash
 uv run python scripts/materialize_metrics.py \
-  --database ./results/a2a_traces.db --environment calendar
+  --database ./results/a2a.db --environment calendar
 ```
 
 Run the command again to confirm idempotence; unchanged artifacts report
@@ -87,7 +87,7 @@ afterward:
 ```bash
 uv run python games/calendar/analysis/scripts/ingest_vps_artifacts.py \
   analysis/outputs/reflection_vps_metric/game_target_summary.csv \
-  --database ./results/a2a_traces.db --rebuild
+  --database ./results/a2a.db --rebuild
 ```
 
 The repository ships a reusable exploration skill at

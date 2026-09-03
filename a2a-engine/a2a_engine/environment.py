@@ -29,12 +29,18 @@ class _StrictModel(BaseModel):
 class ParameterConfig(_StrictModel):
     """One environment setting the design layer may describe.
 
-    ``source`` says where the value comes from.  A ``design`` parameter is one
-    the researcher sets and the runner writes into the episode config.  An
-    ``item`` parameter is frozen in the item bank alongside the oracle result,
-    so a design *selects* on it — factoring on it restricts the bank to the
-    matching rows rather than overwriting a config key the loaded item would
-    ignore.
+    ``source`` states the oracle boundary, not just where a config value is
+    read. An ``item`` parameter is one whose change changes that item's pinned
+    oracle ground truth; it is frozen in the item bank beside that result. A
+    ``design`` parameter cannot affect the pinned oracle result. A design sets
+    a design parameter in the episode config, while a design *selects* on an
+    item parameter — factoring on it restricts the bank to matching rows rather
+    than overwriting a config key the loaded item would ignore.
+
+    Item-bank oracle fields must therefore be ground truth determined by frozen
+    item attributes alone, never by a design-sourced setting. Runtime metrics
+    may combine the selected item with design settings after the episode starts,
+    but those derived values do not belong in the pinned bank oracle result.
 
     An item parameter therefore must not hand-write a ``domain``: its levels
     are whatever the pinned bank actually contains, projected at read time by

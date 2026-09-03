@@ -12,7 +12,7 @@ path, filters, and metric definitions in every result.
 ## Workflow
 
 1. Confirm the database exists and query `episodes` read-only. If using Compose,
-   check `GET /api/health` and use `/data/a2a_traces.db` inside its containers.
+   check `GET /api/health` and use `/data/a2a.db` inside its containers.
 2. Establish scope with `environment_id`, `experiment_name`, cell labels, and time
    range before computing aggregates. Do not silently combine incompatible
    experiments.
@@ -29,7 +29,7 @@ path, filters, and metric definitions in every result.
 ```python
 from a2a_engine import EpisodeDataset
 
-ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a_traces.db"})
+ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a.db"})
 games = ds.to_episodes_df()
 messages = ds.to_messages_df()
 events = ds.to_events_df()

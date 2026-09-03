@@ -13,7 +13,10 @@ from pathlib import Path
 import pytest
 
 from a2a_engine import EpisodeConfigBase, Event, EpisodeTrace
+from a2a_engine.provenance import provenance_of
 from a2a_engine.registry import _REGISTRY, register_environment
+from a2a_engine.seeds import derive_seed
+from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from expt_runner.run_experiment import _configure_observability, main
 
 
@@ -96,13 +99,19 @@ def test_manifest_records_identity_and_config_hash(tmp_path):
     main([str(write_yaml(tmp_path, BASIC)), "--results-dir", str(results),
           "--max-parallelism", "1"])
 
-    manifest = json.loads(
-        next((results / "test_exp").glob("*.manifest.json")).read_text()
-    )
+    manifests = {
+        json.loads(path.read_text())["episode_id"]: json.loads(path.read_text())
+        for path in (results / "test_exp").glob("*.manifest.json")
+    }
+    manifest = manifests["test_exp.b1.0"]
     assert manifest["experiment_name"] == "test_exp"
     assert manifest["cell_id"] == "b1"
     assert manifest["environment_id"] == "fake"
-    assert manifest["seed"] == 1
+    # The cell's declared seed is the root; each episode's own seed derives
+    # from it, so replicates differ by more than sampling noise.
+    assert manifest["seed"] == derive_seed(1, "b1", 0)
+    assert manifests["test_exp.b1.1"]["seed"] == derive_seed(1, "b1", 1)
+    assert manifest["seed"] != manifests["test_exp.b1.1"]["seed"]
     assert manifest["resolved_config_hash"]
     assert manifest["storage"]["status"] == "written"
 
@@ -209,6 +218,111 @@ def test_resolve_hook_output_reaches_the_game_and_the_trace(tmp_path):
     )
     trace = json.loads(trace_path.read_text())
     assert trace["config"]["generated_scenario"] == [[1, 2], [3, 4]]
+
+
+def test_provenance_round_trips_from_the_config_into_the_persisted_trace(tmp_path):
+    """The block is stamped at expansion and travels *inside* the record.
+
+    An experiment, cell or release identifier not written before the episode
+    runs is gone forever, and a trace read years later without a control plane
+    has to be able to say what produced it.
+    """
+    register_environment("fake", FakeGame, package="a2a-engine")
+    results = tmp_path / "results"
+    main([str(write_yaml(tmp_path, BASIC)), "--results-dir", str(results),
+          "--max-parallelism", "1", "--storage-path", str(tmp_path / "a2a.db")])
+
+    store = SQLiteEpisodeStore(path=tmp_path / "a2a.db")
+    by_episode = {
+        trace.config.episode_id: trace for trace in store.iter_episodes()
+    }
+    assert set(by_episode) == {"test_exp.b1.0", "test_exp.b1.1"}
+
+    block = provenance_of(by_episode["test_exp.b1.0"])
+    assert block["experiment_name"] == "test_exp"
+    assert block["cell_id"] == "b1"
+    assert block["episode_id"] == "test_exp.b1.0"
+    assert block["episode_idx"] == 0
+    assert block["attempt"] == 1
+    assert block["seed"] == derive_seed(1, "b1", 0)
+    # No design object exists yet, and a hand-written config keeps this shape
+    # forever: it runs, records what it can, and joins no preregistration.
+    assert block["experiment_id"] is None
+    assert block["design_sha256"] is None
+    # The fake environment publishes no declaration, so the block records the
+    # absence rather than inventing a release identity.
+    assert block["release_id"] is None
+    # The slot phase 4's randomized item attributes land in is present and empty.
+    assert block["item_attributes"] == {}
+
+    # Distinct seeds per episode, all the way through to the record.
+    seeds = {provenance_of(trace)["seed"] for trace in by_episode.values()}
+    assert len(seeds) == 2
+
+
+def test_a_declared_release_reaches_provenance_and_its_dimension_row(tmp_path):
+    """The runner stamps the registered release, and the store projects the
+    dimension row out of it, so ``episodes.release_id`` resolves even in a
+    database no control plane has ever touched."""
+    import sqlite3
+
+    from a2a_engine.declaration import ItemPolicy, ReleaseDeclaration
+    from a2a_engine.items import ItemBank
+
+    bank = tmp_path / "bank.jsonl"
+    bank.write_text('{"item_id": "i1", "params": {"n": 1}}\n')
+    declaration = ReleaseDeclaration(
+        id="fake", environment_id="fake", version="v9", blurb="fixture",
+        item_policy=ItemPolicy(
+            mode="enumerate",
+            bank_path="bank.jsonl",
+            item_bank_sha256=ItemBank.load(bank).item_bank_sha256,
+        ),
+        oracle_version="oracle-v3",
+    )
+    register_environment("fake", FakeGame, declaration=declaration)
+    database = tmp_path / "a2a.db"
+    main([str(write_yaml(tmp_path, BASIC)), "--results-dir", str(tmp_path / "results"),
+          "--max-parallelism", "1", "--storage-path", str(database)])
+
+    trace = next(iter(SQLiteEpisodeStore(path=database).iter_episodes()))
+    block = provenance_of(trace)
+    assert block["release_id"] == "fake"
+    assert block["release_version"] == "v9"
+    assert block["oracle_version"] == "oracle-v3"
+    assert block["item_bank_sha256"] == declaration.item_policy.item_bank_sha256
+
+    connection = sqlite3.connect(database)
+    try:
+        promoted = connection.execute(
+            "SELECT e.release_id, e.attempt, e.seed, e.status, r.oracle_version"
+            " FROM episodes e JOIN releases r ON r.id = e.release_id"
+            " WHERE e.episode_id = ?", ("test_exp.b1.0",),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert promoted == ("fake", 1, derive_seed(1, "b1", 0), "COMPLETED", "oracle-v3")
+
+
+def test_the_roster_is_pinned_into_provenance_without_its_credentials(tmp_path):
+    body = BASIC.replace(
+        "  num_agents: 2",
+        "  num_agents: 2\n  agents:\n"
+        "    - {type: llm, model: gpt-4o-mini, api_key: sk-secret}\n"
+        "    - {type: scripted}",
+    )
+    register_environment("fake", FakeGame)
+    results = tmp_path / "results"
+    main([str(write_yaml(tmp_path, body)), "--results-dir", str(results),
+          "--max-parallelism", "1", "--storage-path", str(tmp_path / "a2a.db")])
+
+    trace = next(iter(SQLiteEpisodeStore(path=tmp_path / "a2a.db").iter_episodes()))
+    participants = provenance_of(trace)["participants"]
+
+    assert [p["kind"] for p in participants] == ["llm", "scripted"]
+    assert [p["binding"] for p in participants] == ["gpt-4o-mini", "scripted"]
+    assert all(len(p["config_sha256"]) == 64 for p in participants)
+    assert "sk-secret" not in json.dumps(participants)
 
 
 def test_dry_run_key_check_is_skipped_when_the_game_opts_out(tmp_path):

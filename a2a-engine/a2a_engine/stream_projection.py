@@ -1,21 +1,27 @@
-"""Project a Redis event stream into a trace-shaped document.
+"""Project an event log into a trace-shaped document.
 
 A running episode has no persisted trace yet — the canonical record is written
-once, at the end. Until then the only evidence is the event stream, and a
+once, at the end. Until then the only evidence is the event log, and a
 researcher watching a launch wants to see the environment, not wait for it.
 
-This module turns whatever a stream currently holds into the same shape a environment
-viewer already consumes, so one viewer renders a finished episode and a
-half-finished one alike. A projection is never mistaken for the canonical
-record: an episode that has not reached a terminal event is marked
-``stopped`` and carries ``partial: True`` in its observability block.
+Two sources feed the same projection. The durable local event sink is written
+as the episode plays and is what makes an interrupted run recoverable with no
+Redis configured; the optional Redis stream is the low-latency copy of the same
+events. Both land in the shape a environment viewer already consumes, so one viewer
+renders a finished episode and a half-finished one alike.
+
+A projection is never mistaken for the canonical record: an episode that has
+not reached a terminal event is marked ``stopped`` and carries ``partial: True``
+in its observability block.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+from a2a_engine.event_sink import read_event_sink
 from a2a_engine.schemas import EpisodeConfigBase, Event, EpisodeTrace
 
 # Games name their last event differently; each is the point after which no
@@ -57,26 +63,31 @@ def _config_from_start(environment_id: str, payload: dict[str, Any]) -> EpisodeC
     return EpisodeConfigBase.model_validate(fields)
 
 
-def project_stream_to_trace(
+def _project(
     entries: list[dict[str, Any]],
     *,
-    stream: str,
+    origin: str,
+    source: str,
+    origin_key: str,
     environment_id: str | None = None,
 ) -> EpisodeTrace:
-    """Build a ``EpisodeTrace`` from decoded stream entries.
+    """The projection rules, shared by both sources.
 
-    ``entries`` are the dicts returned by ``decode_stream_events``. Raises
-    ``ValueError`` when the stream holds no usable events or no environment identity.
+    Only the two observability fields naming where the events came from differ
+    between a Redis stream and a local event sink; the trace they produce from
+    the same events is otherwise identical, including how a missing terminal
+    event is marked.
     """
     if not entries:
-        raise ValueError(f"stream {stream!r} contains no A2A environment events")
+        raise ValueError(f"{origin!r} contains no A2A environment events")
 
     resolved_game = environment_id or _first_value(entries, "environment_id")
     if not resolved_game:
-        raise ValueError(f"stream {stream!r} has no environment_id; pass one explicitly")
+        raise ValueError(f"{origin!r} has no environment_id; pass one explicitly")
 
     events = [Event.model_validate(entry["event"]) for entry in entries]
     episode_id = _first_value(entries, "episode_id")
+    episode_uid = _first_value(entries, "episode_uid")
     start_payload = _start_payload(events)
 
     last = events[-1]
@@ -90,20 +101,60 @@ def project_stream_to_trace(
     config.episode_id = config.episode_id or episode_id
 
     return EpisodeTrace(
-        episode_uid=str(start_payload.get("episode_uid") or episode_id or stream),
+        episode_uid=str(
+            start_payload.get("episode_uid") or episode_uid or episode_id or origin
+        ),
         config=config,
         events=events,
         final_state=final_state,
         metrics=final_state,
         observability={
-            "source": "redis_stream_projection",
-            "redis_stream": stream,
+            "source": source,
+            origin_key: origin,
             "partial": not complete,
             "event_count": len(events),
         },
         started_at=events[0].timestamp,
         ended_at=last.timestamp if complete else None,
         stopped=not complete,
+    )
+
+
+def project_stream_to_trace(
+    entries: list[dict[str, Any]],
+    *,
+    stream: str,
+    environment_id: str | None = None,
+) -> EpisodeTrace:
+    """Build a ``EpisodeTrace`` from decoded stream entries.
+
+    ``entries`` are the dicts returned by ``decode_stream_events``. Raises
+    ``ValueError`` when the stream holds no usable events or no environment identity.
+    """
+    return _project(
+        entries,
+        origin=stream,
+        source="redis_stream_projection",
+        origin_key="redis_stream",
+        environment_id=environment_id,
+    )
+
+
+def project_events_to_trace(
+    path: str | Path, *, environment_id: str | None = None
+) -> EpisodeTrace:
+    """Build a ``EpisodeTrace`` from one episode's durable event sink.
+
+    This is what turns a ``SIGKILL``ed episode into evidence: the file was
+    flushed event by event as it played, so whatever it holds is real, and a
+    missing terminal event marks the result partial rather than absent.
+    """
+    return _project(
+        read_event_sink(path),
+        origin=str(path),
+        source="event_sink_projection",
+        origin_key="event_sink",
+        environment_id=environment_id,
     )
 
 

@@ -13,9 +13,8 @@ from local_stack.control_plane import ControlPlane
 def _control(tmp_path: Path) -> ControlPlane:
     discover_environments()
     return ControlPlane(
-        tmp_path / "control.db",
+        tmp_path / "a2a.db",
         workspace=Path(__file__).resolve().parents[2],
-        trace_database=tmp_path / "episodes.db",
     )
 
 

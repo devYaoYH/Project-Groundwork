@@ -41,9 +41,8 @@ def test_local_stack_accepts_head_for_static_and_api_routes(tmp_path):
     class TestHandler(LocalStackHandler):
         pass
 
-    TestHandler.database = tmp_path / "episodes.db"
+    TestHandler.database = tmp_path / "a2a.db"
     TestHandler.static_dir = static_dir
-    TestHandler.control_database = tmp_path / "control.db"
     TestHandler.workspace = tmp_path
     TestHandler._control_plane = None
     server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
@@ -69,7 +68,7 @@ def test_local_stack_accepts_head_for_static_and_api_routes(tmp_path):
 
 def test_environment_catalog_migrates_a_legacy_control_database(tmp_path):
     workspace = Path(__file__).resolve().parents[2]
-    database = tmp_path / "control.db"
+    database = tmp_path / "a2a.db"
     with sqlite3.connect(database) as db:
         db.executescript("""
             CREATE TABLE releases (
@@ -86,19 +85,18 @@ def test_environment_catalog_migrates_a_legacy_control_database(tmp_path):
         """)
         db.execute(
             "INSERT INTO releases VALUES (?, ?, ?, ?, ?, ?)",
-            ("local-calendar", "calendar", "calendar_environment", "local-workspace", "{}", "now"),
+            ("calendar", "calendar", "calendar_environment", "local-workspace", "{}", "now"),
         )
         db.execute(
             "INSERT INTO experiments VALUES (?, ?, ?, ?, ?, ?)",
-            ("legacy-calendar", "legacy", "local-calendar", "calendar.yaml", "digest", "now"),
+            ("legacy-calendar", "legacy", "calendar", "calendar.yaml", "digest", "now"),
         )
 
     class TestHandler(LocalStackHandler):
         pass
 
-    TestHandler.database = tmp_path / "episodes.db"
+    TestHandler.database = database
     TestHandler.static_dir = tmp_path / "static"
-    TestHandler.control_database = database
     TestHandler.workspace = workspace
     TestHandler._control_plane = None
     server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
@@ -168,7 +166,9 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
     try:
         LocalStackHandler.database = store.path
         assert LocalStackHandler._health()["episode_count"] == 1
-        assert LocalStackHandler._trace_summaries()[0]["episode_uid"] == trace.episode_uid
+        page = LocalStackHandler._episode_page({})
+        assert page["episodes"][0]["episode_uid"] == trace.episode_uid
+        assert page["next_cursor"] is None
         assert LocalStackHandler._trace(trace.episode_uid)["metrics"] == trace.metrics
 
         board = LocalStackHandler._calendar_leaderboard()
@@ -245,11 +245,9 @@ def test_control_plane_exposes_derived_artifacts_without_mutating_the_trace(tmp_
 def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts(tmp_path):
     """M1 records remain separate from episodes and are launcher-independent."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     experiment = control.create_experiment(
-        release_id="local-word_guess", yaml_path="games/word-guess/experiments/example.yaml",
+        release_id="word_guess", yaml_path="games/word-guess/experiments/example.yaml",
     )
 
     class CompletingLauncher:
@@ -274,11 +272,9 @@ def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts
 
 def _buyer_seller_control(tmp_path):
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     experiment = control.create_experiment(
-        release_id="local-buyer_seller",
+        release_id="buyer_seller",
         yaml_path="games/buyer-seller/experiments/example.yaml",
     )
     return control, experiment
@@ -412,19 +408,17 @@ def test_unknown_and_mismatched_releases_report_different_problems(tmp_path):
     import pytest
 
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
 
-    with pytest.raises(ValueError, match="no release registered as 'local-nonesuch'"):
+    with pytest.raises(ValueError, match="no release registered as 'nonesuch'"):
         control.create_experiment(
-            release_id="local-nonesuch",
+            release_id="nonesuch",
             yaml_path="games/word-guess/experiments/example.yaml",
         )
 
     with pytest.raises(ValueError, match="is for environment 'calendar'.*declares 'word_guess'"):
         control.create_experiment(
-            release_id="local-calendar",
+            release_id="calendar",
             yaml_path="games/word-guess/experiments/example.yaml",
         )
 
@@ -433,9 +427,7 @@ def test_every_release_offers_configs_it_can_actually_run(tmp_path):
     """The cold-start form pairs a release with a config, so on a fresh install
     the first submission must succeed rather than report a environment mismatch."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     control.seed_installed_releases()
 
     by_game = control.available_experiments()
@@ -454,9 +446,7 @@ def test_every_release_offers_configs_it_can_actually_run(tmp_path):
 
 def test_environment_surface_exposes_declarations_items_and_oracle_results(tmp_path):
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
 
     environments = control.environment_summaries()
     assert {environment["environment_id"] for environment in environments} == {
@@ -481,9 +471,7 @@ def test_worked_examples_are_offered_before_research_configs(tmp_path):
     """Calendar and Negotiation ship dozens of configs; a newcomer should land
     on the small credential-free one, not whichever sorts first."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     by_game = control.available_experiments()
 
     for environment in ("calendar", "negotiation"):
@@ -637,9 +625,7 @@ def test_experiment_config_endpoint_only_serves_offered_configurations(tmp_path)
     import pytest
 
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
 
     payload = control.read_experiment_config("games/negotiation/experiments/smoke_local.yaml")
     assert payload["content"].startswith("name: negotiation_smoke")
@@ -654,9 +640,7 @@ def test_offered_configurations_are_rescanned_not_cached(tmp_path):
     """A config dropped into a environment's experiments directory has to appear
     without restarting the control plane."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     added = workspace / "games/word-guess/experiments/_rescan_probe.yaml"
     added.write_text(
         "name: rescan_probe\n"
@@ -706,9 +690,7 @@ def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeyp
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     report = control.experiment_agents("games/word-guess/experiments/example.yaml")
 
     assert report["declares_agents"] is True
@@ -727,9 +709,7 @@ def test_a_config_without_agents_reports_unknown_not_ready(tmp_path):
     """The environment supplies its own defaults there, so claiming readiness would
     assert a credential state nothing has checked."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     report = control.experiment_agents("games/calendar/experiments/typed_local_smoke.yaml")
 
     assert report["declares_agents"] is False
@@ -740,9 +720,7 @@ def test_a_config_without_agents_reports_unknown_not_ready(tmp_path):
 def test_agents_without_a_model_need_no_credential(tmp_path):
     """Heuristic and scripted agents call no provider."""
     workspace = Path(__file__).resolve().parents[2]
-    control = ControlPlane(
-        tmp_path / "control.db", workspace=workspace, trace_database=tmp_path / "episodes.db",
-    )
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
     report = control.experiment_agents("games/negotiation/experiments/smoke_local.yaml")
 
     assert report["ready_for_live"] is True

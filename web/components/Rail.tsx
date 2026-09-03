@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 
 const navigation = [
   { href: "/environments/", label: "Environments" },
-  { href: "/experiments/", label: "Experiments", pending: true },
+  { href: "/episodes/", label: "Episodes" },
+  { href: "/experiments/", label: "Experiments" },
 ];
 
 export function Rail() {
@@ -22,7 +23,6 @@ export function Rail() {
           return (
             <Link className={`nav-link${active ? " active" : ""}`} href={item.href} key={item.href}>
               {item.label}
-              {item.pending ? <span>soon</span> : null}
             </Link>
           );
         })}

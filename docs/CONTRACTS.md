@@ -1,6 +1,6 @@
 # Contracts
 
-The four interfaces that make a new release reproducible by construction.
+The interfaces that make a new release reproducible by construction.
 If you are adding a environment, read this first, then `ADDING_A_GAME.md`.
 
 ---
@@ -116,7 +116,9 @@ class EpisodeStore(Protocol):
 ```
 
 Optional, used when present: `completed_episode_ids(experiment_name)` powers
-`--resume`; `iter_episodes(filters)` gives `EpisodeDataset` a streaming read.
+`--resume` and the launch-progress join; `iter_episodes(filters)` gives
+`EpisodeDataset` a streaming read; `episode_summaries(filters, limit, cursor)`
+serves a list view from promoted columns without rehydrating whole traces.
 
 Backends: `sqlite` (the zero-setup default), `local` JSON, `s3`, `firestore`.
 Selected per experiment, with inheritance from named sinks:
@@ -201,6 +203,37 @@ so migration is additive. Local relative paths may include `..` when the normal
 `environments/`, `experiments/`, and `tasks/` folders are siblings; absolute
 paths and cloud URIs are intentionally rejected in v1.
 
+### Item and oracle invariant
+
+`ParameterConfig.source` is an oracle boundary. An item-sourced parameter is
+one whose change changes the item's pinned oracle ground truth. Its value and
+that ground truth are frozen together in the content-addressed item bank. A
+design-sourced parameter cannot affect the pinned oracle result: it may change
+episode behavior or a runtime-derived metric, but it must not change an oracle
+value stored in a bank row.
+
+Accordingly, an item bank contains only ground truth determined by its frozen
+item attributes. Do not store a result that depends on a design parameter in
+the bank. Buyer-Seller is the reference case: seller cost, buyer value, item
+count, and `discount_factor` are all item-sourced. Every bank row stores the
+actual configured-game optimum, `best_joint_utility`, for that complete tuple.
+`discount_factor` can be factored, pinned, or randomized only as item selection;
+the compiler copies its value from the selected row and never accepts an
+independent design-configured value. The bank provides matched rows for the
+intended `0.5` and `1.0` delta strata at fixed valuation tuples, so that
+comparison remains a legitimate item-stratified experiment.
+Buyer-Seller also fixes its protocol horizon in the release, so no remaining
+design-open parameter changes this oracle baseline.
+
+Buyer-Seller may also report `undiscounted_total_surplus`. It is an
+informational derived quantity, not an oracle optimum and not an item-bank
+oracle result.
+
+Callable-oracle perturbation tests are deferred until releases expose a common
+callable oracle contract. Buyer-Seller instead checks its concrete bank rows:
+the otherwise identical three-unit, surplus-22 rows at discount factors `0.5`
+and `1.0` store respective oracle optima `38.5` and `66.0`.
+
 When an release declares roles, an explicit `agents:` list must assign a
 declared role to every agent and match each role's declared count. If `agents:`
 is omitted, `engine.defaults.num_agents` must match the total role count. This
@@ -265,7 +298,46 @@ the v1 `calendar.score_margin` / minimizing `excess_cost` declaration.
 
 ---
 
-## 4. Judge contract
+## 4. Provenance contract
+
+Every episode carries a `provenance` block, stamped **at expansion** — before
+the episode runs — and written into the trace itself, inside `config`. An
+experiment, cell, or release identifier not written at expansion is gone
+forever, and a trace read years later without a control plane still has to say
+what produced it.
+
+```python
+config["provenance"] = {
+    "schema_version": 1,
+    "experiment_id": ...,      # None until a design object exists
+    "experiment_name": ..., "design_sha256": ...,
+    "release_id": ..., "release_version": ..., "declaration_sha256": ...,
+    "cell_id": ..., "episode_id": ..., "episode_idx": ..., "attempt": ...,
+    "seed": ..., "item_id": ..., "item_bank_sha256": ..., "oracle_version": ...,
+    "participants": [{"participant_id", "kind", "binding", "config_sha256"}],
+    "item_attributes": {},     # per-episode draws of randomized item attributes
+}
+```
+
+The database's dimension and fact tables are a **projection** of that block,
+not an independent source of truth, which is what makes the star schema
+rebuildable: drop it and re-project. Promotion into columns
+(`experiment_id`, `release_id`, `item_id`, `attempt`, `seed`, `status`) is
+therefore a query-performance decision that can be revised at any time.
+
+Seeds are derived, never drawn: `derive_seed(root_seed, cell_id, episode_idx)`
+is a pure function, because `--shard-index` and `--resume` change how many
+episodes a process enumerates and a generator would hand the same episode
+different seeds depending on how it was run.
+
+Events are appended to `<results>/<experiment>/<episode_uid>.events.jsonl` and
+flushed per event, so an episode interrupted between two events is recoverable
+as a partial trace with no Redis configured. A recovered trace is stored with
+`status = PARTIAL`: evidence for inspection and retry, never a result.
+
+---
+
+## 5. Judge contract
 
 The judge reads `EpisodeDataset` records — not Firestore documents, not a
 environment-specific shape.
@@ -288,7 +360,7 @@ mix judgments from two different rubrics into one aggregate.
 
 ---
 
-## 5. LLM call robustness
+## 6. LLM call robustness
 
 One policy, in `a2a_engine.llm.retry`, shared by every environment.
 

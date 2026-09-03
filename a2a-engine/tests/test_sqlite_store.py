@@ -219,3 +219,103 @@ def test_schema_is_queryable_with_plain_sqlite(store):
     finally:
         conn.close()
     assert row == ("alpha", "e")
+
+
+def test_the_merged_file_carries_the_control_plane_tables_too(store):
+    """One database is the whole point: a runner invoked with nothing but
+    ``--storage-path`` produces a file the control plane can open, and the
+    fact table can join its dimensions in SQL rather than in Python."""
+    store.put_episode(*make_trace("g1"))
+    conn = sqlite3.connect(store.path)
+    try:
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    finally:
+        conn.close()
+    assert {"episodes", "releases", "items", "experiments", "launches", "attempts",
+            "launch_events", "derived_artifacts"} <= tables
+
+
+def test_foreign_keys_are_enforced_on_the_fact_table(store):
+    """A promoted dimension key that resolves to nothing is a broken record,
+    and one database means the constraint can say so."""
+    store.put_episode(*make_trace("g1"))
+    conn = store._connect()
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO episodes (episode_uid, experiment_id, config, events,"
+                " final_state, metrics, manifest) VALUES (?,?,?,?,?,?,?)",
+                ("orphan", "no-such-experiment", "{}", "[]", "{}", "{}", "{}"),
+            )
+    finally:
+        conn.close()
+
+
+def test_provenance_is_promoted_into_columns_and_projects_its_release(store):
+    trace, manifest = make_trace("g1")
+    trace.config.provenance = {
+        "experiment_id": None,
+        "release_id": "demo",
+        "release_version": "v2",
+        "declaration_sha256": "d" * 64,
+        "item_bank_sha256": "b" * 64,
+        "oracle_version": "oracle-v1",
+        "attempt": 3,
+        "seed": 4242,
+        "item_id": None,
+    }
+    trace.config.seed = 4242
+    store.put_episode(trace, manifest)
+
+    conn = sqlite3.connect(store.path)
+    try:
+        row = conn.execute(
+            "SELECT e.attempt, e.seed, e.status, e.release_id, r.version, r.oracle_version"
+            " FROM episodes e JOIN releases r ON r.id = e.release_id"
+            " WHERE e.episode_uid = ?", ("g1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == (3, 4242, "COMPLETED", "demo", "v2", "oracle-v1")
+
+    # The durable copy stays inside the trace, so the columns are rebuildable.
+    restored = store.get_episode("g1")
+    assert restored.config.model_extra["provenance"]["release_id"] == "demo"
+
+
+def test_a_partial_trace_is_evidence_not_a_completed_run(store):
+    trace, manifest = make_trace("g1", run_id="e.b.0")
+    trace.stopped = True
+    trace.observability = {"partial": True, "source": "event_sink_projection"}
+    store.put_episode(trace, manifest)
+
+    rows, _ = store.episode_summaries()
+    assert rows[0]["status"] == "PARTIAL"
+    # ``--resume`` and the progress join must not mistake a recovered fragment
+    # for a result and skip re-running it.
+    assert store.completed_episode_ids("e") == set()
+
+
+def test_episode_summaries_page_and_filter_without_rehydrating_traces(store):
+    for index in range(5):
+        store.put_episode(*make_trace(f"g{index}", run_id=f"e.b.{index}",
+                                      environment_id="alpha" if index < 2 else "beta"))
+
+    page, cursor = store.episode_summaries(limit=2)
+    assert len(page) == 2 and cursor is not None
+    assert set(page[0]) >= {"episode_uid", "episode_id", "attempt", "cell_id",
+                            "item_id", "seed", "status", "started_at", "ended_at", "metrics"}
+    assert page[0]["metrics"] == {"score": 1.5}
+
+    filtered, _ = store.episode_summaries({"environment_id": "alpha"}, limit=50)
+    assert {row["environment_id"] for row in filtered} == {"alpha"}
+
+
+def test_summary_filters_are_pushed_into_sql_and_unknown_keys_dropped(store):
+    store.put_episode(*make_trace("g1"))
+    rows, _ = store.episode_summaries({"1=1; DROP TABLE episodes": "x"})
+    assert len(rows) == 1
+    assert store.get_episode("g1") is not None

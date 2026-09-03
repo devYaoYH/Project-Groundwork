@@ -1,4 +1,4 @@
-"""SQLite trace store — the lightweight "local DB" sink.
+"""SQLite episode store — the lightweight "local DB" sink.
 
 This is the zero-setup option: no bucket, no GCP project, no credentials. A new
 contributor points ``storage.path`` at a file and gets a queryable corpus of
@@ -10,14 +10,15 @@ SQLite *is* the ground truth when selected. Writing both a JSON tree and a
 database would double the on-disk footprint and leave two records that can
 disagree. Set ``mirror_json: true`` if you want the JSON tree as well.
 
-Schema (one row per run; ``events`` is the trace's event array as JSON):
+The DDL lives in :mod:`a2a_engine.storage.schema`, which the control plane
+executes too: ``episodes`` is the fact table of one star schema in one file, so
+a fact row joins its dimensions in SQL rather than through an application-side
+lookup. Writing an episode also projects the release dimension out of its own
+provenance block, so a runner invoked with nothing but ``--storage-path``
+produces a database that says which release produced each row.
 
-    episodes(episode_uid PK, environment_id, experiment_name, episode_id,
-           cell_id, episode_idx, config, events, final_state, metrics, release, episode,
-           started_at, ended_at, stopped, manifest, created_at)
-
-``episode_id`` is indexed rather than unique: re-running an experiment
-after a crash legitimately produces a second attempt at the same run id, and
+``episode_id`` is indexed rather than unique: re-running an experiment after a
+crash legitimately produces a second attempt at the same run id, and
 ``--resume`` is what decides whether to skip it.
 """
 
@@ -34,75 +35,16 @@ from typing import Any, Iterator
 
 from a2a_engine.derived import DerivedArtifact
 from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.provenance import promoted_columns, release_dimension
 from a2a_engine.ratings.schemas import RatingEvent, RatingSnapshot
 from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
 from a2a_engine.storage.local import LocalJSONStore
+from a2a_engine.storage.schema import apply_schema
 
 log = logging.getLogger("a2a_engine.storage.sqlite")
 
-DEFAULT_DB_NAME = "a2a_traces.db"
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS episodes (
-    episode_uid           TEXT PRIMARY KEY,
-    environment_id         TEXT,
-    experiment_name   TEXT,
-    episode_id TEXT,
-    cell_id       TEXT,
-    episode_idx           INTEGER,
-    config            TEXT NOT NULL,
-    events            TEXT NOT NULL,
-    final_state       TEXT NOT NULL,
-    metrics           TEXT NOT NULL,
-    release       TEXT NOT NULL DEFAULT '{}',
-    episode           TEXT NOT NULL DEFAULT '{}',
-    observability     TEXT NOT NULL DEFAULT '{}',
-    started_at        TEXT,
-    ended_at          TEXT,
-    stopped           INTEGER DEFAULT 0,
-    manifest          TEXT NOT NULL,
-    created_at        TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_episodes_experiment ON episodes(experiment_name);
-CREATE INDEX IF NOT EXISTS idx_episodes_environment ON episodes(environment_id);
-CREATE INDEX IF NOT EXISTS idx_episodes_episode_id ON episodes(episode_id);
-
--- Derived data is intentionally separate from the immutable environment trace. Both
--- tables are keyed by environment ID plus extractor version, so a new analysis can be
--- backfilled without mutating the source record or double-counting a result.
-CREATE TABLE IF NOT EXISTS derived_artifacts (
-    episode_uid      TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    version      TEXT NOT NULL,
-    trace_digest TEXT NOT NULL,
-    payload      TEXT NOT NULL,
-    metadata     TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    PRIMARY KEY (episode_uid, kind, version)
-);
-CREATE INDEX IF NOT EXISTS idx_artifacts_episode ON derived_artifacts(episode_uid);
-
-CREATE TABLE IF NOT EXISTS rating_events (
-    episode_uid         TEXT NOT NULL,
-    environment_id       TEXT NOT NULL,
-    adapter_version TEXT NOT NULL,
-    trace_digest    TEXT NOT NULL,
-    event           TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (episode_uid, adapter_version)
-);
-CREATE INDEX IF NOT EXISTS idx_rating_events_environment
-    ON rating_events(environment_id, adapter_version);
-
-CREATE TABLE IF NOT EXISTS rating_snapshots (
-    environment_id       TEXT NOT NULL,
-    adapter_version TEXT NOT NULL,
-    snapshot        TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (environment_id, adapter_version)
-);
-"""
+DEFAULT_DB_NAME = "a2a.db"
 
 # Columns a caller may filter list_episodes() on. Restricting to real columns
 # keeps the filter clause parameterised and prevents a filter key from being
@@ -110,7 +52,17 @@ CREATE TABLE IF NOT EXISTS rating_snapshots (
 _FILTERABLE = {
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "stopped",
+    "experiment_id", "release_id", "item_id", "attempt", "seed", "status",
 }
+
+# The identity and provenance columns a list view needs. Selecting them by name
+# is what keeps the episode list off the eight-``json.loads``-per-row path the
+# unpaginated full scan used to take.
+_SUMMARY_COLUMNS = (
+    "episode_uid", "environment_id", "experiment_name", "episode_id",
+    "cell_id", "episode_idx", "experiment_id", "release_id", "item_id",
+    "attempt", "seed", "status", "started_at", "ended_at", "stopped", "created_at",
+)
 
 
 class SQLiteEpisodeStore:
@@ -150,29 +102,16 @@ class SQLiteEpisodeStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        # One database means the fact table's references to its dimensions are
+        # real constraints rather than a convention. SQLite enforces them per
+        # connection, so both owners have to ask.
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         if self._initialised:
             return
-        conn.executescript(_SCHEMA)
-        # SQLite's CREATE TABLE IF NOT EXISTS does not migrate a pre-existing
-        # local corpus. Keep this migration additive so old trace DBs remain
-        # readable after observability provenance was introduced.
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(episodes)")}
-        if "observability" not in columns:
-            conn.execute(
-                "ALTER TABLE episodes ADD COLUMN observability TEXT NOT NULL DEFAULT '{}'"
-            )
-        if "release" not in columns:
-            conn.execute(
-                "ALTER TABLE episodes ADD COLUMN release TEXT NOT NULL DEFAULT '{}'"
-            )
-        if "episode" not in columns:
-            conn.execute(
-                "ALTER TABLE episodes ADD COLUMN episode TEXT NOT NULL DEFAULT '{}'"
-            )
-        conn.commit()
+        apply_schema(conn)
         self._initialised = True
 
     def uri(self, episode_uid: str = "") -> str:
@@ -191,6 +130,9 @@ class SQLiteEpisodeStore:
             self.local.put_episode(trace, manifest)
 
         manifest.storage.backend = self.name
+        # Promotion reads the provenance block the compiler stamped; the block
+        # itself stays inside ``config`` and is the durable copy.
+        promoted = promoted_columns(trace)
         row = (
             trace.episode_uid,
             manifest.environment_id or payload.get("config", {}).get("environment_id"),
@@ -198,6 +140,12 @@ class SQLiteEpisodeStore:
             manifest.episode_id,
             manifest.cell_id,
             manifest.episode_idx,
+            promoted["experiment_id"],
+            promoted["release_id"],
+            promoted["item_id"],
+            promoted["attempt"],
+            promoted["seed"] if promoted["seed"] is not None else manifest.seed,
+            promoted["status"],
             json.dumps(payload.get("config", {})),
             json.dumps(events),
             json.dumps(payload.get("final_state", {})),
@@ -215,6 +163,7 @@ class SQLiteEpisodeStore:
                 conn = self._connect()
                 try:
                     self._ensure_schema(conn)
+                    self._project_release(conn, trace)
                     # The manifest is written last and includes the status we are
                     # about to commit, so serialise it after the row is staged.
                     manifest.storage.uri = self.uri(trace.episode_uid)
@@ -222,9 +171,11 @@ class SQLiteEpisodeStore:
                     conn.execute(
                         "INSERT OR REPLACE INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
-                        "  cell_id, episode_idx, config, events, final_state, metrics, release, episode,"
+                        "  cell_id, episode_idx, experiment_id, release_id, item_id,"
+                        "  attempt, seed, status,"
+                        "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
@@ -247,6 +198,29 @@ class SQLiteEpisodeStore:
         if self.local is not None:
             self.local.write_manifest(manifest, Path(manifest.local_trace_path))
         return manifest.storage.uri or self.uri(trace.episode_uid)
+
+    @staticmethod
+    def _project_release(conn: sqlite3.Connection, trace: EpisodeTrace) -> None:
+        """Ensure the release this episode names exists as a dimension row.
+
+        First writer wins: the control plane seeds the same row when it knows
+        about the installed release, and a bare runner projects it out of the
+        trace. Both describe one content-addressed release, so neither should
+        overwrite the other's description of it.
+        """
+        dimension = release_dimension(trace)
+        if dimension is None:
+            return
+        conn.execute(
+            "INSERT OR IGNORE INTO releases "
+            "(id, environment_id, version, declaration_sha256, item_bank_sha256,"
+            " oracle_version, source_ref) VALUES (?,?,?,?,?,?,?)",
+            (
+                dimension["id"], dimension["environment_id"], dimension["version"],
+                dimension["declaration_sha256"], dimension["item_bank_sha256"],
+                dimension["oracle_version"], "episode-projection",
+            ),
+        )
 
     # --- read ---
 
@@ -282,6 +256,62 @@ class SQLiteEpisodeStore:
         has_more = len(rows) > limit
         page = [json.loads(r["manifest"]) for r in rows[:limit]]
         return page, str(offset + limit) if has_more else None
+
+    def episode_summaries(
+        self,
+        filters: dict[str, Any] | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """One page of the fact table, newest first, filtered in SQL.
+
+        The identity and provenance columns are promoted, so a list view reads
+        them directly instead of rehydrating whole traces. Only ``metrics``
+        still has to be decoded, because it is the one thing a researcher wants
+        to see beside the identity and it has no fixed shape.
+        """
+        where, params = self._where(filters)
+        offset = int(cursor) if cursor else 0
+        if limit < 1:
+            raise ValueError("episode limit must be at least 1")
+        columns = ", ".join(_SUMMARY_COLUMNS)
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                f"SELECT {columns}, metrics FROM episodes {where} "
+                "ORDER BY created_at DESC, episode_uid DESC LIMIT ? OFFSET ?",
+                (*params, limit + 1, offset),
+            ).fetchall()
+        finally:
+            conn.close()
+        has_more = len(rows) > limit
+        page = []
+        for row in rows[:limit]:
+            summary: dict[str, Any] = {column: row[column] for column in _SUMMARY_COLUMNS}
+            summary["stopped"] = bool(summary["stopped"])
+            try:
+                summary["metrics"] = json.loads(row["metrics"] or "{}")
+            except json.JSONDecodeError:
+                summary["metrics"] = {}
+            page.append(summary)
+        return page, str(offset + limit) if has_more else None
+
+    def count_episodes(self, filters: dict[str, Any] | None = None) -> int:
+        """How many rows match, without rehydrating any of them.
+
+        The health endpoint asks this every few seconds; counting used to mean
+        deserialising every trace in the corpus.
+        """
+        where, params = self._where(filters)
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            return int(conn.execute(
+                f"SELECT COUNT(*) AS n FROM episodes {where}", params
+            ).fetchone()["n"])
+        finally:
+            conn.close()
 
     def iter_episodes(
         self, filters: dict[str, Any] | None = None
@@ -331,11 +361,18 @@ class SQLiteEpisodeStore:
     # --- resume support ---
 
     def completed_episode_ids(self, experiment_name: str) -> set[str]:
+        """The deterministic ids this store already holds a completed run for.
+
+        A ``PARTIAL`` row is a trace recovered from an interrupted episode's
+        event log. It is evidence, not a result, so ``--resume`` must not treat
+        it as one and the progress join must not count it.
+        """
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                "SELECT DISTINCT episode_id FROM episodes WHERE experiment_name = ?",
+                "SELECT DISTINCT episode_id FROM episodes "
+                "WHERE experiment_name = ? AND status != 'PARTIAL'",
                 (experiment_name,),
             ).fetchall()
         finally:

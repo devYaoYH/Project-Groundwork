@@ -17,7 +17,7 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Materialize derived release metrics from completed episodes.")
-    parser.add_argument("--database", default="./results/a2a_traces.db")
+    parser.add_argument("--database", default="./results/a2a.db")
     parser.add_argument("--environment", help="Optional environment-name filter")
     args = parser.parse_args(argv)
 

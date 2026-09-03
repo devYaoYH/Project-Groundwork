@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The mirrored client validator has no server to catch its mistakes, and
+      # a half-written document must never throw in the editor.
+      - run: npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -58,10 +76,65 @@ jobs:
           docker compose run --rm runner \
             a2a-run games/calendar/experiments/typed_local_smoke.yaml \
             --smoke-test --max-parallelism 1 --results-dir /data \
-            --storage-path /data/a2a_traces.db
+            --storage-path /data/a2a.db
           docker compose run --rm runner \
             python scripts/materialize_metrics.py \
-            --database /data/a2a_traces.db --environment calendar
+            --database /data/a2a.db --environment calendar
+      - name: Verify researcher design lock and smoke launch
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          base = "http://127.0.0.1:8080"
+          design_text = Path("local_stack/tests/buyer_seller_design_smoke.yaml").read_text()
+
+          def request(path, body=None):
+              request = Request(
+                  base + path,
+                  data=json.dumps(body).encode() if body is not None else None,
+                  headers={"Content-Type": "application/json"},
+                  method="POST" if body is not None else "GET",
+              )
+              with urlopen(request) as response:
+                  return response.status, json.load(response)
+
+          status, validation = request("/api/designs/validate", {
+              "release_id": "buyer_seller", "design_text": design_text,
+          })
+          assert status == 200 and validation["valid"]
+          status, experiment = request("/api/experiments", {
+              "name": "CI buyer-seller design", "release_id": "buyer_seller",
+              "design_text": design_text,
+          })
+          assert status == 201
+          status, locked = request(f"/api/experiments/{experiment['id']}/lock", {
+              "design_sha256": experiment["design_sha256"],
+          })
+          assert status == 200 and locked["locked_at"]
+          status, launch = request("/api/launches", {
+              "experiment_id": experiment["id"], "mode": "smoke",
+          })
+          assert status == 202
+          for _ in range(100):
+              _, launch_detail = request(f"/api/launches/{launch['id']}")
+              if launch_detail["launch"]["status"] in {"COMPLETED", "FAILED", "CANCELLED"}:
+                  break
+              time.sleep(0.1)
+          assert launch_detail["launch"]["status"] == "COMPLETED"
+          _, episodes = request(f"/api/episodes?experiment_id={experiment['id']}")
+          assert len(episodes["episodes"]) == 2
+          for episode in episodes["episodes"]:
+              _, trace = request(f"/api/episodes/{episode['episode_uid']}")
+              provenance = trace["config"]["provenance"]
+              assert provenance["experiment_id"] == experiment["id"]
+              assert provenance["cell_id"] == episode["cell_id"]
+              assert provenance["design_sha256"] == locked["design_sha256"]
+              assert set(provenance["item_attributes"]) == {"seller_cost"}
+              assert trace["config"]["discount_factor"] in {0.5, 1.0}
+          PY
       - name: Verify trace, OTel, artifact, and leaderboard APIs
         run: |
           python - <<'PY'
@@ -113,15 +186,40 @@ jobs:
               calendar_items["item_bank_sha256"]
               == calendar_environment["release"]["item_bank_sha256"]
           )
-          episodes = json.load(urlopen(f"{base}/api/episodes"))["episodes"]
+          listing = json.load(urlopen(f"{base}/api/episodes"))
+          episodes = listing["episodes"]
+          assert "next_cursor" in listing
           calendar = next(
               trace for trace in episodes
               if trace["environment_id"] == "calendar"
           )
+          # Identity and provenance are promoted to real columns, so the list
+          # is a filtered SQL query rather than a full-corpus rehydration.
+          assert calendar["experiment_name"]
+          assert calendar["cell_id"]
+          assert calendar["attempt"] >= 1
+          assert calendar["seed"] is not None
+          assert calendar["status"] == "COMPLETED"
+          filtered = json.load(
+              urlopen(f"{base}/api/episodes?environment_id=calendar&limit=1")
+          )["episodes"]
+          assert len(filtered) == 1
+          assert filtered[0]["environment_id"] == "calendar"
           episode_uid = calendar["episode_uid"]
           trace = json.load(urlopen(f"{base}/api/episodes/{episode_uid}"))
           assert trace["release"]["content_sha256"]
           assert trace["episode"]["id"]
+          # The durable copy of provenance travels inside the trace: a record
+          # read without the control plane still says what produced it.
+          provenance = trace["config"]["provenance"]
+          assert provenance["item_bank_sha256"]
+          assert provenance["oracle_version"] == "cp-sat-v1"
+          assert provenance["release_id"] == "calendar"
+          assert provenance["cell_id"] == calendar["cell_id"]
+          assert provenance["seed"] == calendar["seed"]
+          # No design object exists yet; a hand-written config keeps this shape.
+          assert provenance["experiment_id"] is None
+          assert provenance["design_sha256"] is None
           artifacts = json.load(urlopen(f"{base}/api/episodes/{episode_uid}/artifacts"))
           assert any(
               artifact["kind"] == "derived_metrics.calendar.score_margin"

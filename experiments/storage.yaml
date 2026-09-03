@@ -16,7 +16,7 @@ sinks:
   # This is what a new contributor should use.
   local_db:
     backend: sqlite
-    path: ${A2A_TRACE_DB:-./results/a2a_traces.db}
+    path: ${A2A_TRACE_DB:-./results/a2a.db}
 
   # Plain JSON on disk. Slower to query than SQLite, but every file is
   # human-readable and diffable, which is handy when debugging a environment.

@@ -24,10 +24,11 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
+from a2a_engine.design import DesignValidationError
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
-    from local_stack.control_plane import ControlPlane, OracleUnavailable
+    from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
 except ModuleNotFoundError:  # pragma: no cover - exercised by the Compose entrypoint
-    from control_plane import ControlPlane, OracleUnavailable
+    from control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
 
 
 def sse_frame(event: dict) -> str:
@@ -43,10 +44,12 @@ def sse_frame(event: dict) -> str:
 
 
 class LocalStackHandler(BaseHTTPRequestHandler):
-    database = Path("/data/a2a_traces.db")
+    # One database: the episode fact table and the control-plane dimensions
+    # live in the same file, so every read below is a plain SQL query rather
+    # than an application-side join across two of them.
+    database = Path("/data/a2a.db")
     otel_file = Path("/data/otel-spans.jsonl")
     static_dir = Path("a2a-viewer")
-    control_database = Path("/data/a2a_control.db")
     workspace = Path.cwd()
     _control_plane: ControlPlane | None = None
     _control_lock = threading.Lock()
@@ -96,6 +99,12 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 404)
         if parsed.path == "/api/experiments":
             return self._json({"experiments": [experiment.__dict__ for experiment in self._control().experiments()]})
+        if parsed.path.startswith("/api/experiments/"):
+            experiment_id = unquote(parsed.path.removeprefix("/api/experiments/").rstrip("/"))
+            try:
+                return self._json(self._control().experiment_detail(experiment_id))
+            except KeyError:
+                return self._json({"error": "experiment not found"}, 404)
         if parsed.path == "/api/launches":
             return self._json({"launches": [launch.__dict__ for launch in self._control().launches()]})
         if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/events"):
@@ -115,7 +124,10 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             stream = unquote(parsed.path.removeprefix("/api/streams/"))
             return self._json(self._stream_events(stream))
         if parsed.path == "/api/episodes":
-            return self._json({"episodes": self._trace_summaries()})
+            try:
+                return self._json(self._episode_page(parse_qs(parsed.query)))
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
         if parsed.path.startswith("/api/episodes/") and parsed.path.endswith("/observability"):
             episode_uid = unquote(parsed.path.removeprefix("/api/episodes/").removesuffix("/observability"))
             payload = self._observability(episode_uid)
@@ -157,16 +169,41 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 )
             if parsed.path == "/api/experiments":
                 experiment = self._control().create_experiment(
-                    yaml_path=str(body.get("yaml_path") or ""),
+                    yaml_path=str(body["yaml_path"]) if body.get("yaml_path") else None,
                     release_id=body.get("release_id"),
                     name=body.get("name"),
+                    design_text=str(body["design_text"]) if body.get("design_text") is not None else None,
                 )
                 return self._json(experiment.__dict__, 201)
+            if parsed.path == "/api/designs/validate":
+                return self._json(self._control().validate_design_text(
+                    release_id=str(body.get("release_id") or ""),
+                    design_text=str(body.get("design_text") or ""),
+                ))
+            if parsed.path.startswith("/api/experiments/") and parsed.path.endswith("/lock"):
+                experiment_id = unquote(
+                    parsed.path.removeprefix("/api/experiments/").removesuffix("/lock").rstrip("/")
+                )
+                experiment = self._control().lock_experiment(
+                    experiment_id, design_sha256=str(body.get("design_sha256") or "")
+                )
+                return self._json(experiment.__dict__)
+            if parsed.path.startswith("/api/experiments/") and parsed.path.endswith("/design"):
+                experiment_id = unquote(
+                    parsed.path.removeprefix("/api/experiments/").removesuffix("/design").rstrip("/")
+                )
+                experiment = self._control().update_experiment_design(
+                    experiment_id, design_text=str(body.get("design_text") or "")
+                )
+                return self._json(experiment.__dict__, 201 if experiment.forked_from else 200)
             if parsed.path == "/api/launches":
                 launch = self._control().launch_experiment(
                     str(body.get("experiment_id") or ""),
                     max_parallelism=int(body.get("max_parallelism") or 1),
                     smoke_test=bool(body.get("smoke_test", False)),
+                    mode=str(body.get("mode") or "live"),
+                    shard_index=(int(body["shard_index"]) if body.get("shard_index") is not None else None),
+                    shard_count=(int(body["shard_count"]) if body.get("shard_count") is not None else None),
                 )
                 return self._json(launch.__dict__, 202)
             if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/cancel"):
@@ -174,6 +211,10 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json(self._control().cancel_launch(launch_id).__dict__)
         except OracleUnavailable as exc:
             return self._json({"error": str(exc)}, 409)
+        except DesignDigestMismatch as exc:
+            return self._json({"error": str(exc)}, 409)
+        except DesignValidationError as exc:
+            return self._json({"error": str(exc), "errors": [error.as_dict() for error in exc.errors]}, 400)
         except (KeyError, ValueError) as exc:
             return self._json({"error": str(exc)}, 400)
         return self._json({"error": "not found"}, 404)
@@ -189,12 +230,13 @@ class LocalStackHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def _control(cls) -> ControlPlane:
-        if cls._control_plane is None or cls._control_plane.path != cls.control_database:
+        if cls._control_plane is None or cls._control_plane.path != cls.database:
             with cls._control_lock:
-                if cls._control_plane is None or cls._control_plane.path != cls.control_database:
-                    control = ControlPlane(
-                        cls.control_database, workspace=cls.workspace, trace_database=cls.database,
-                    )
+                if cls._control_plane is None or cls._control_plane.path != cls.database:
+                    # Constructing the control plane reconciles any launch left
+                    # RUNNING by a previous process, so a restart resolves
+                    # stranded launches instead of leaving them there forever.
+                    control = ControlPlane(cls.database, workspace=cls.workspace)
                     control.seed_installed_releases()
                     cls._control_plane = control
         return cls._control_plane
@@ -202,7 +244,9 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     @classmethod
     def _health(cls) -> dict[str, object]:
         try:
-            count = sum(1 for _ in cls._store().iter_episodes())
+            # Compose polls this every few seconds; counting rows must not
+            # mean deserialising the whole corpus each time.
+            count = cls._store().count_episodes()
             return {
                 "ok": True,
                 "database": "ready" if cls.database.exists() else "waiting for first run",
@@ -211,25 +255,34 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             return {"ok": False, "database": "unreadable", "error": str(exc)}
 
+    #: Query parameters that narrow the episode list. The store applies its own
+    #: column whitelist on top, so an unknown key is dropped rather than
+    #: interpolated; this list is what the browser is told it may ask for.
+    EPISODE_FILTERS = (
+        "experiment_id", "experiment_name", "cell_id", "environment_id",
+        "episode_id", "release_id", "item_id", "status",
+    )
+
     @classmethod
-    def _trace_summaries(cls) -> list[dict[str, object]]:
-        episodes = list(cls._store().iter_episodes())
-        return [{
-            "episode_uid": trace.episode_uid,
-            "environment_id": trace.config.environment_id,
-            "experiment_name": trace.config.experiment_name,
-            "episode_id": trace.config.episode_id,
-            "release_id": trace.release.id if trace.release else None,
-            "release_version": trace.release.release if trace.release else None,
-            "episode_reference_id": trace.episode.id if trace.episode else None,
-            "cell_id": trace.config.extra.get("cell_id"),
-            "episode_idx": trace.config.extra.get("episode_idx"),
-            "started_at": trace.started_at,
-            "ended_at": trace.ended_at,
-            "stopped": trace.stopped,
-            "metrics": trace.metrics,
-            "created_at": trace.started_at,
-        } for trace in reversed(episodes)]
+    def _episode_page(cls, query: dict[str, list[str]]) -> dict[str, object]:
+        """One filtered, paginated page of the fact table.
+
+        The unfiltered full scan this replaces deserialised every trace ever
+        written on every request. Filters are pushed into SQL, where the
+        promoted provenance columns are indexed.
+        """
+        filters = {
+            key: query[key][0] for key in cls.EPISODE_FILTERS
+            if query.get(key) and query[key][0] != ""
+        }
+        limit = int(query.get("limit", ["100"])[0])
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        cursor = query.get("cursor", [None])[0]
+        episodes, next_cursor = cls._store().episode_summaries(
+            filters, limit=limit, cursor=cursor,
+        )
+        return {"episodes": episodes, "next_cursor": next_cursor, "filters": filters}
 
     @classmethod
     def _trace(cls, episode_uid: str) -> dict[str, object] | None:
@@ -425,10 +478,11 @@ class LocalStackHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", default="/data/a2a_traces.db")
+    # ``--control-database`` is gone: the control plane and the episode store
+    # are one file, which is what lets progress be a SQL join.
+    parser.add_argument("--database", default="/data/a2a.db")
     parser.add_argument("--otel-file", default="/data/otel-spans.jsonl")
     parser.add_argument("--static-dir", default="a2a-viewer")
-    parser.add_argument("--control-database", default="/data/a2a_control.db")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
@@ -436,7 +490,6 @@ def main() -> int:
     LocalStackHandler.database = Path(args.database)
     LocalStackHandler.otel_file = Path(args.otel_file)
     LocalStackHandler.static_dir = Path(args.static_dir)
-    LocalStackHandler.control_database = Path(args.control_database)
     LocalStackHandler.workspace = Path(args.workspace).resolve()
     LocalStackHandler._control_plane = None
     server = ThreadingHTTPServer((args.host, args.port), LocalStackHandler)

@@ -35,7 +35,7 @@ Better, reference a shared named sink so the details live in one place:
 sinks:
   local_db:
     backend: sqlite
-    path: ${A2A_TRACE_DB:-./results/a2a_traces.db}
+    path: ${A2A_TRACE_DB:-./results/a2a.db}
   lab_s3:
     backend: s3
     bucket: ${A2A_TRACE_BUCKET}
