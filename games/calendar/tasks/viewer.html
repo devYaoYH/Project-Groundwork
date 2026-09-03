@@ -516,7 +516,8 @@ function readFile(file) {
   reader.readAsText(file);
 }
 
-// Load trace passed from a2a-viewer hub via sessionStorage, or ?trace= param
+// Load a trace handed over via sessionStorage, or fetched from ?trace=<url>.
+// The replay page under /environment-replays/calendar/ uses the ?trace= path.
 (async () => {
   const pending = sessionStorage.getItem('a2a_pending_trace');
   if (pending) {

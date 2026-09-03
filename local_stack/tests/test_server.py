@@ -11,7 +11,8 @@ from pathlib import Path
 
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.derived import DerivedArtifact, trace_digest
-from a2a_engine.schemas import ParticipantBinding, EpisodeConfigBase, EpisodeTrace
+from a2a_engine.provenance import build_provenance
+from a2a_engine.schemas import Event, ParticipantBinding, EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 # The local control plane is a runnable service, not a separately installed
@@ -265,8 +266,16 @@ def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     detail = control.launch_detail(launch.id)
     assert detail["launch"]["status"] == "COMPLETED"
-    assert {attempt["status"] for attempt in detail["attempts"]} == {"COMPLETED"}
+    # Runner output is retained for diagnostics, but it is not evidence that a
+    # trace committed. The terminal identity join correctly leaves these fake
+    # runner-only reports visible as gaps.
+    assert {attempt["status"] for attempt in detail["attempts"]} == {"UNREPORTED"}
     assert {attempt["episode_uri"] for attempt in detail["attempts"]} == {"sqlite:///dog", "sqlite:///apple"}
+    assert all(attempt["episode_uid"] is None for attempt in detail["attempts"])
+    assert [event["payload"]["line"] for event in detail["runner_logs"]] == [
+        f"      OK   {experiment.name}.dog.0  [word_guess] -> sqlite:///dog",
+        f"      OK   {experiment.name}.apple.0  [word_guess] -> sqlite:///apple",
+    ]
     assert all(attempt["redis_stream"].startswith(f"a2a:launch:{launch.id}:") for attempt in detail["attempts"])
 
 
@@ -310,8 +319,8 @@ def test_smoke_launch_plans_only_the_runs_the_runner_executes(tmp_path):
     assert len(control.launch_detail(live.id)["attempts"]) == 11
 
 
-def test_launch_does_not_complete_episodes_the_runner_never_reported(tmp_path):
-    """A silent episode is an unreported gap, not a completed run."""
+def test_launch_does_not_complete_episodes_without_persisted_trace(tmp_path):
+    """A stdout report is provenance, not proof that the trace committed."""
     control, experiment = _buyer_seller_control(tmp_path)
 
     class PartialLauncher:
@@ -331,7 +340,7 @@ def test_launch_does_not_complete_episodes_the_runner_never_reported(tmp_path):
 
     by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
     reported = by_episode[f"{experiment.name}.wide_surplus.0"]
-    assert reported["status"] == "COMPLETED"
+    assert reported["status"] == "UNREPORTED"
     assert reported["episode_uri"] == "sqlite:///wide"
 
     silent = by_episode[f"{experiment.name}.monotonic.0"]
@@ -368,7 +377,7 @@ def test_failed_episodes_keep_their_own_runner_diagnostic(tmp_path):
     by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
     assert by_episode[f"{experiment.name}.monotonic.0"]["error"] == "ValueError: bad price"
     assert by_episode[f"{experiment.name}.narrow_surplus.0"]["error"] == "TimeoutError"
-    assert by_episode[f"{experiment.name}.wide_surplus.0"]["status"] == "COMPLETED"
+    assert by_episode[f"{experiment.name}.wide_surplus.0"]["status"] == "FAILED"
 
 
 def test_sse_frames_stay_unnamed_so_new_event_kinds_reach_existing_clients(tmp_path):
@@ -609,14 +618,90 @@ def test_embedded_replay_hides_its_own_chrome_with_css_not_just_hidden():
     assert 'params.get("embed")' in page
 
 
-def test_replay_shell_registers_a_viewer_for_every_served_game():
-    """The shell picks a viewer from the projected environment name; a environment with no
-    entry would render an empty stage rather than an error."""
-    workspace = Path(__file__).resolve().parents[2]
-    shell = (workspace / "a2a-viewer/js/replay.js").read_text()
+def test_every_environment_replay_page_resolves_and_is_self_contained():
+    """The hand-rolled viewer is gone, so a replay page may not link into it.
 
-    for environment in ("calendar", "negotiation", "buyer_seller", "word_guess"):
-        assert f"{environment}:" in shell, f"replay shell has no viewer for {environment}"
+    These pages are served out of the environment's own directory. A stylesheet
+    or module reached from the retired hand-rolled viewer would 404 at exactly
+    the moment someone opened a replay to debug something else.
+    """
+    workspace = Path(__file__).resolve().parents[2]
+
+    for environment in ("calendar", "negotiation", "buyer-seller", "word-guess"):
+        page = workspace / "games" / environment / "replay" / "index.html"
+        assert page.is_file()
+        source = page.read_text()
+        assert "/css/styles.css" not in source
+        assert "/replays/" not in source
+        assert "/control.html" not in source
+        # Vendored assets are served under the environment prefix, never the
+        # retired game- one.
+        assert "/game-assets/" not in source and "/game-replays/" not in source
+
+
+def test_replay_pages_that_own_a_cursor_accept_one_from_a_host_frame():
+    """The specialised-viewer seam: one scrubber drives the standard lane view
+    and the environment's own rendering together.
+
+    Calendar is deliberately excluded. Its page hands the stream to Calendar's
+    own viewer and navigates away, so there is no cursor left to move and an
+    inert listener would only claim otherwise.
+    """
+    workspace = Path(__file__).resolve().parents[2]
+
+    for environment in ("negotiation", "buyer-seller", "word-guess"):
+        sources = [
+            path.read_text()
+            for path in (workspace / "games" / environment / "replay").iterdir()
+            if path.suffix in {".html", ".js"}
+        ]
+        joined = "\n".join(sources)
+        assert 'event.data?.type === "cursor"' in joined, environment
+        assert "function seek(" in joined, environment
+
+
+def test_static_replay_and_asset_roots_are_each_confined_to_their_own_tree(tmp_path):
+    """Three roots are served; none of them may be escaped."""
+    workspace = Path(__file__).resolve().parents[2]
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_bytes(b"<!doctype html><title>Control plane</title>")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("not servable")
+
+    class TestHandler(LocalStackHandler):
+        pass
+
+    TestHandler.database = tmp_path / "a2a.db"
+    TestHandler.static_dir = static_dir
+    TestHandler.workspace = workspace
+    TestHandler._control_plane = None
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        for environment in ("calendar", "negotiation", "buyer-seller", "word-guess"):
+            status, _headers, body = _request(server, "GET", f"/environment-replays/{environment}/")
+            assert status == 200, environment
+            assert b"replay" in body.lower()
+
+        status, _headers, _body = _request(
+            server, "GET", "/environment-assets/negotiation/webapp/static/js/live.js")
+        assert status == 200
+
+        # An unserved environment name is a 404, not a path to somewhere else.
+        assert _request(server, "GET", "/environment-replays/etc/")[0] == 404
+
+        for escape in (
+            "/environment-replays/calendar/../../../secret.txt",
+            "/environment-assets/calendar/../../../secret.txt",
+            "/../secret.txt",
+        ):
+            assert _request(server, "GET", escape)[0] == 403, escape
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_experiment_config_endpoint_only_serves_offered_configurations(tmp_path):
@@ -659,28 +744,108 @@ def test_offered_configurations_are_rescanned_not_cached(tmp_path):
     )
 
 
-def test_control_ui_exposes_the_three_workflow_tabs_and_a_details_dialog():
-    workspace = Path(__file__).resolve().parents[2]
-    page = (workspace / "a2a-viewer/control.html").read_text()
-    script = (workspace / "a2a-viewer/js/control.js").read_text()
+def test_episode_detail_carries_the_lanes_and_cursor_the_browser_cannot_derive(tmp_path):
+    """One episode, plus the pinned roster and the release's index label.
 
-    for panel in ("panel-configure", "panel-launch", "panel-launches"):
-        assert f'id="{panel}"' in page
-    assert "Registered environments" in page, "releases are presented as environments"
-    assert "<dialog" in page
+    Lanes come from provenance because that is the durable copy: the roster is
+    frozen per experiment and the trace records it, so the lane view does not
+    depend on the control plane still holding the experiment.
+    """
+    config = EpisodeConfigBase(
+        environment_id="negotiation",
+        num_agents=2,
+        agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
+        experiment_name="lanes-test",
+        episode_id="lanes-test.cell.0",
+    )
+    payload = config.model_dump()
+    payload["provenance"] = build_provenance(
+        config=payload, experiment_name="lanes-test", cell_id="cell", episode_idx=0,
+    )
+    config = EpisodeConfigBase(**payload)
+    trace = EpisodeTrace(
+        episode_uid="lanes-run",
+        config=config,
+        events=[
+            Event(type="phase_start", data={"round": 1}),
+            Event(type="cheap_talk", data={"speaker": "participant_0", "text": "hello", "round": 1}),
+        ],
+    )
+    manifest = EpisodeManifest.from_run(
+        config=config.model_dump(), experiment_name="lanes-test",
+        cell_id="cell", episode_idx=0, episode_uid=trace.episode_uid,
+    )
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, manifest)
 
-    # The trace viewer reads ?trace=<episode_uid>; ?episode_uid= would be a dead link.
-    assert "/trace.html?trace=" in script
-    # Launch state advances in the runner, so the list cannot be a one-shot render.
-    assert "schedulePoll" in script
-    # Starting a launch needs the experiment ID, while Details needs a launch
-    # ID. Sharing an attribute lets the latter click handler overwrite the
-    # former and requests /api/launches/<experiment-id>.
-    assert 'data-start-launch="${esc(experiment.id)}"' in script
-    assert 'querySelectorAll("[data-start-launch]")' in script
-    assert 'launch(button.dataset.startLaunch, button.dataset.name)' in script
-    assert 'querySelectorAll("[data-launch]")' in script
-    assert 'showLaunchDetails(button.dataset.launch)' in script
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        detail = LocalStackHandler._episode_detail(trace.episode_uid)
+        assert detail is not None
+        assert detail["episode"]["episode_uid"] == trace.episode_uid
+        assert [lane["participant_id"] for lane in detail["lanes"]] == ["participant_0", "participant_1"]
+        assert [lane["binding"] for lane in detail["lanes"]] == ["model-a", "model-b"]
+        # The scrubber's bound is the event count, not a derived guess.
+        assert detail["cursor_max"] == 2
+        # No shipped release declares a sequence-grained measure yet, so no
+        # environment supplies an index. Absent asserts nothing false.
+        assert detail["index_label"] is None
+        assert LocalStackHandler._episode_detail("no-such-episode") is None
+    finally:
+        LocalStackHandler.database = previous
+
+
+def test_episode_detail_survives_a_trace_with_no_events_and_no_provenance(tmp_path):
+    """An attempt that died before its first turn is a state, not a gap."""
+    config = EpisodeConfigBase(environment_id="word_guess", num_agents=1)
+    trace = EpisodeTrace(episode_uid="empty-run", config=config, events=[])
+    manifest = EpisodeManifest.from_run(
+        config=config.model_dump(), experiment_name="empty-test",
+        cell_id="cell", episode_idx=0, episode_uid=trace.episode_uid,
+    )
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(trace, manifest)
+
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        detail = LocalStackHandler._episode_detail(trace.episode_uid)
+        assert detail == {
+            "episode": detail["episode"],
+            "lanes": [],
+            "index_label": None,
+            "cursor_max": 0,
+        }
+    finally:
+        LocalStackHandler.database = previous
+
+
+def test_index_label_comes_from_a_declared_sequence_measure(monkeypatch):
+    """The environment's own word for position inside an episode.
+
+    An uninstalled or unknown environment resolves to ``None`` rather than
+    raising: a trace produced elsewhere must still open.
+    """
+    from a2a_engine.declaration import MeasureConfig
+
+    class FakeSpec:
+        declaration = type("Declaration", (), {"measures": [
+            MeasureConfig(name="joint_reward", producer="environment"),
+            MeasureConfig(name="round_reward", producer="derived", extractor="x",
+                          grain="sequence", index_label="round"),
+        ]})()
+
+    monkeypatch.setattr("local_stack.server.discover_environments", lambda: None)
+    monkeypatch.setattr("local_stack.server.get_environment_spec", lambda name: FakeSpec())
+    assert LocalStackHandler._index_label("negotiation") == "round"
+
+    monkeypatch.setattr(
+        "local_stack.server.get_environment_spec",
+        lambda name: (_ for _ in ()).throw(KeyError(name)),
+    )
+    assert LocalStackHandler._index_label("not_installed") is None
+    assert LocalStackHandler._index_label("") is None
 
 
 def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeypatch):

@@ -108,10 +108,55 @@ export type EpisodeSummary = {
 };
 
 export type EpisodeFilters = {
+  experiment_id?: string;
   experiment_name?: string;
   environment_id?: string;
   cell_id?: string;
   status?: string;
+};
+
+// One emitted event. `type` is environment-defined and `data` is a free dict,
+// so nothing beyond those two may be assumed present.
+export type TraceEvent = {
+  type?: string | null;
+  timestamp?: string | null;
+  data?: Record<string, unknown> | null;
+};
+
+// The persisted record of one attempt, as the store holds it.
+export type EpisodeTrace = {
+  episode_uid: string;
+  config: Record<string, unknown> | null;
+  events: TraceEvent[] | null;
+  final_state: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
+  release: Record<string, unknown> | null;
+  episode: Record<string, unknown> | null;
+  observability: Record<string, unknown> | null;
+  started_at: string | null;
+  ended_at: string | null;
+  stopped: boolean;
+};
+
+export type Lane = {
+  participant_id: string;
+  kind: string;
+  binding: string | null;
+};
+
+// The trace, plus the two read-time projections the browser cannot derive:
+// who the pinned roster was, and what the release calls its inner index. They
+// ride alongside the record rather than inside it.
+export type EpisodeDetail = {
+  episode: EpisodeTrace;
+  lanes: Lane[] | null;
+  index_label: string | null;
+  cursor_max: number;
+};
+
+export type ArtifactPage = {
+  episode_uid: string;
+  artifacts: { kind: string; version: string; payload: unknown; metadata: unknown }[] | null;
 };
 
 export type EpisodePage = {
@@ -162,11 +207,41 @@ export type Launch = {
   error: string | null;
 };
 
+export type LaunchAttempt = {
+  id: string;
+  launch_id: string;
+  episode_id: string;
+  cell_id: string;
+  episode_idx: number;
+  attempt: number;
+  status: string;
+  episode_uid: string | null;
+  episode_uri: string | null;
+  error: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  redis_stream: string;
+};
+
+export type LaunchLog = {
+  id: number;
+  kind: "runner.log";
+  payload: { line?: string };
+  created_at: string;
+};
+
 export type ExperimentDetail = {
   experiment: Experiment;
   cells: CompiledPlan["cells"];
   roster: { participant_id: string; kind: string; binding: string | null; config_sha256: string }[];
   launches: { launch: Launch; progress: { planned: number; completed: number; failed: number; by_cell: { cell_id: string; planned: number; completed: number; failed: number }[] } }[];
+};
+
+export type LaunchDetail = {
+  launch: Launch;
+  attempts: LaunchAttempt[];
+  progress: ExperimentDetail["launches"][number]["progress"];
+  runner_logs: LaunchLog[];
 };
 
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -214,6 +289,18 @@ export function listEpisodes(filters: EpisodeFilters, cursor?: string): Promise<
   return request<EpisodePage>(`/api/episodes?${query}`);
 }
 
+export function getEpisode(episodeUid: string): Promise<EpisodeDetail> {
+  const wanted = typeof episodeUid === "string" ? episodeUid.trim() : "";
+  if (!wanted || wanted === "undefined") {
+    throw new Error("A concrete episode uid is required");
+  }
+  return request<EpisodeDetail>(`/api/episodes/${encodeURIComponent(wanted)}`);
+}
+
+export function getEpisodeArtifacts(episodeUid: string): Promise<ArtifactPage> {
+  return request<ArtifactPage>(`/api/episodes/${encodeURIComponent(episodeUid)}/artifacts`);
+}
+
 export function runOracle(id: string, itemId: string): Promise<OracleResult> {
   return request<OracleResult>(`/api/environments/${environmentPath(id)}/oracle`, {
     method: "POST",
@@ -227,6 +314,10 @@ export async function listExperiments(): Promise<Experiment[]> {
 
 export function getExperiment(id: string): Promise<ExperimentDetail> {
   return request<ExperimentDetail>(`/api/experiments/${encodeURIComponent(id)}`);
+}
+
+export function getLaunch(id: string): Promise<LaunchDetail> {
+  return request<LaunchDetail>(`/api/launches/${encodeURIComponent(id)}`);
 }
 
 export function validateDesign(releaseId: string, designText: string): Promise<DesignValidation> {

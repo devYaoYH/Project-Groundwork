@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
@@ -29,16 +29,20 @@ export function DesignEditor() {
   const [experiment, setExperiment] = useState<Experiment | null>(null);
   const [release, setRelease] = useState<EnvironmentDetail | null>(null);
   const [text, setText] = useState("");
+  const [savedText, setSavedText] = useState("");
   const [settledText, setSettledText] = useState("");
   const [serverResult, setServerResult] = useState<DesignValidation | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     if (!id) return;
     getExperiment(id).then(async (detail) => {
       setExperiment(detail.experiment);
       setText(detail.experiment.design_text ?? "");
+      setSavedText(detail.experiment.design_text ?? "");
       setRelease(await getEnvironment(detail.experiment.environment_id));
     }).catch((reason: Error) => setMessage(reason.message));
   }, [id]);
@@ -70,9 +74,44 @@ export function DesignEditor() {
     [release, settledText],
   );
   const pending = text !== settledText;
+  const dirty = text !== savedText;
   const errors = [...clientErrors, ...(serverResult?.errors ?? [])];
   const plan = serverResult?.plan;
   const canLock = Boolean(experiment && serverResult?.valid && clientErrors.length === 0 && !experiment.locked_at);
+
+  async function saveDraft() {
+    if (!experiment || !dirty || busy || savingRef.current) return;
+    savingRef.current = true;
+    setSavingDraft(true);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const saved = await saveDesign(experiment.id, text);
+      if (saved.id !== experiment.id) {
+        window.location.assign(`/design/?id=${encodeURIComponent(saved.id)}`);
+        return;
+      }
+      setExperiment(saved);
+      setSavedText(saved.design_text ?? text);
+      setMessage("Draft saved.");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Unable to save draft");
+    } finally {
+      savingRef.current = false;
+      setSavingDraft(false);
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      event.preventDefault();
+      void saveDraft();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   async function saveAndLock() {
     if (!experiment) return;
@@ -84,8 +123,11 @@ export function DesignEditor() {
         window.location.assign(`/design/?id=${encodeURIComponent(saved.id)}`);
         return;
       }
+      setExperiment(saved);
+      setSavedText(saved.design_text ?? text);
       const locked = await lockExperiment(saved.id, saved.design_sha256 || "");
       setExperiment(locked);
+      setSavedText(locked.design_text ?? text);
       setMessage("Design locked. Its full episode plan is now fixed.");
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "Unable to lock design");
@@ -100,7 +142,8 @@ export function DesignEditor() {
     setMessage(null);
     try {
       const result = await launchExperiment(experiment.id, mode);
-      setMessage(`${mode.replace("_", " ")} launch ${result.id} is ${result.status}.`);
+      window.location.assign(`/launch/?id=${encodeURIComponent(result.id)}`);
+      return;
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "Unable to launch experiment");
     } finally {
@@ -117,10 +160,10 @@ export function DesignEditor() {
         <div><h1>{experiment.name}</h1><p>The authored document compiles to disposable episode configs. {experiment.locked_at ? "Editing will fork this preregistration." : "Lock before a live launch."}</p></div>
         <Link className="button" href={`/experiment/?id=${encodeURIComponent(experiment.id)}`}>Experiment</Link>
       </header>
-      {message ? <p className={message.includes("locked") ? "notice notice-good" : "notice notice-error"}>{message}</p> : null}
+      {message ? <p className={message === "Draft saved." || message.includes("locked") ? "notice notice-good" : "notice notice-error"}>{message}</p> : null}
       <section className="design-layout">
         <div className="design-column">
-          <section className="card design-card"><div className="section-heading"><h2>Design</h2><p className="mono">{experiment.design_sha256 ?? "draft"}</p></div><textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} disabled={busy} /></section>
+          <section className="card design-card"><div className="section-heading"><div><h2>Design</h2><p className={savingDraft ? "notice notice-muted" : dirty ? "notice notice-error" : "notice notice-good"}>{savingDraft ? "Saving draft..." : dirty ? "Unsaved changes" : "Saved draft"}</p></div><div className="launch-actions"><p className="mono">{experiment.design_sha256 ?? "draft"}</p><button onClick={saveDraft} disabled={busy || !dirty}>Save draft</button></div></div><textarea value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} disabled={busy} /></section>
           <section className="card section-card">
             <div className="section-heading">
               <div>

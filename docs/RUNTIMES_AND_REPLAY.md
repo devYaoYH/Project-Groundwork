@@ -4,10 +4,10 @@ Every shipped environment has two pre-Milestone-2 deliverables:
 
 | Environment | Runtime release | Browser replay |
 |---|---|---|
-| Calendar | `games/calendar/runtime/release.json` | `/game-replays/calendar/` |
-| Negotiation | `games/negotiation/runtime/release.json` | `/game-replays/negotiation/` |
-| Buyer-Seller | `games/buyer-seller/runtime/release.json` | `/game-replays/buyer-seller/` |
-| Word Guess | `games/word-guess/runtime/release.json` | `/game-replays/word-guess/` |
+| Calendar | `games/calendar/runtime/release.json` | `/environment-replays/calendar/` |
+| Negotiation | `games/negotiation/runtime/release.json` | `/environment-replays/negotiation/` |
+| Buyer-Seller | `games/buyer-seller/runtime/release.json` | `/environment-replays/buyer-seller/` |
+| Word Guess | `games/word-guess/runtime/release.json` | `/environment-replays/word-guess/` |
 
 Run a reviewed local release with the shared CLI:
 
@@ -57,7 +57,12 @@ The local control plane proxies a stream at:
 GET /api/streams/<url-encoded-stream-name>
 ```
 
-Open the corresponding environment-local replay URL with `?stream=<stream-name>` to
-load and step through the logged events. Browsers never make direct Redis
-connections. The viewer also retains shared `/replays/<environment>.html` entry points
-for backwards-compatible links.
+Open the corresponding environment-local replay URL with `?stream=<stream-name>`
+to load and step through the logged events. Browsers never make direct Redis
+connections.
+
+A replay page also accepts `?episode=<episode_uid>` where the environment's
+renderer can drive a persisted episode, which is what lets it mount beside the
+standard lane view on `/episode/`. The retired `/replays/<environment>.html`
+entry points are gone with the rest of the hand-rolled viewer; each page now
+lives with its environment and is served from there.

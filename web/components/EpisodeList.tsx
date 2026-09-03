@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { Chip } from "./Chip";
@@ -46,8 +47,10 @@ export function EpisodeList() {
     setLoading(true);
     listEpisodes(filters)
       .then((page) => {
-        setEpisodes(page.episodes);
-        setCursor(page.next_cursor);
+        // An empty corpus is the common first view, and a server that answers
+        // with no `episodes` key at all must read as empty rather than crash.
+        setEpisodes(page.episodes ?? []);
+        setCursor(page.next_cursor ?? null);
         setError(null);
       })
       .catch((reason: Error) => setError(reason.message))
@@ -59,8 +62,8 @@ export function EpisodeList() {
   async function loadMore() {
     if (!cursor) return;
     const page = await listEpisodes(filters, cursor);
-    setEpisodes((current) => [...current, ...page.episodes]);
-    setCursor(page.next_cursor);
+    setEpisodes((current) => [...current, ...(page.episodes ?? [])]);
+    setCursor(page.next_cursor ?? null);
   }
 
   return (
@@ -105,10 +108,10 @@ export function EpisodeList() {
               {
                 label: "episode",
                 render: (episode) => (
-                  <span className="table-link">
+                  <Link className="table-link" href={`/episode/?uid=${encodeURIComponent(episode.episode_uid)}`}>
                     <strong>{episode.episode_id ?? episode.episode_uid}</strong>
                     <span>{episode.environment_id ?? "unknown environment"}</span>
-                  </span>
+                  </Link>
                 ),
               },
               { label: "cell", className: "mono", render: (episode) => episode.cell_id ?? "-" },

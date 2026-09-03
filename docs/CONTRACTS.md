@@ -66,7 +66,82 @@ want per-run variation, vary the seed across cells.
 
 ---
 
-## 2. Trace + manifest contract
+## 2. Release declaration contract
+
+A release bundles pinned code, a hand-written **declaration**, an oracle, and an
+item bank. The declaration is the boundary between source code and research
+design: it is the only thing a design is validated against, and it is what the
+environment screen renders.
+
+```python
+register_environment("my_environment", MyGame, declaration=DECLARATION, ...)
+
+ReleaseDeclaration(
+    environment_id=..., version=..., blurb=..., source_url=...,
+    parameters=[ParameterConfig(name, type, domain, fixed, source, item_key)],
+    roles=[RoleConfig(id, count, accepts=["llm" | "scripted" | "human"])],
+    item_policy=ItemPolicy(mode="enumerate" | "sample", bank_path, item_bank_sha256),
+    measures=[MeasureConfig(name, producer, grain, index_label, unit, direction)],
+    oracle_version=...,          # None means this release ships no oracle
+)
+```
+
+Three rules carry most of the weight:
+
+- **`source` says who supplies a parameter's value.** A `design` parameter is
+  written into the episode config; an `item` parameter is frozen in the bank
+  beside the oracle result, so a design *selects on* it rather than setting it.
+  Hand-writing a `domain` for an item parameter is rejected — the levels are
+  projected from the pinned bank at read time, which is what removes the second
+  copy that drifts.
+- **`fixed` is the release's only veto**, and it is absolute. The declaration
+  deliberately does not say whether a parameter *ought* to be an axis: that is a
+  claim about one comparison, not a property of the release.
+- **A sequence-grained measure names the environment's own `index_label`.** That
+  is where the episode viewer's index separators come from. A release that
+  declares none gets a continuous lane rather than an invented boundary.
+
+Anti-drift is enforced at check-in, not derived: `games/*/tests/test_declaration.py`
+asserts every declared parameter exists on the config class with a compatible
+type, and that every item parameter names a column the pinned bank carries.
+`scripts/run_game_runtime.py --smoke-test` asserts every declared
+`producer="environment"` measure appears in what the episode emitted.
+
+---
+
+## 3. Design contract
+
+A design is a document and **the document is the record**: stored verbatim as
+text alongside its `design_sha256`, parsed by a real YAML parser into a strict
+model. Locking it is the preregistration; a launch refuses if the text no longer
+hashes the same, and editing a locked design forks rather than amends.
+
+```yaml
+release: negotiation@v1
+parameters:
+  mode:       {factor: [stable, rotating]}   # an axis: levels become cells
+  num_rounds: {pin: 10}                      # constant across the experiment
+  mc_ratio:   {randomize: true}              # item only: varies within a cell
+units:  {episodes_per_cell: 8}
+roster: [{id: a, kind: llm, binding: gpt-4o-mini}, ...]
+seed:   {mode: derived, root: 17}
+```
+
+Exactly one disposition per parameter, and the asymmetry is deliberate: a design
+parameter is factor-or-pin because the release already has a default for it,
+while an item parameter may also be randomized because the bank varies and
+something must choose. **An item attribute the pinned bank varies and the design
+never dispositions is a compile error**, naming the attribute and the levels the
+bank holds — the safe-looking omission is exactly the confound-by-omission the
+rule exists to kill.
+
+Compilation is authoritative Python (`a2a_engine/compiler.py`). `web/lib/validate.ts`
+mirrors the fast subset for instant feedback while typing and can never cause a
+wrong run, because the server re-validates before every launch.
+
+---
+
+## 4. Trace + manifest contract
 
 `EpisodeTrace` is the canonical record: `config`, `events`, `final_state`,
 `metrics`, timestamps. Typed runs also persist an `release` reference
@@ -105,7 +180,7 @@ original `message` key alongside the normalized `text`.
 
 ---
 
-## 3. Storage contract
+## 5. Storage contract
 
 ```python
 class EpisodeStore(Protocol):
@@ -298,7 +373,7 @@ the v1 `calendar.score_margin` / minimizing `excess_cost` declaration.
 
 ---
 
-## 4. Provenance contract
+## 6. Provenance contract
 
 Every episode carries a `provenance` block, stamped **at expansion** — before
 the episode runs — and written into the trace itself, inside `config`. An
@@ -337,7 +412,7 @@ as a partial trace with no Redis configured. A recovered trace is stored with
 
 ---
 
-## 5. Judge contract
+## 7. Judge contract
 
 The judge reads `EpisodeDataset` records — not Firestore documents, not a
 environment-specific shape.
@@ -360,7 +435,7 @@ mix judgments from two different rubrics into one aggregate.
 
 ---
 
-## 6. LLM call robustness
+## 8. LLM call robustness
 
 One policy, in `a2a_engine.llm.retry`, shared by every environment.
 

@@ -36,7 +36,11 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
   if (!design) return [{ path: "$", message: "Invalid YAML." }];
   const issues: ClientIssue[] = [];
   const parameters = design.parameters ?? {};
-  const byName = new Map(detail.parameters.map((parameter) => [parameter.name, parameter]));
+  // The declaration is an API response too: a release that answers with a
+  // missing collection must produce validation issues, never a crash in the
+  // editor the researcher is mid-keystroke in.
+  const declared = detail.parameters ?? [];
+  const byName = new Map(declared.map((parameter) => [parameter.name, parameter]));
   const expectedRelease = `${detail.environment_id}@${detail.release.version}`;
   if (design.release !== detail.release.release_id && design.release !== expectedRelease) {
     issues.push({ path: "release", message: `Design pins ${String(design.release)}, not ${expectedRelease}.` });
@@ -77,7 +81,7 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
     }
   }
 
-  for (const parameter of detail.parameters) {
+  for (const parameter of declared) {
     if (parameter.source === "item" && (parameter.levels?.length ?? 0) > 1 && !parameters[parameter.name]) {
       const levels = parameter.levels?.map((level) => String(level.value)).join(", ") ?? "";
       issues.push({ path: `parameters.${parameter.name}`, message: `Missing disposition; bank levels: ${levels}.` });
@@ -100,7 +104,7 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
   }
   const ids = roster.map((participant) => participant.id).filter(Boolean);
   if (ids.length !== new Set(ids).size) issues.push({ path: "roster", message: "Participant ids must be unique." });
-  const expectedRoles = detail.roles.flatMap((role) => Array.from({ length: role.count }, () => role));
+  const expectedRoles = (detail.roles ?? []).flatMap((role) => Array.from({ length: role.count ?? 0 }, () => role));
   // Arity is about what the author wrote, so it counts the entries on the page
   // rather than the ones complete enough to inspect below.
   if ((rawRoster ?? []).length !== expectedRoles.length) {
@@ -116,7 +120,7 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
     }
   });
 
-  if (detail.item_policy.mode === "sample" && design.seed?.mode === "static") {
+  if (detail.item_policy?.mode === "sample" && design.seed?.mode === "static") {
     issues.push({ path: "seed.mode", message: "Static seeds are incompatible with sampled items." });
   }
   return issues;

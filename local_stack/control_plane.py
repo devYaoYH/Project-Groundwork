@@ -986,17 +986,34 @@ class ControlPlane:
         launch = self.launch(launch_id)
         with self._session() as db:
             attempts = db.execute(
-                "SELECT * FROM attempts WHERE launch_id = ? ORDER BY cell_id, episode_idx",
+                """
+                SELECT a.*, (
+                    SELECT e.episode_uid
+                    FROM episodes e
+                    WHERE e.episode_id = a.episode_id AND e.attempt = a.attempt
+                    ORDER BY e.created_at DESC
+                    LIMIT 1
+                ) AS episode_uid
+                FROM attempts a
+                WHERE a.launch_id = ?
+                ORDER BY a.cell_id, a.episode_idx
+                """,
                 (launch_id,),
             ).fetchall()
         prefix = f"a2a:launch:{launch.id}:episode:"
         return {
             "launch": asdict(launch),
-            "attempts": [
-                {**asdict(self._attempt(row)), "redis_stream": prefix + row["episode_id"]}
-                for row in attempts
-            ],
+            "attempts": [{
+                **asdict(self._attempt(row)),
+                # URI provenance remains available to older callers, while the
+                # explicit uid is the durable link to a persisted episode.
+                "episode_uid": row["episode_uid"],
+                "redis_stream": prefix + row["episode_id"],
+            } for row in attempts],
             "progress": self.progress(launch_id),
+            # This is a durable read of launch_events, not an SSE replay. A
+            # terminal launch can therefore be reopened with its runner output.
+            "runner_logs": [event for event in self.events(launch_id) if event["kind"] == "runner.log"],
         }
 
     def planned_episode_ids(self, launch_id: str) -> list[str]:
@@ -1086,14 +1103,14 @@ class ControlPlane:
                 ).fetchall()
             ]
             completed = {
-                row["episode_id"]: row["episode_uid"]
+                (row["episode_id"], row["attempt"]): row["episode_uid"]
                 for row in db.execute(
-                    "SELECT episode_id, episode_uid FROM episodes WHERE status = 'COMPLETED'"
+                    "SELECT episode_id, attempt, episode_uid FROM episodes WHERE status = 'COMPLETED'"
                 ).fetchall()
             }
         recovered: list[str] = []
         for attempt in attempts:
-            episode_uid = completed.get(attempt.episode_id)
+            episode_uid = completed.get((attempt.episode_id, attempt.attempt))
             if episode_uid is not None:
                 self._resolve_attempt(
                     attempt, status="COMPLETED",
@@ -1312,13 +1329,15 @@ class ControlPlane:
             result = _LIVE_RESULT.search(line) or _SMOKE_RESULT.search(line)
             if result:
                 identifier, uri = result["episode"], result["uri"]
-                now = _now()
+                # The URI is useful provenance, but an emitted line is never
+                # proof that a trace was committed. _finish_launch settles the
+                # attempt from the episodes identity join.
                 db.execute(
-                    "UPDATE attempts SET status = ?, episode_uri = ?, ended_at = ? "
+                    "UPDATE attempts SET episode_uri = COALESCE(episode_uri, ?) "
                     "WHERE launch_id = ? AND episode_id = ?",
-                    ("COMPLETED", uri, now, launch_id, identifier),
+                    (uri, launch_id, identifier),
                 )
-                self._event(db, launch_id, "episode.completed", {"episode_id": identifier, "episode_uri": uri})
+                self._event(db, launch_id, "episode.reported", {"episode_id": identifier, "episode_uri": uri})
                 return
             # A failed episode reports its own diagnostic. Attributing it to
             # that attempt keeps the per-episode error out of the launch-wide
@@ -1327,9 +1346,8 @@ class ControlPlane:
             if failure:
                 identifier, error = failure["episode"], failure["error"].strip()
                 db.execute(
-                    "UPDATE attempts SET status = ?, error = ?, ended_at = ? "
-                    "WHERE launch_id = ? AND episode_id = ?",
-                    ("FAILED", error, _now(), launch_id, identifier),
+                    "UPDATE attempts SET error = ? WHERE launch_id = ? AND episode_id = ?",
+                    (error, launch_id, identifier),
                 )
                 self._event(db, launch_id, "episode.failed", {"episode_id": identifier, "error": error})
 
@@ -1342,7 +1360,7 @@ class ControlPlane:
 
     def _finish_launch(self, launch_id: str, code: int) -> None:
         with self._session() as db:
-            current = db.execute("SELECT status FROM launches WHERE id = ?", (launch_id,)).fetchone()
+            current = db.execute("SELECT status, mode FROM launches WHERE id = ?", (launch_id,)).fetchone()
             cancelled = current and current["status"] == "CANCELLING"
             status = "CANCELLED" if cancelled else ("COMPLETED" if code == 0 else "FAILED")
             error = None if code == 0 or cancelled else f"runner exited with status {code}"
@@ -1357,16 +1375,25 @@ class ControlPlane:
                 SET status = 'COMPLETED', ended_at = ?,
                     episode_uri = COALESCE(episode_uri, (
                         SELECT ? || e.episode_uid FROM episodes e
-                        WHERE e.episode_id = attempts.episode_id AND e.status = 'COMPLETED'
-                        ORDER BY e.attempt DESC LIMIT 1
+                        WHERE e.episode_id = attempts.episode_id
+                          AND e.attempt = attempts.attempt
+                          AND e.status = 'COMPLETED'
+                        LIMIT 1
                     ))
-                WHERE launch_id = ? AND status = 'RUNNING' AND episode_id IN (
-                    SELECT episode_id FROM episodes WHERE status = 'COMPLETED'
+                WHERE launch_id = ? AND episode_id IN (
+                    SELECT e.episode_id FROM episodes e
+                    WHERE e.attempt = attempts.attempt AND e.status = 'COMPLETED'
                 )
                 """,
                 (now, f"{self._store().uri()}#", launch_id),
             )
-            if code == 0 and not cancelled:
+            if current and current["mode"] == "dry_run" and code == 0 and not cancelled:
+                db.execute(
+                    "UPDATE attempts SET status = ?, ended_at = ?, error = NULL "
+                    "WHERE launch_id = ? AND status != 'COMPLETED'",
+                    ("DRY_RUN", now, launch_id),
+                )
+            elif code == 0 and not cancelled:
                 # The runner exits zero only after every scheduled run
                 # succeeded, so a still-RUNNING attempt means the CLI never
                 # reported that episode. Recording it as COMPLETED would
@@ -1375,24 +1402,24 @@ class ControlPlane:
                 unreported = [
                     row["episode_id"]
                     for row in db.execute(
-                        "SELECT episode_id FROM attempts WHERE launch_id = ? AND status = ?",
-                        (launch_id, "RUNNING"),
+                        "SELECT episode_id FROM attempts WHERE launch_id = ? AND status != ?",
+                        (launch_id, "COMPLETED"),
                     ).fetchall()
                 ]
                 if unreported:
                     db.execute(
                         "UPDATE attempts SET status = ?, ended_at = ?, error = ? "
-                        "WHERE launch_id = ? AND status = ?",
+                        "WHERE launch_id = ? AND status != ?",
                         ("UNREPORTED", now, "runner exited 0 without reporting this episode",
-                         launch_id, "RUNNING"),
+                         launch_id, "COMPLETED"),
                     )
                     self._event(db, launch_id, "launch.unreported_episodes",
                                 {"episode_ids": unreported})
             else:
                 db.execute(
-                    "UPDATE attempts SET status = ?, ended_at = ?, error = ? "
-                    "WHERE launch_id = ? AND status = ?",
-                    ("CANCELLED" if cancelled else "FAILED", now, error, launch_id, "RUNNING"),
+                    "UPDATE attempts SET status = ?, ended_at = ?, error = COALESCE(error, ?) "
+                    "WHERE launch_id = ? AND status != ?",
+                    ("CANCELLED" if cancelled else "FAILED", now, error, launch_id, "COMPLETED"),
                 )
             self._event(db, launch_id, f"launch.{status.lower()}", {"exit_code": code, "error": error})
 
@@ -1421,4 +1448,5 @@ class ControlPlane:
 
     @staticmethod
     def _attempt(row: sqlite3.Row) -> Attempt:
-        return Attempt(**dict(row))
+        values = dict(row)
+        return Attempt(**{field: values[field] for field in Attempt.__dataclass_fields__})

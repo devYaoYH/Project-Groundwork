@@ -13,7 +13,7 @@ API is intentionally small:
 |---|---|
 | `GET /api/health` | health and trace count |
 | `GET /api/episodes` | trace metadata and metrics |
-| `GET /api/episodes/<episode_uid>` | one complete `EpisodeTrace` JSON document |
+| `GET /api/episodes/<episode_uid>` | `{episode, lanes, index_label, cursor_max}` — the complete `EpisodeTrace` under `episode`, with the viewer's read-time projections alongside it |
 | `GET /api/episodes/<episode_uid>/artifacts` | digest-bound, post-episode metric artifacts |
 | `GET /api/episodes/<episode_uid>/observability` | local JSONL OTel spans correlated by the persisted OTel trace ID |
 | `GET /api/leaderboards/calendar` | Calendar's rebuilt OpenSkill snapshot |

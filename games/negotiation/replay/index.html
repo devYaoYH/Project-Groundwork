@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Negotiation stream replay</title>
-<base href="/game-assets/negotiation/webapp/static/">
+<base href="/environment-assets/negotiation/webapp/static/">
 <link rel="stylesheet" href="styles/base.css">
 <link rel="stylesheet" href="styles/forms.css">
 <link rel="stylesheet" href="styles/environment.css">
@@ -25,7 +25,7 @@
 <body data-environment="negotiation">
 <main class="replay">
   <div class="replay-bar" id="replayBar">
-    <a href="/control.html">&larr; Control plane</a>
+    <a href="/episodes/">&larr; Episodes</a>
     <input id="stream" placeholder="a2a:launch:&hellip;:episode:&hellip;">
     <button id="load">Load</button>
     <button id="step">Step</button>
@@ -144,6 +144,38 @@ function play() {
   timer = setInterval(() => { if (!step()) stop(); }, 220);
 }
 
+// `handleEvent` accumulates into the DOM and has no inverse, so seeking
+// backwards means rebuilding from the start. That is cheap at episode scale
+// and is the only honest way to answer an absolute cursor.
+function seek(index) {
+  stop();
+  const wanted = Number(index);
+  if (!Number.isFinite(wanted)) return;
+  const target = Math.max(0, Math.min(events.length, Math.round(wanted)));
+  if (target < cursor) resetView();
+  while (cursor < target) {
+    handleEvent(events[cursor++]);
+  }
+  $("liveStatus").textContent = `${cursor}/${events.length} events`;
+}
+
+function show(events_, title, mode, projection) {
+  events = Array.isArray(events_) ? events_ : [];
+  resetView();
+  $("liveGameId").textContent = title;
+  $("liveMode").textContent = mode || "";
+  // A projection is only attached to a stream read; an episode read from the
+  // store has none, and a half-written one may have neither.
+  const partial = Boolean(projection?.partial);
+  const count = projection?.event_count ?? events.length;
+  setStatus(
+    partial
+      ? `Episode still running — ${count} events so far. Replaying what exists.`
+      : `Episode complete — ${count} events.`,
+    partial,
+  );
+}
+
 async function load(stream) {
   if (!stream) { setStatus("Enter a stream id."); return; }
   stop();
@@ -151,17 +183,23 @@ async function load(stream) {
     const response = await fetch(`/api/streams/${encodeURIComponent(stream)}/trace`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    events = payload.events || [];
-    resetView();
-    $("liveGameId").textContent = payload.episode_uid || stream;
-    $("liveMode").textContent = payload.config?.mode || "";
-    const { partial, event_count } = payload.projection;
-    setStatus(
-      partial
-        ? `Episode still running — ${event_count} events so far. Replaying what exists.`
-        : `Episode complete — ${event_count} events.`,
-      partial,
-    );
+    show(payload.events, payload.episode_uid || stream, payload.config?.mode, payload.projection);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+// The persisted counterpart of `load`. The standard episode viewer knows an
+// episode_uid rather than a Redis stream, so this is the path that lets the
+// environment's own rendering mount beside the standard lane view.
+async function loadEpisode(uid) {
+  stop();
+  try {
+    const response = await fetch(`/api/episodes/${encodeURIComponent(uid)}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const episode = payload.episode || {};
+    show(episode.events, episode.episode_uid || uid, episode.config?.mode, null);
   } catch (error) {
     setStatus(error.message);
   }
@@ -171,6 +209,11 @@ $("load").addEventListener("click", () => load($("stream").value.trim()));
 $("step").addEventListener("click", step);
 $("play").addEventListener("click", play);
 $("reset").addEventListener("click", () => { stop(); resetView(); });
+
+// One cursor, posted by whatever host frame mounts this page.
+window.addEventListener("message", event => {
+  if (event.data?.type === "cursor") seek(event.data.index);
+});
 
 const params = new URLSearchParams(location.search);
 
@@ -182,8 +225,14 @@ if (params.get("embed") === "1") {
   $("status").hidden = true;
 }
 
-const initial = params.get("stream");
-if (initial) { $("stream").value = initial; load(initial).then(() => { if (params.get("embed") === "1") play(); }); }
+const initialEpisode = params.get("episode");
+const initialStream = params.get("stream");
+if (initialEpisode) {
+  loadEpisode(initialEpisode);
+} else if (initialStream) {
+  $("stream").value = initialStream;
+  load(initialStream).then(() => { if (params.get("embed") === "1") play(); });
+}
 </script>
 </body>
 </html>

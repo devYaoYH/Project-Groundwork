@@ -11,9 +11,15 @@ import { EnvironmentSummary, listEnvironments } from "../lib/api";
 export function EnvironmentIndex() {
   const [environments, setEnvironments] = useState<EnvironmentSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // "Still loading" and "nothing installed" are different answers, and only
+  // this flag separates them; without it an empty list reads as a hang.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    listEnvironments().then(setEnvironments).catch((reason: Error) => setError(reason.message));
+    listEnvironments()
+      .then((next) => setEnvironments(next ?? []))
+      .catch((reason: Error) => setError(reason.message))
+      .finally(() => setLoaded(true));
   }, []);
 
   return (
@@ -27,7 +33,11 @@ export function EnvironmentIndex() {
       </header>
       {error ? <p className="notice notice-error">{error}</p> : null}
       <section className="card">
-        {environments.length === 0 && !error ? <p className="empty-state">Loading registered environments...</p> : null}
+        {environments.length === 0 && !error ? (
+          <p className="empty-state">
+            {loaded ? "No environment releases are installed in this workspace." : "Loading registered environments..."}
+          </p>
+        ) : null}
         {environments.length > 0 ? (
           <DataTable
             rows={environments}

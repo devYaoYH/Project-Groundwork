@@ -9,7 +9,8 @@ a2a-comm/
                   dataset, tracing, ratings, EpisodeManifest, EpisodeStore backends
   expt-runner/    CLI: expand -> run -> persist
   a2a-judge/      LLM-as-judge scaffolding: prompts, judgment store, resume
-  a2a-viewer/     browser control plane, trace viewer, and per-environment replay apps
+  web/            Next.js researcher control plane, static-exported and served
+                  by local_stack (environments, design, experiment, episode)
   local_stack/    local control-plane service: releases, experiments, launches
   site/           static landing page (GitHub Pages) linking out to environment sites
   experiments/    cross-environment experiment configs + shared sink definitions
@@ -51,14 +52,15 @@ docker compose up --build
 
 | | |
 |---|---|
-| <http://localhost:8080/control.html> | launch experiments, watch launches, open episodes and replays |
-| <http://localhost:8080/> | browse the trace corpus and the Calendar leaderboard |
+| <http://localhost:8080/environments/> | what each installed release declares: parameters, roles, measures, item bank |
+| <http://localhost:8080/experiments/> | write a design, watch it compile, lock it, launch it |
+| <http://localhost:8080/episodes/> | the episode fact table; open one for lanes, a scrubber and a transcript |
 
-From the control plane you pick an installed environment release and a checked-in
-experiment YAML, launch a launch, and follow it live. Each episode links to its
-persisted trace and to a per-environment replay of its Redis event stream. The browser
-never uploads code, a Dockerfile, or an image — it selects releases and configs
-that are already in the workspace.
+The loop is: pick an environment, write a design against its declaration, watch
+cell and episode counts recompute as you type, lock the design as a
+preregistration, launch it, and open any single episode. The browser never
+uploads code, a Dockerfile, or an image — it authors a design against a release
+that is already installed in the workspace.
 
 Two environments are set up as worked examples:
 

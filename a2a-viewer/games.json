@@ -1,6 +1,0 @@
-{
-  "calendar": {"href": "leaderboard.html", "label": "Open leaderboard", "viewer": "trace.html"},
-  "negotiation": {"href": "trace.html", "label": "Open trace viewer", "viewer": "trace.html"},
-  "buyer_seller": {"href": "trace.html", "label": "Open trace viewer", "viewer": "trace.html"},
-  "word_guess": {"href": "trace.html", "label": "Open trace viewer", "viewer": "trace.html"}
-}

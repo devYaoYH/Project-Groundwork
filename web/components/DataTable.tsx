@@ -7,10 +7,14 @@ export type Column<Row> = {
 };
 
 export function DataTable<Row>({ rows, columns, rowKey }: {
-  rows: Row[];
+  // Nullable because it is fed straight from API responses: an endpoint that
+  // answers with a missing or null collection must render an empty table
+  // rather than take the page down.
+  rows: Row[] | null | undefined;
   columns: Column<Row>[];
   rowKey: (row: Row) => string;
 }) {
+  const safeRows = Array.isArray(rows) ? rows : [];
   return (
     <div className="table-wrap">
       <table className="data-table">
@@ -18,7 +22,7 @@ export function DataTable<Row>({ rows, columns, rowKey }: {
           <tr>{columns.map((column) => <th className={column.className} key={column.label}>{column.label}</th>)}</tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {safeRows.map((row) => (
             <tr key={rowKey(row)}>
               {columns.map((column) => <td className={column.className} key={column.label}>{column.render(row)}</td>)}
             </tr>

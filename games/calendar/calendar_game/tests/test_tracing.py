@@ -225,6 +225,27 @@ def test_dm_sent_events_logged():
             )
 
 
+def test_agent_events_use_pinned_participant_ids_and_chat_aliases():
+    """Calendar events retain numeric fields while exposing roster identities."""
+    trace = run_dry(seed=42)
+    events = _normalize_events(trace)
+
+    for event in events:
+        data = event["data"]
+        agent_id = data.get("agent_id")
+        if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
+            assert data["participant_id"] == f"participant_{agent_id}"
+        elif agent_id is None:
+            assert "participant_id" not in data
+
+    chat_events = [event for event in events if event["type"].endswith("_sent")]
+    assert chat_events
+    for event in chat_events:
+        data = event["data"]
+        assert data["speaker"] == data["participant_id"]
+        assert data["text"] == data["content"]
+
+
 def test_decide_start_has_snapshot_render():
     """decide_start events have a non-empty calendar_snapshot_render containing 'Slot'."""
     trace = run_dry(seed=42)

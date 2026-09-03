@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Serve the local A2A corpus, generic trace viewer, and Calendar leaderboard.
+"""Serve the researcher control plane: its API, its static export, and replays.
 
 HTTP uses only the standard library. Trace, artifact, and rating access goes
 through the engine's SQLite store so the local control plane exercises the same
 contracts as a later shared-storage deployment.
+
+Three roots are served, and the distinction matters: ``--static-dir`` is the
+Next.js export, ``/environment-replays/<env>/`` is an environment's own replay
+page, and ``/environment-assets/<env>/`` is that environment's vendored
+visualisation. Each is confined to its own root by the same containment guard.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
+from a2a_engine.provenance import pinned_participants, provenance_of
 from a2a_engine.design import DesignValidationError
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
     from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
@@ -49,7 +55,10 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     # than an application-side join across two of them.
     database = Path("/data/a2a.db")
     otel_file = Path("/data/otel-spans.jsonl")
-    static_dir = Path("a2a-viewer")
+    # The Next.js static export. The hand-rolled viewer it replaces is gone;
+    # an environment's own replay page is still served, from the environment's
+    # own directory, under ``/environment-replays/``.
+    static_dir = Path("web/out")
     workspace = Path.cwd()
     _control_plane: ControlPlane | None = None
     _control_lock = threading.Lock()
@@ -138,8 +147,11 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             return self._json(payload if payload is not None else {"error": "trace not found"}, 200 if payload else 404)
         if parsed.path.startswith("/api/episodes/"):
             episode_uid = unquote(parsed.path.removeprefix("/api/episodes/"))
-            trace = self._trace(episode_uid)
-            return self._json(trace if trace is not None else {"error": "trace not found"}, 200 if trace else 404)
+            payload = self._episode_detail(episode_uid)
+            return self._json(
+                payload if payload is not None else {"error": "trace not found"},
+                200 if payload else 404,
+            )
         if parsed.path == "/api/leaderboards":
             return self._json({
                 "leaderboards": [{
@@ -290,6 +302,75 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         return trace.model_dump(mode="json") if trace is not None else None
 
     @classmethod
+    def _episode_detail(cls, episode_uid: str) -> dict[str, object] | None:
+        """One episode, plus the two projections the browser cannot derive.
+
+        The trace stays exactly what the store holds and rides under
+        ``episode``; the read-time projections ride *alongside* it, never
+        inside it, for the same reason the item-level projection rides
+        alongside a release declaration: what is durable and what is derived
+        must not be confusable in the payload.
+        """
+        trace = cls._store().get_episode(episode_uid)
+        if trace is None:
+            return None
+        return {
+            "episode": trace.model_dump(mode="json"),
+            "lanes": cls._lanes(trace),
+            "index_label": cls._index_label(str(trace.config.environment_id or "")),
+            # The scrubber's upper bound. An episode with no events is a real
+            # state -- an attempt that died before its first turn -- so this is
+            # allowed to be 0 rather than treated as a missing trace.
+            "cursor_max": len(trace.events),
+        }
+
+    @staticmethod
+    def _lanes(trace) -> list[dict[str, object]]:
+        """The pinned roster, as one lane per participant.
+
+        Provenance is the durable copy, so it is read first. A trace written
+        before provenance existed, or by a hand-written config that never had a
+        roster, still has its agent list in the config: pinning that is the
+        same derivation the compiler performs, so the lane view degrades to
+        "who the config said would play" rather than to nothing.
+        """
+        block = provenance_of(trace)
+        participants = block.get("participants")
+        if not isinstance(participants, list) or not participants:
+            participants = pinned_participants(trace.config.model_dump(mode="json"))
+        lanes: list[dict[str, object]] = []
+        for entry in participants:
+            if not isinstance(entry, dict):
+                continue
+            lanes.append({
+                "participant_id": str(entry.get("participant_id") or ""),
+                "kind": str(entry.get("kind") or "llm"),
+                "binding": entry.get("binding"),
+            })
+        return [lane for lane in lanes if lane["participant_id"]]
+
+    @staticmethod
+    def _index_label(environment_id: str) -> str | None:
+        """The environment's own word for position within an episode.
+
+        A release says it has an inner index by declaring a sequence-grained
+        measure. Absence asserts nothing false -- the lane view is simply
+        continuous -- so an unknown or uninstalled environment resolves to
+        ``None`` rather than raising.
+        """
+        if not environment_id:
+            return None
+        try:
+            discover_environments()
+            declaration = get_environment_spec(environment_id).declaration
+        except Exception:
+            return None
+        for measure in getattr(declaration, "measures", None) or []:
+            if measure.grain == "sequence" and measure.index_label:
+                return measure.index_label
+        return None
+
+    @classmethod
     def _observability(cls, episode_uid: str) -> dict[str, object] | None:
         """Return the local OTel projection correlated to one persisted trace.
 
@@ -426,28 +507,28 @@ class LocalStackHandler(BaseHTTPRequestHandler):
 
     # Directory names differ from environment names (``word_guess`` -> ``word-guess``),
     # so the served set is declared rather than derived.
-    GAME_DIRS = ("calendar", "negotiation", "buyer-seller", "word-guess")
+    ENVIRONMENT_DIRS = ("calendar", "negotiation", "buyer-seller", "word-guess")
 
-    def _game_root(self, relative: str, prefix: str, suffix: str) -> tuple[Path, str] | None:
+    def _environment_root(self, relative: str, suffix: str) -> tuple[Path, str] | None:
         _, environment_id, *parts = relative.split("/")
-        if environment_id not in self.GAME_DIRS:
+        if environment_id not in self.ENVIRONMENT_DIRS:
             return None
         return (self.workspace / "games" / environment_id / suffix).resolve(), "/".join(parts)
 
     def _static(self, request_path: str) -> None:
         relative = request_path.lstrip("/") or "index.html"
-        if relative.startswith("game-replays/"):
-            resolved = self._game_root(relative, "game-replays/", "replay")
-        elif relative.startswith("game-assets/"):
-            # The games ship their own viewers (Calendar's trace viewer,
+        if relative.startswith("environment-replays/"):
+            resolved = self._environment_root(relative, "replay")
+        elif relative.startswith("environment-assets/"):
+            # The environments ship their own viewers (Calendar's trace viewer,
             # Negotiation's web app). Serving each environment's directory lets a
             # replay page load that environment's real visualisation instead of a
             # generic event dump.
-            resolved = self._game_root(relative, "game-assets/", "")
+            resolved = self._environment_root(relative, "")
         else:
             resolved = None
 
-        if relative.startswith(("game-replays/", "game-assets/")):
+        if relative.startswith(("environment-replays/", "environment-assets/")):
             if resolved is None:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
@@ -482,7 +563,7 @@ def main() -> int:
     # are one file, which is what lets progress be a SQL join.
     parser.add_argument("--database", default="/data/a2a.db")
     parser.add_argument("--otel-file", default="/data/otel-spans.jsonl")
-    parser.add_argument("--static-dir", default="a2a-viewer")
+    parser.add_argument("--static-dir", default="web/out")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)

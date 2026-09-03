@@ -1,8 +1,8 @@
 # Local collaboration stack
 
 The Compose stack is the supported cloud-free onboarding path. It runs all
-packaged games, writes episodes to a named-volume SQLite database, and hosts one
-central browser for episodes and the Calendar leaderboard. It uses no AWS, GCP,
+packaged environments, writes episodes to a named-volume SQLite database, and
+hosts the researcher control plane. It uses no AWS, GCP,
 Firestore, S3, or model API credentials.
 
 ## Start
@@ -42,12 +42,28 @@ experiment YAML or release-specific overlay.
 
 ## Launch experiments from the browser
 
-`http://localhost:8080/control.html` is the local control plane. It lists the
-installed environment releases, registers a checked-in experiment YAML, launches a
-launch, streams the runner's events, and links each episode to its persisted
-trace and its Redis replay. The browser never uploads Python, a Dockerfile, or
-an image: it only selects a release that is already installed and a YAML that
-is already in the workspace.
+`http://localhost:8080/` is the researcher control plane: a Next.js static
+export, built by a Node stage in the same image and served by this Python
+server from `--static-dir`. There is no second service and no Node at runtime.
+
+| Screen | Route | What it is for |
+|---|---|---|
+| Environments | `/environments/` | what each installed release declares |
+| Environment detail | `/environments/<id>/` | parameter table, measures, oracle playground |
+| Item bank | `/environments/<id>/items/` | the frozen corpus and its oracle results |
+| Experiments | `/experiments/` | the researcher's landing page |
+| Design | `/design/?id=<experiment>` | write, validate live, compile, lock |
+| Experiment | `/experiment/?id=<experiment>` | progress by cell, launches, episodes |
+| Episodes | `/episodes/` | the filtered, paginated fact table |
+| Episode | `/episode/?uid=<episode_uid>` | lanes, scrubber, transcript, config |
+
+An environment's own replay page is served beside them at
+`/environment-replays/<environment>/`, and the episode screen mounts one for any
+environment that registers it — driven by the same cursor as the lane view. See
+`docs/VIEWER_EXTENSIONS.md`.
+
+The browser never uploads Python, a Dockerfile, or an image: it only selects a
+release that is already installed and authors a design against its declaration.
 
 ```bash
 curl -X POST http://localhost:8080/api/experiments \
@@ -108,7 +124,7 @@ entry does, so one projection reads either source.
 |---|---|---|
 | experiment execution | `runner` container / `a2a-run` | Kubernetes Job or worker deployment |
 | trace egress | SQLite named volume | S3, Firestore, or a shared database adapter |
-| viewer and control plane | standard-library `local_stack/server.py` + static viewer, including local OTel span correlation | a hosted API serving the same contracts |
+| control plane and web UI | standard-library `local_stack/server.py` serving the Next.js static export, including local OTel span correlation | a hosted API serving the same contracts |
 | leaderboard | Calendar snapshot replayed from completed SQLite episodes | shared artifact/materialization store |
 
 The image is suitable for a Kubernetes Job: it needs an experiment YAML,
@@ -119,15 +135,38 @@ configuration with a shared backend when that integration is ready.
 
 ## API and data contract
 
-The local service exposes read-only trace endpoints — `/api/health`,
-`/api/episodes`, `/api/episodes/<episode_uid>`, `/api/episodes/<episode_uid>/artifacts`,
-`/api/episodes/<episode_uid>/observability`, and `/api/leaderboards/calendar` —
-alongside the control-plane endpoints `/api/releases`, `/api/environments`,
-`/api/experiments`, `/api/launches`, `/api/launches/<id>`,
-`/api/launches/<id>/events` (SSE), `/api/launches/<id>/cancel`, and
-`/api/streams/<stream>`. The trace corpus itself stays read-only: the runner
-writes source episodes and post-hoc analysis can add only digest-bound derived
-artifacts.
+| Endpoint | Answers |
+|---|---|
+| `GET /api/health` | readiness plus the episode count |
+| `GET /api/environments` | the installed release catalog |
+| `GET /api/environments/<id>` | declaration, plus item levels projected from the pinned bank |
+| `GET /api/environments/<id>/items` | one page of the item bank |
+| `POST /api/environments/<id>/oracle` | run the release's oracle on one item (409 when it ships none) |
+| `POST /api/designs/validate` | validate and compile a draft without storing it |
+| `GET`/`POST /api/experiments` | the experiment library; create from a design or a checked-in YAML |
+| `GET /api/experiments/<id>` | cells, roster, launches, progress by cell |
+| `POST /api/experiments/<id>/design` | save a draft, or fork a locked preregistration |
+| `POST /api/experiments/<id>/lock` | preregister (409 on digest mismatch) |
+| `GET`/`POST /api/launches` | launch list; start one (409 for `live` on an unlocked design) |
+| `GET /api/launches/<id>` | one launch and its progress |
+| `GET /api/launches/<id>/events` | SSE launch event log |
+| `POST /api/launches/<id>/cancel` | cancel a launch |
+| `GET /api/episodes` | the filtered, paginated fact table |
+| `GET /api/episodes/<episode_uid>` | one episode, plus its lanes, `index_label` and `cursor_max` |
+| `GET /api/episodes/<episode_uid>/artifacts` | digest-bound derived artifacts |
+| `GET /api/episodes/<episode_uid>/observability` | correlated local OTel spans |
+| `GET /api/streams/<stream>` | a Redis event stream, and `/trace` for its projection |
+| `GET /api/leaderboards/calendar` | the Calendar OpenSkill snapshot |
+
+The trace corpus itself stays read-only: the runner writes source episodes and
+post-hoc analysis can add only digest-bound derived artifacts.
+
+`GET /api/episodes/<episode_uid>` answers
+`{episode, lanes, index_label, cursor_max}`. The trace rides under `episode`
+exactly as the store holds it; `lanes` (the pinned roster, read from the
+episode's own provenance) and `index_label` (from the release declaration) are
+read-time projections and ride *alongside* the record rather than inside it, so
+what is durable and what is derived are never confusable in the payload.
 
 `GET /api/episodes` is paginated and filtered server-side. It accepts
 `experiment_id`, `experiment_name`, `environment_id`, `cell_id`, `episode_id`,

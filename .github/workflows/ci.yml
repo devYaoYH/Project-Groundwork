@@ -127,18 +127,26 @@ jobs:
           _, episodes = request(f"/api/episodes?experiment_id={experiment['id']}")
           assert len(episodes["episodes"]) == 2
           for episode in episodes["episodes"]:
-              _, trace = request(f"/api/episodes/{episode['episode_uid']}")
+              _, detail = request(f"/api/episodes/{episode['episode_uid']}")
+              trace = detail["episode"]
               provenance = trace["config"]["provenance"]
               assert provenance["experiment_id"] == experiment["id"]
               assert provenance["cell_id"] == episode["cell_id"]
               assert provenance["design_sha256"] == locked["design_sha256"]
               assert set(provenance["item_attributes"]) == {"seller_cost"}
               assert trace["config"]["discount_factor"] in {0.5, 1.0}
+              # The episode screen's two projections. Lanes come from the
+              # roster the design pinned, so a preregistered episode always
+              # has them; the scrubber's bound is the event count exactly.
+              assert [lane["participant_id"] for lane in detail["lanes"]] == ["seller", "buyer"]
+              assert detail["cursor_max"] == len(trace["events"])
           PY
       - name: Verify trace, OTel, artifact, and leaderboard APIs
         run: |
           python - <<'PY'
           import json
+          from http.client import HTTPConnection
+          from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
           base = "http://127.0.0.1:8080"
@@ -206,9 +214,37 @@ jobs:
           assert len(filtered) == 1
           assert filtered[0]["environment_id"] == "calendar"
           episode_uid = calendar["episode_uid"]
-          trace = json.load(urlopen(f"{base}/api/episodes/{episode_uid}"))
+          detail = json.load(urlopen(f"{base}/api/episodes/{episode_uid}"))
+          trace = detail["episode"]
           assert trace["release"]["content_sha256"]
           assert trace["episode"]["id"]
+          # The two projections the episode screen needs and cannot derive.
+          # This episode came from a hand-written config, which pins no roster,
+          # so an empty lane list is the correct answer rather than a failure:
+          # the lane view falls back to the speakers the events name.
+          assert isinstance(detail["lanes"], list)
+          assert all(lane["participant_id"] for lane in detail["lanes"])
+          assert detail["cursor_max"] == len(trace["events"]) > 0
+          # No shipped release declares a sequence-grained measure yet.
+          assert detail["index_label"] is None
+          # An environment's own replay page still resolves, from the
+          # environment's own directory, with the containment guard intact.
+          for environment in ("calendar", "negotiation", "buyer-seller", "word-guess"):
+              with urlopen(f"{base}/environment-replays/{environment}/") as replay:
+                  assert replay.status == 200
+                  assert b"replay" in replay.read().lower()
+          # Sent through http.client so the traversal reaches the server
+          # verbatim rather than being normalised away by the URL layer.
+          connection = HTTPConnection("127.0.0.1", 8080)
+          connection.request("GET", "/environment-replays/calendar/../../../etc/passwd")
+          assert connection.getresponse().status == 403
+          connection.close()
+          # The static export is what is served now; the hand-rolled viewer is gone.
+          try:
+              urlopen(f"{base}/control.html")
+              raise AssertionError("the retired control page is still served")
+          except HTTPError as gone:
+              assert gone.code == 404
           # The durable copy of provenance travels inside the trace: a record
           # read without the control plane still says what produced it.
           provenance = trace["config"]["provenance"]

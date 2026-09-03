@@ -12,22 +12,24 @@ export function ItemBank({ id }: { id: string }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [digest, setDigest] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     getItems(id)
       .then((page) => {
-        setItems(page.items);
-        setCursor(page.next_cursor);
-        setDigest(page.item_bank_sha256);
+        setItems(page.items ?? []);
+        setCursor(page.next_cursor ?? null);
+        setDigest(page.item_bank_sha256 ?? null);
       })
-      .catch((reason: Error) => setError(reason.message));
+      .catch((reason: Error) => setError(reason.message))
+      .finally(() => setLoaded(true));
   }, [id]);
 
   async function loadMore() {
     if (!cursor) return;
     const page = await getItems(id, cursor);
-    setItems((current) => [...current, ...page.items]);
-    setCursor(page.next_cursor);
+    setItems((current) => [...current, ...(page.items ?? [])]);
+    setCursor(page.next_cursor ?? null);
   }
 
   return (
@@ -42,7 +44,9 @@ export function ItemBank({ id }: { id: string }) {
       {error ? <p className="notice notice-error">{error}</p> : null}
       {digest ? <p className="bank-digest">bank digest <strong className="mono">{digest}</strong></p> : null}
       <section className="card">
-        {items.length === 0 && !error ? <p className="empty-state">Loading item bank...</p> : null}
+        {items.length === 0 && !error ? (
+          <p className="empty-state">{loaded ? "This release ships an empty item bank." : "Loading item bank..."}</p>
+        ) : null}
         {items.length > 0 ? (
           <DataTable
             rows={items}
