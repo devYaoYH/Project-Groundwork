@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS experiments (
     design_sha256     TEXT,
     locked_at         TEXT,
     forked_from       TEXT REFERENCES experiments(id),
+    -- Compatibility normalization records the original content when a
+    -- narrowly-scoped metadata correction creates a current design revision.
+    -- Execution plans and traces retain their original provenance bytes.
+    authored_design_text TEXT,
+    authored_design_sha256 TEXT,
+    authored_config_sha256 TEXT,
+    role_normalization TEXT,
     created_at        TEXT NOT NULL
 );
 
@@ -101,6 +108,7 @@ CREATE TABLE IF NOT EXISTS participants (
     experiment_id     TEXT NOT NULL REFERENCES experiments(id),
     kind              TEXT NOT NULL,
     binding           TEXT,
+    role              TEXT,
     config_sha256     TEXT NOT NULL,
     PRIMARY KEY (participant_id, experiment_id)
 );
@@ -117,6 +125,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     environment_id    TEXT,
     experiment_name   TEXT,
     episode_id        TEXT,
+    -- Lower-cased, punctuation-delimited episode-id tokens. This is a
+    -- rebuildable search projection; the durable episode identity remains
+    -- ``episode_id`` and trace config/provenance.
+    episode_tokens    TEXT NOT NULL DEFAULT '',
     cell_id           TEXT,
     episode_idx       INTEGER,
     experiment_id     TEXT REFERENCES experiments(id),
@@ -188,6 +200,8 @@ CREATE TABLE IF NOT EXISTS attempts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_unique ON attempts(episode_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_attempt_launch ON attempts(launch_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_cell_execution
+    ON attempts(cell_id, episode_id, attempt DESC);
 
 CREATE TABLE IF NOT EXISTS launch_events (
     id                INTEGER PRIMARY KEY,
@@ -251,6 +265,8 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("episodes", "item_id", "ALTER TABLE episodes ADD COLUMN item_id TEXT"),
     ("episodes", "attempt",
      "ALTER TABLE episodes ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
+    ("episodes", "episode_tokens",
+     "ALTER TABLE episodes ADD COLUMN episode_tokens TEXT NOT NULL DEFAULT ''"),
     ("episodes", "seed", "ALTER TABLE episodes ADD COLUMN seed INTEGER"),
     ("episodes", "status",
      "ALTER TABLE episodes ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"),
@@ -264,6 +280,11 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("experiments", "design_sha256", "ALTER TABLE experiments ADD COLUMN design_sha256 TEXT"),
     ("experiments", "locked_at", "ALTER TABLE experiments ADD COLUMN locked_at TEXT"),
     ("experiments", "forked_from", "ALTER TABLE experiments ADD COLUMN forked_from TEXT"),
+    ("experiments", "authored_design_text", "ALTER TABLE experiments ADD COLUMN authored_design_text TEXT"),
+    ("experiments", "authored_design_sha256", "ALTER TABLE experiments ADD COLUMN authored_design_sha256 TEXT"),
+    ("experiments", "authored_config_sha256", "ALTER TABLE experiments ADD COLUMN authored_config_sha256 TEXT"),
+    ("experiments", "role_normalization", "ALTER TABLE experiments ADD COLUMN role_normalization TEXT"),
+    ("participants", "role", "ALTER TABLE participants ADD COLUMN role TEXT"),
     ("attempts", "attempt", "ALTER TABLE attempts ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
     ("launches", "mode", "ALTER TABLE launches ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'"),
     ("launches", "execution_path", "ALTER TABLE launches ADD COLUMN execution_path TEXT"),
@@ -279,6 +300,11 @@ def apply_schema(conn) -> None:
     statement is ``IF NOT EXISTS`` and each migration is guarded by an actual
     column check rather than by a version number nobody maintains.
     """
+    # Schema DDL can safely reference the columns a fresh table declares, but
+    # an ``IF NOT EXISTS`` table leaves an older table unchanged. Keep indexes
+    # for newly migrated columns out of this script until their migration has
+    # run below; otherwise SQLite rejects the whole schema application before
+    # it reaches the additive ALTER.
     conn.executescript(SCHEMA)
     existing: dict[str, set[str]] = {}
     for table, column, statement in MIGRATIONS:
@@ -287,4 +313,21 @@ def apply_schema(conn) -> None:
         if existing[table] and column not in existing[table]:
             conn.execute(statement)
             existing[table].add(column)
+    # ``episode_tokens`` is only a read projection, so old traces retain every
+    # durable byte while becoming searchable after an additive migration.
+    if "episodes" in existing and "episode_tokens" in existing["episodes"]:
+        from re import sub
+
+        rows = conn.execute(
+            "SELECT episode_uid, episode_id FROM episodes WHERE episode_tokens = ''"
+        ).fetchall()
+        conn.executemany(
+            "UPDATE episodes SET episode_tokens = ? WHERE episode_uid = ?",
+            [
+                (" ".join(token for token in sub(r"[^0-9A-Za-z]+", " ", row["episode_id"] or "").lower().split()),
+                 row["episode_uid"])
+                for row in rows
+            ],
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_tokens ON episodes(episode_tokens)")
     conn.commit()

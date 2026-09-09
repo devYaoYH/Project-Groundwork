@@ -35,6 +35,7 @@ export type LaneRow = {
   participant_id: string;
   kind: string;
   binding: string | null;
+  role: string | null;
   /** True when the lane was discovered in the events rather than pinned in the roster. */
   declared: boolean;
   marks: Mark[];
@@ -79,7 +80,13 @@ export function laneOf(
 ): string {
   const data = payload(event);
   const named = asString(data.speaker) ?? asString(data.participant_id);
-  if (named !== null) return named;
+  if (named !== null) {
+    const declared = Array.isArray(lanes) ? lanes : [];
+    if (declared.some((lane) => lane?.participant_id === named)) return named;
+    const roleMatches = declared.filter((lane) => lane?.role === named && lane.participant_id);
+    if (roleMatches.length === 1) return roleMatches[0].participant_id;
+    return named;
+  }
 
   // Calendar's older records identify the acting seat numerically. A pinned
   // roster supplies the durable identity for that seat; without one, retain a
@@ -116,6 +123,7 @@ export function projectLanes(
       participant_id: id,
       kind: lane?.kind ?? "llm",
       binding: lane?.binding ?? null,
+      role: typeof lane?.role === "string" && lane.role ? lane.role : null,
       declared: true,
       marks: [],
     });
@@ -130,7 +138,7 @@ export function projectLanes(
     if (!row) {
       // A speaker the roster never mentioned is still evidence. Dropping the
       // event would hide it; inventing a lane shows it and marks it undeclared.
-      row = { participant_id: laneId, kind: "unknown", binding: null, declared: false, marks: [] };
+      row = { participant_id: laneId, kind: "unknown", binding: null, role: null, declared: false, marks: [] };
       rows.set(laneId, row);
     }
     const data = payload(event);

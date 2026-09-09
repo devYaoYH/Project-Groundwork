@@ -80,6 +80,21 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _roleless_design_sha256(design) -> str:
+    """Reproduce the canonical digest from before ``ParticipantConfig.role``.
+
+    Adding an optional Pydantic field makes current ``model_dump`` output
+    include ``role: null``. Historic role-less designs were hashed before that
+    field existed, so their otherwise valid digest intentionally omits the
+    key. This is used only after the source text proves every roster entry
+    truly omits the field.
+    """
+    payload = design.model_dump(mode="json")
+    for participant in payload["roster"]:
+        participant.pop("role", None)
+    return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class Release:
     id: str
@@ -107,6 +122,10 @@ class Experiment:
     design_sha256: str | None = None
     locked_at: str | None = None
     forked_from: str | None = None
+    authored_design_text: str | None = None
+    authored_design_sha256: str | None = None
+    authored_config_sha256: str | None = None
+    role_normalization: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -307,6 +326,146 @@ class ControlPlane:
                 )
                 WHERE environment_id IS NULL
             """)
+            self._backfill_compatible_word_guess_roles(db)
+
+    @staticmethod
+    def _backfill_compatible_word_guess_roles(db: sqlite3.Connection) -> None:
+        """Normalize only fully compatible legacy Word Guess design metadata.
+
+        A locked design is normally immutable, so this exception retains the
+        original authored text and its digests in an additive audit record.
+        The current design becomes a role-complete metadata revision, while
+        frozen episode configs and already-written traces keep the prior
+        provenance digest explicitly recorded by that audit record.
+        """
+        rows = db.execute(
+            "SELECT e.id AS experiment_id, e.design_text, e.design_sha256, e.config_sha256, "
+            "e.role_normalization, p.participant_id, p.kind, p.binding, p.role "
+            "FROM participants AS p "
+            "JOIN experiments AS e ON e.id = p.experiment_id "
+            "WHERE e.environment_id = 'word_guess' AND e.locked_at IS NOT NULL "
+            "ORDER BY p.experiment_id, p.participant_id"
+        ).fetchall()
+        by_experiment: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            by_experiment.setdefault(str(row["experiment_id"]), []).append(row)
+
+        for experiment_id, roster in by_experiment.items():
+            experiment = roster[0]
+            if (
+                len(roster) != 2
+                or experiment["role_normalization"] is not None
+                or not isinstance(experiment["design_text"], str)
+                or not isinstance(experiment["design_sha256"], str)
+                or experiment["config_sha256"] != experiment["design_sha256"]
+            ):
+                continue
+            roles: dict[str, str] = {}
+            for row in roster:
+                participant_id = str(row["participant_id"])
+                match = re.fullmatch(r"(guesser|host)_([1-9][0-9]*)", participant_id)
+                if match is None or str(row["kind"]) not in {"llm", "scripted", "human"}:
+                    roles = {}
+                    break
+                if row["kind"] != "human" and not row["binding"]:
+                    roles = {}
+                    break
+                roles[participant_id] = match.group(1)
+            if set(roles.values()) != {"guesser", "host"}:
+                continue
+            persisted_roles = {
+                str(row["participant_id"]): row["role"] for row in roster
+            }
+            # The first Phase 2 rollout could have supplied the lane metadata
+            # without rewriting its role-less authored document. Treat that
+            # exact, complete prior backfill as compatible, but reject a
+            # partially populated or conflicting roster rather than guessing
+            # what an operator intended.
+            if any(
+                role is not None and role != roles[participant_id]
+                for participant_id, role in persisted_roles.items()
+            ) or (any(role is None for role in persisted_roles.values())
+                  and any(role is not None for role in persisted_roles.values())):
+                continue
+            try:
+                authored = parse_design_text(experiment["design_text"])
+                raw_design = yaml.safe_load(experiment["design_text"])
+            except DesignValidationError:
+                continue
+            raw_roster = raw_design.get("roster") if isinstance(raw_design, dict) else None
+            source_omits_roles = isinstance(raw_roster, list) and all(
+                isinstance(participant, dict) and "role" not in participant
+                for participant in raw_roster
+            )
+            current_digest = authored.content_sha256()
+            legacy_digest = _roleless_design_sha256(authored) if source_omits_roles else None
+            if experiment["design_sha256"] not in {current_digest, legacy_digest}:
+                continue
+            prior_digest = str(experiment["design_sha256"])
+            by_id = {participant.id: participant for participant in authored.roster}
+            if len(by_id) != len(authored.roster) or set(by_id) != set(roles):
+                continue
+            if authored.release not in {"word_guess", "word_guess@v1"}:
+                continue
+            if any(
+                participant.role is not None
+                or participant.kind != row["kind"]
+                or participant.binding != row["binding"]
+                for row in roster
+                for participant in [by_id[str(row["participant_id"])]]
+            ):
+                continue
+            plans = db.execute(
+                "SELECT episode_configs FROM cells WHERE experiment_id = ?", (experiment_id,)
+            ).fetchall()
+            try:
+                configs = [
+                    config for cell in plans for config in json.loads(cell["episode_configs"])
+                ]
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not configs or any(
+                not isinstance(config, dict)
+                or not isinstance(config.get("provenance"), dict)
+                or config["provenance"].get("design_sha256") != prior_digest
+                for config in configs
+            ):
+                continue
+            normalized_payload = authored.model_dump(mode="json")
+            for participant in normalized_payload["roster"]:
+                participant["role"] = roles[str(participant["id"])]
+            normalized_text = yaml.safe_dump(normalized_payload, sort_keys=False, allow_unicode=False)
+            normalized = parse_design_text(normalized_text)
+            normalized_digest = normalized.content_sha256()
+            audit = {
+                "version": "word_guess_role_normalization_v1",
+                "normalized_at": _now(),
+                "roles": roles,
+                "prior": {
+                    "design_sha256": prior_digest,
+                    "config_sha256": experiment["config_sha256"],
+                    "execution_plan_design_sha256": prior_digest,
+                },
+                "normalized": {
+                    "design_sha256": normalized_digest,
+                    "config_sha256": normalized_digest,
+                },
+            }
+            db.execute(
+                "UPDATE experiments SET design_text = ?, design_sha256 = ?, config_sha256 = ?, "
+                "authored_design_text = ?, authored_design_sha256 = ?, "
+                "authored_config_sha256 = ?, role_normalization = ? WHERE id = ?",
+                (
+                    normalized_text, normalized_digest, normalized_digest,
+                    experiment["design_text"], prior_digest, experiment["config_sha256"],
+                    _json(audit), experiment_id,
+                ),
+            )
+            db.executemany(
+                "UPDATE participants SET role = ? "
+                "WHERE experiment_id = ? AND participant_id = ? AND role IS NULL",
+                [(role, experiment_id, participant_id) for participant_id, role in roles.items()],
+            )
 
     def seed_installed_releases(self) -> list[Release]:
         """Register every installed release as a dimension row.
@@ -695,7 +854,7 @@ class ControlPlane:
                 "WHERE experiment_id = ? ORDER BY cell_id", (experiment_id,),
             ).fetchall()
             participants = db.execute(
-                "SELECT participant_id, kind, binding, config_sha256 FROM participants "
+                "SELECT participant_id, kind, binding, role, config_sha256 FROM participants "
                 "WHERE experiment_id = ? ORDER BY participant_id", (experiment_id,),
             ).fetchall()
             launches = db.execute(
@@ -708,6 +867,7 @@ class ControlPlane:
                  "episodes_planned": row["episodes_planned"]}
                 for row in cells
             ],
+            "cell_evidence": self._store().cell_evidence(experiment_id),
             "roster": [dict(row) for row in participants],
             "launches": [self.launch_detail(row["id"]) for row in launches],
         }
@@ -729,6 +889,16 @@ class ControlPlane:
             return {"valid": True, "errors": [], "plan": preview.as_api_dict()}
         except DesignValidationError as exc:
             return {"valid": False, "errors": [error.as_dict() for error in exc.errors], "plan": None}
+
+    def participant_roster(self, experiment_id: str) -> list[dict[str, Any]]:
+        """The reviewed roster metadata used only for read-time trace projections."""
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT participant_id, kind, binding, role FROM participants "
+                "WHERE experiment_id = ? ORDER BY participant_id",
+                (experiment_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def fork_experiment_design(self, experiment_id: str) -> Experiment:
         """Fork a locked preregistration into an editable draft.
@@ -803,10 +973,10 @@ class ControlPlane:
                 ],
             )
             db.executemany(
-                "INSERT INTO participants (participant_id, experiment_id, kind, binding, config_sha256) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO participants (participant_id, experiment_id, kind, binding, role, config_sha256) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    (participant.id, experiment.id, participant.kind, participant.binding,
+                    (participant.id, experiment.id, participant.kind, participant.binding, participant.role,
                      hashlib.sha256(_json(participant.model_dump(mode="json")).encode("utf-8")).hexdigest())
                     for participant in design.roster
                 ],
@@ -1454,7 +1624,10 @@ class ControlPlane:
 
     @staticmethod
     def _experiment(row: sqlite3.Row) -> Experiment:
-        return Experiment(**dict(row))
+        values = dict(row)
+        if values.get("role_normalization"):
+            values["role_normalization"] = json.loads(values["role_normalization"])
+        return Experiment(**values)
 
     @staticmethod
     def _launch(row: sqlite3.Row) -> Launch:

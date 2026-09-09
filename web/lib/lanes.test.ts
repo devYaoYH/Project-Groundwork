@@ -104,6 +104,41 @@ test("an episode-grained environment gets a continuous lane and no separators", 
   assert.equal(rows.filter((row) => row.marks.length > 0).length, 2);
 });
 
+test("Word Guess role speakers map to the uniquely declared participants", () => {
+  const roleRoster: Lane[] = [
+    { participant_id: "guesser_1", role: "guesser", kind: "scripted", binding: "baseline" },
+    { participant_id: "host_1", role: "host", kind: "scripted", binding: "baseline" },
+  ];
+  const events: TraceEvent[] = [
+    { type: "game_start", data: { max_turns: 6 } },
+    { type: "message", data: { speaker: "guesser", text: "is it an animal?" } },
+    { type: "message", data: { speaker: "host", text: "yes" } },
+    { type: "game_end", data: { won: true } },
+  ];
+
+  const projection = projectLanes(events, roleRoster, null);
+
+  assert.deepEqual(marksOf(projection.rows, "guesser_1").map((mark) => mark.cursor), [1]);
+  assert.deepEqual(marksOf(projection.rows, "host_1").map((mark) => mark.cursor), [2]);
+  assert.deepEqual(marksOf(projection.rows, SYSTEM_LANE).map((mark) => mark.cursor), [0, 3]);
+});
+
+test("ambiguous and unknown role speakers remain discovered lanes", () => {
+  const ambiguous: Lane[] = [
+    { participant_id: "guesser_1", role: "guesser", kind: "scripted", binding: "one" },
+    { participant_id: "guesser_2", role: "guesser", kind: "scripted", binding: "two" },
+  ];
+  const events: TraceEvent[] = [
+    { type: "message", data: { speaker: "guesser", text: "hello" } },
+    { type: "message", data: { speaker: "observer", text: "not a declared role" } },
+  ];
+
+  const projection = projectLanes(events, ambiguous, null);
+
+  assert.equal(projection.rows.find((row) => row.participant_id === "guesser")?.declared, false);
+  assert.equal(projection.rows.find((row) => row.participant_id === "observer")?.declared, false);
+});
+
 test("an index the events carry is ignored unless the release declares one", () => {
   const events: TraceEvent[] = [{ type: "phase_start", data: { round: 1 } }];
   assert.deepEqual(projectLanes(events, roster, null).separators, []);

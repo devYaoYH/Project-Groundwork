@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
+import statistics
 import threading
 import time
 import uuid
+import re
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -54,6 +57,13 @@ _FILTERABLE = {
     "cell_id", "episode_idx", "stopped",
     "experiment_id", "release_id", "item_id", "attempt", "seed", "status",
 }
+
+_MULTI_FILTERABLE = {"environment_id", "status"}
+
+
+def episode_name_tokens(value: object) -> list[str]:
+    """Return case-folded episode-name tokens with punctuation as boundaries."""
+    return re.sub(r"[^0-9A-Za-z]+", " ", str(value or "")).lower().split()
 
 # The identity and provenance columns a list view needs. Selecting them by name
 # is what keeps the episode list off the eight-``json.loads``-per-row path the
@@ -138,6 +148,7 @@ class SQLiteEpisodeStore:
             manifest.environment_id or payload.get("config", {}).get("environment_id"),
             manifest.experiment_name,
             manifest.episode_id,
+            " ".join(episode_name_tokens(manifest.episode_id)),
             manifest.cell_id,
             manifest.episode_idx,
             promoted["experiment_id"],
@@ -171,11 +182,11 @@ class SQLiteEpisodeStore:
                     conn.execute(
                         "INSERT OR REPLACE INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
-                        "  cell_id, episode_idx, experiment_id, release_id, item_id,"
+                        "  episode_tokens, cell_id, episode_idx, experiment_id, release_id, item_id,"
                         "  attempt, seed, status,"
                         "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
@@ -313,6 +324,170 @@ class SQLiteEpisodeStore:
         finally:
             conn.close()
 
+    def episode_facets(self, filters: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Stable environment and status option sets for the episode browser.
+
+        Facets are global unless the caller narrows the corpus to an experiment.
+        They deliberately do not disappear as other search controls change.
+        """
+        experiment_filters = {
+            key: value for key, value in (filters or {}).items()
+            if key in {"experiment_id", "experiment_name"}
+        }
+        where, params = self._where(experiment_filters)
+        suffix = f" AND {where.removeprefix('WHERE ')}" if where else ""
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            environments = conn.execute(
+                "SELECT environment_id AS value, COUNT(*) AS count FROM episodes "
+                f"WHERE environment_id IS NOT NULL{suffix} GROUP BY environment_id ORDER BY environment_id",
+                params,
+            ).fetchall()
+            statuses = conn.execute(
+                "SELECT status AS value, COUNT(*) AS count FROM episodes "
+                f"WHERE status IS NOT NULL{suffix} GROUP BY status ORDER BY status",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        return {
+            "environments": [{"value": row["value"], "count": int(row["count"])} for row in environments],
+            "statuses": [{"value": row["value"], "count": int(row["count"])} for row in statuses],
+        }
+
+    def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
+        """Summarize one latest execution for each locked logical replication.
+
+        Cells are the immutable plan, while attempts and episode rows describe
+        physical executions. Selecting the highest attempt before decoding
+        metrics means a retry replaces the prior execution as a logical
+        observation without erasing the older trace from the fact table.
+        """
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            cells = conn.execute(
+                "SELECT cell_id, levels, episodes_planned, episode_configs "
+                "FROM cells WHERE experiment_id = ? ORDER BY cell_id",
+                (experiment_id,),
+            ).fetchall()
+            executions = conn.execute(
+                """
+                WITH latest_attempts AS (
+                    SELECT a.cell_id, a.episode_id, a.attempt, a.status,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY a.episode_id
+                               ORDER BY a.attempt DESC, a.id DESC
+                           ) AS attempt_rank
+                    FROM attempts a
+                    JOIN cells c ON c.cell_id = a.cell_id
+                    WHERE c.experiment_id = ?
+                ), latest_traces AS (
+                    SELECT e.episode_id, e.attempt, e.status AS trace_status, e.metrics,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY e.episode_id, e.attempt
+                               ORDER BY e.created_at DESC, e.episode_uid DESC
+                           ) AS trace_rank
+                    FROM episodes e
+                )
+                SELECT a.cell_id, a.episode_id, a.attempt, a.status,
+                       e.trace_status, e.metrics
+                FROM latest_attempts a
+                LEFT JOIN latest_traces e
+                    ON e.episode_id = a.episode_id
+                    AND e.attempt = a.attempt
+                    AND e.trace_rank = 1
+                WHERE a.attempt_rank = 1
+                """,
+                (experiment_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        latest_by_episode = {
+            (row["cell_id"], row["episode_id"]): row for row in executions
+        }
+        evidence: list[dict[str, Any]] = []
+        for cell in cells:
+            try:
+                levels = json.loads(cell["levels"])
+            except json.JSONDecodeError:
+                levels = {}
+            try:
+                configs = json.loads(cell["episode_configs"])
+            except json.JSONDecodeError:
+                configs = []
+            planned_ids = {
+                str(config.get("episode_id"))
+                for config in configs
+                if isinstance(config, dict) and config.get("episode_id")
+            }
+            status_counts: dict[str, int] = {"NOT_STARTED": int(cell["episodes_planned"])}
+            completed_replicas = 0
+            metric_values: dict[str, dict[str, list[float] | list[bool]]] = {}
+
+            for episode_id in planned_ids:
+                execution = latest_by_episode.get((cell["cell_id"], episode_id))
+                if execution is None:
+                    continue
+                status_counts["NOT_STARTED"] -= 1
+                status = str(execution["status"])
+                status_counts[status] = status_counts.get(status, 0) + 1
+                if status != "COMPLETED" or execution["trace_status"] != "COMPLETED":
+                    continue
+                completed_replicas += 1
+                try:
+                    metrics = json.loads(execution["metrics"] or "{}")
+                except json.JSONDecodeError:
+                    metrics = {}
+                if not isinstance(metrics, dict):
+                    continue
+                for name, value in metrics.items():
+                    if isinstance(value, bool):
+                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["boolean"].append(value)
+                    elif isinstance(value, (int, float)) and math.isfinite(value):
+                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["number"].append(float(value))
+
+            status_counts = {name: count for name, count in status_counts.items() if count}
+            metric_summaries: list[dict[str, Any]] = []
+            for name in sorted(metric_values):
+                values = metric_values[name]
+                numbers = values["number"]
+                booleans = values["boolean"]
+                # A metric whose native type changes between traces cannot be
+                # compared safely, so leave it out rather than coerce it.
+                if numbers and not booleans:
+                    summary: dict[str, Any] = {
+                        "name": name,
+                        "kind": "number",
+                        "n": len(numbers),
+                        "mean": statistics.fmean(numbers),
+                        "min": min(numbers),
+                        "max": max(numbers),
+                    }
+                    if len(numbers) > 1:
+                        summary["stddev"] = statistics.stdev(numbers)
+                    metric_summaries.append(summary)
+                elif booleans and not numbers:
+                    true_count = sum(booleans)
+                    metric_summaries.append({
+                        "name": name,
+                        "kind": "boolean",
+                        "n": len(booleans),
+                        "true_count": true_count,
+                        "false_count": len(booleans) - true_count,
+                    })
+            evidence.append({
+                "cell_id": cell["cell_id"],
+                "levels": levels if isinstance(levels, dict) else {},
+                "planned_replicas": int(cell["episodes_planned"]),
+                "completed_replicas": completed_replicas,
+                "status_counts": status_counts,
+                "metric_summaries": metric_summaries,
+            })
+        return evidence
+
     def iter_episodes(
         self, filters: dict[str, Any] | None = None
     ) -> Iterator[EpisodeTrace]:
@@ -332,11 +507,29 @@ class SQLiteEpisodeStore:
 
     @staticmethod
     def _where(filters: dict[str, Any] | None) -> tuple[str, tuple]:
-        filters = {k: v for k, v in (filters or {}).items() if k in _FILTERABLE}
-        if not filters:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for key, raw_value in (filters or {}).items():
+            if key == "q":
+                for token in episode_name_tokens(raw_value):
+                    clauses.append("instr(' ' || episode_tokens || ' ', ' ' || ? || ' ') > 0")
+                    params.append(token)
+                continue
+            if key not in _FILTERABLE:
+                continue
+            values = raw_value if isinstance(raw_value, (list, tuple, set)) else [raw_value]
+            accepted = [value for value in values if value not in {None, ""}]
+            if not accepted:
+                continue
+            if key in _MULTI_FILTERABLE:
+                clauses.append(f"{key} IN ({', '.join('?' for _ in accepted)})")
+                params.extend(accepted)
+            else:
+                clauses.append(f"{key} = ?")
+                params.append(accepted[0])
+        if not clauses:
             return "", ()
-        clause = " AND ".join(f"{k} = ?" for k in filters)
-        return f"WHERE {clause}", tuple(filters.values())
+        return f"WHERE {' AND '.join(clauses)}", tuple(params)
 
     @staticmethod
     def _row_to_trace(row: sqlite3.Row) -> EpisodeTrace | None:

@@ -12,6 +12,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 from a2a_engine.event_sink import open_event_sink
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.schemas import EpisodeConfigBase, EpisodeTrace
@@ -22,6 +24,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_stack.control_plane import ControlPlane
 
 WORKSPACE = Path(__file__).resolve().parents[2]
+
+CELL_EVIDENCE_DESIGN = """schema_version: 1
+release: buyer_seller@v1
+parameters:
+  seller_cost: {randomize: true}
+  buyer_value: {pin: 30}
+  num_items: {pin: 3}
+  discount_factor: {pin: 0.5}
+units:
+  episodes_per_cell: 2
+roster:
+  - id: seller
+    role: seller
+    kind: scripted
+    binding: seller-baseline
+  - id: buyer
+    role: buyer
+    kind: scripted
+    binding: buyer-baseline
+seed:
+  root: 41
+"""
 
 
 def _control(tmp_path: Path) -> ControlPlane:
@@ -51,6 +75,23 @@ def _record_episode(control: ControlPlane, episode_id: str, *, partial: bool = F
         cell_id=episode_id.split(".")[1], episode_idx=0, episode_uid=trace.episode_uid,
     )
     manifest.episode_id = episode_id
+    return SQLiteEpisodeStore(path=control.path).put_episode(trace, manifest)
+
+
+def _record_planned_episode(
+    control: ControlPlane, config: dict, *, episode_uid: str, metrics: dict[str, object]
+) -> str:
+    """Persist a compiled design config with its planned execution identity."""
+    provenance = config["provenance"]
+    episode = EpisodeConfigBase.model_validate(config)
+    trace = EpisodeTrace(episode_uid=episode_uid, config=episode, metrics=metrics)
+    manifest = EpisodeManifest.from_run(
+        config=episode.model_dump(), experiment_name=str(episode.experiment_name or ""),
+        cell_id=str(provenance["cell_id"]), episode_idx=int(provenance["episode_idx"]),
+        episode_uid=episode_uid,
+    )
+    manifest.episode_id = str(episode.episode_id)
+    manifest.environment_id = str(episode.environment_id)
     return SQLiteEpisodeStore(path=control.path).put_episode(trace, manifest)
 
 
@@ -205,6 +246,55 @@ def test_attempt_numbers_are_monotonic_per_episode_across_launches(tmp_path):
     with sqlite3.connect(control.path) as db:
         count = db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
     assert count == 8
+
+
+def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_path):
+    control = _control(tmp_path)
+    experiment = control.create_experiment(
+        name="Cell evidence", release_id="buyer_seller", design_text=CELL_EVIDENCE_DESIGN,
+    )
+    locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
+    control.launcher = SilentLauncher(control)
+
+    first = control.launch_experiment(locked.id)
+    first_configs = control._design_episode_configs(locked, mode="live")
+    for index, config in enumerate(first_configs):
+        _record_planned_episode(
+            control, config, episode_uid=f"first-{index}",
+            metrics={"score": [1.0, 5.0][index], "won": index == 0},
+        )
+    control._finish_launch(first.id, 0)
+
+    second = control.launch_experiment(locked.id)
+    attempts = {
+        attempt["episode_id"]: attempt["attempt"]
+        for attempt in control.launch_detail(second.id)["attempts"]
+    }
+    second_configs = control._design_episode_configs(locked, mode="live")
+    for index, config in enumerate(second_configs):
+        config["provenance"] = {**config["provenance"], "attempt": attempts[config["episode_id"]]}
+        _record_planned_episode(
+            control, config, episode_uid=f"second-{index}",
+            metrics={"score": [3.0, 7.0][index], "won": index == 1},
+        )
+    control._finish_launch(second.id, 0)
+
+    evidence = control.experiment_detail(locked.id)["cell_evidence"]
+    assert len(evidence) == 1
+    cell = evidence[0]
+    assert cell["planned_replicas"] == 2
+    assert cell["completed_replicas"] == 2
+    assert cell["status_counts"] == {"COMPLETED": 2}
+    summaries = {summary["name"]: summary for summary in cell["metric_summaries"]}
+    assert summaries["score"] == {
+        "name": "score", "kind": "number", "n": 2,
+        "mean": 5.0, "min": 3.0, "max": 7.0,
+        "stddev": pytest.approx(2.8284271247461903),
+    }
+    assert summaries["won"] == {
+        "name": "won", "kind": "boolean", "n": 2,
+        "true_count": 1, "false_count": 1,
+    }
 
 
 def test_the_fact_table_joins_its_dimensions_in_one_file(tmp_path):

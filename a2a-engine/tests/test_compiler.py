@@ -60,6 +60,7 @@ parameters:
   episodes_per_cell: {episodes}
 roster:
   - id: player
+    role: player
     kind: scripted
     binding: baseline
 seed:
@@ -100,6 +101,12 @@ def test_compiler_expands_one_two_and_three_factored_parameters(
         episode.config["provenance"]["experiment_id"] == "e1"
         for cell in plan.cells
         for episode in cell.episodes
+    )
+    assert all(
+        "role" not in agent
+        for cell in plan.cells
+        for episode in cell.episodes
+        for agent in episode.config["agents"]
     )
 
 
@@ -180,3 +187,48 @@ def test_static_seed_is_rejected_for_a_sampling_release(tmp_path):
     )
 
     assert any(error.path == "seed.mode" for error in validate(authored, declaration, bank))
+
+
+def test_roster_roles_must_be_declared_unique_and_kind_compatible(tmp_path):
+    declaration, bank = release_and_bank(tmp_path)
+    declaration = declaration.model_copy(update={
+        "roles": [
+            RoleConfig(id="player", accepts=["human"]),
+            RoleConfig(id="opponent", accepts=["scripted"]),
+        ],
+    })
+
+    def authored(roster: str):
+        return parse_design_text(f"""schema_version: 1
+release: test@v1
+parameters:
+  difficulty: {{pin: easy}}
+  size: {{pin: 1}}
+units:
+  episodes_per_cell: 1
+roster:
+{roster}seed:
+  root: 42
+""")
+
+    missing = validate(authored("  - id: one\n    kind: scripted\n    binding: baseline\n"), declaration, bank)
+    assert any(issue.path == "roster[0].role" and "select" in issue.message for issue in missing)
+
+    duplicate = validate(authored(
+        "  - id: one\n    role: player\n    kind: human\n"
+        "  - id: two\n    role: player\n    kind: human\n"
+    ), declaration, bank)
+    assert any("role 'player' requires exactly 1" in issue.message for issue in duplicate)
+    assert any("role 'opponent' requires exactly 1" in issue.message for issue in duplicate)
+
+    unknown = validate(authored(
+        "  - id: one\n    role: unknown\n    kind: human\n"
+        "  - id: two\n    role: opponent\n    kind: scripted\n    binding: baseline\n"
+    ), declaration, bank)
+    assert any(issue.path == "roster[0].role" and "unknown declared role" in issue.message for issue in unknown)
+
+    incompatible = validate(authored(
+        "  - id: one\n    role: player\n    kind: scripted\n    binding: baseline\n"
+        "  - id: two\n    role: opponent\n    kind: scripted\n    binding: baseline\n"
+    ), declaration, bank)
+    assert any(issue.path == "roster[0].kind" and "accepts human" in issue.message for issue in incompatible)

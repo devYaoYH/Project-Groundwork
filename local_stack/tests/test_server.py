@@ -12,6 +12,7 @@ from pathlib import Path
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.derived import DerivedArtifact, trace_digest
 from a2a_engine.provenance import build_provenance
+from a2a_engine.design import parse_design_text
 from a2a_engine.schemas import Event, ParticipantBinding, EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
@@ -179,6 +180,53 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
         LocalStackHandler.database = previous
 
 
+def test_episode_page_accepts_multi_facets_search_and_rejects_invalid_query_shapes(tmp_path):
+    import pytest
+
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    for uid, environment_id, episode_id in (
+        ("word", "word_guess", "Testing.Word-Guess_fork.cell-a.000"),
+        ("calendar", "calendar", "Testing-Calendar-fork.cell-b.000"),
+        ("other", "word_guess", "Other.cell-c.000"),
+    ):
+        config = EpisodeConfigBase(
+            environment_id=environment_id, num_agents=2, experiment_name="Testing",
+            episode_id=episode_id,
+        )
+        trace = EpisodeTrace(episode_uid=uid, config=config)
+        manifest = EpisodeManifest.from_run(
+            config=config.model_dump(), experiment_name="Testing", cell_id="cell",
+            episode_idx=0, episode_uid=uid,
+        )
+        manifest.episode_id = episode_id
+        manifest.environment_id = environment_id
+        store.put_episode(trace, manifest)
+
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        page = LocalStackHandler._episode_page({
+            "q": ["testing fork"],
+            "environment_id": ["word_guess", "calendar"],
+            "status": ["COMPLETED"],
+        })
+        assert {episode["episode_uid"] for episode in page["episodes"]} == {"word", "calendar"}
+        assert page["filters"] == {
+            "q": "testing fork", "environment_id": ["word_guess", "calendar"], "status": ["COMPLETED"],
+        }
+        assert page["facets"]["environments"] == [
+            {"value": "calendar", "count": 1}, {"value": "word_guess", "count": 2},
+        ]
+        with pytest.raises(ValueError, match="exactly one value"):
+            LocalStackHandler._episode_page({"q": ["one", "two"]})
+        with pytest.raises(ValueError, match="must not be empty"):
+            LocalStackHandler._episode_page({"status": [""]})
+        with pytest.raises(ValueError, match="non-negative"):
+            LocalStackHandler._episode_page({"cursor": ["-1"]})
+    finally:
+        LocalStackHandler.database = previous
+
+
 def test_control_plane_correlates_local_otel_spans_by_trace_id(tmp_path):
     config = EpisodeConfigBase(environment_id="word_guess", num_agents=2)
     trace = EpisodeTrace(
@@ -277,6 +325,48 @@ def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts
         f"      OK   {experiment.name}.apple.0  [word_guess] -> sqlite:///apple",
     ]
     assert all(attempt["redis_stream"].startswith(f"a2a:launch:{launch.id}:") for attempt in detail["attempts"])
+
+
+def test_experiment_detail_response_includes_empty_locked_cell_evidence(tmp_path):
+    """The read model accompanies the immutable cell plan before any run exists."""
+    workspace = Path(__file__).resolve().parents[2]
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
+    design = """schema_version: 1
+release: buyer_seller@v1
+parameters:
+  seller_cost: {randomize: true}
+  buyer_value: {pin: 30}
+  num_items: {pin: 3}
+  discount_factor: {pin: 0.5}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: seller
+    role: seller
+    kind: scripted
+    binding: seller-baseline
+  - id: buyer
+    role: buyer
+    kind: scripted
+    binding: buyer-baseline
+seed:
+  root: 41
+"""
+    experiment = control.create_experiment(
+        name="Evidence response", release_id="buyer_seller", design_text=design,
+    )
+    locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
+
+    payload = control.experiment_detail(locked.id)
+
+    assert payload["cell_evidence"] == [{
+        "cell_id": payload["cells"][0]["cell_id"],
+        "levels": payload["cells"][0]["levels"],
+        "planned_replicas": 1,
+        "completed_replicas": 0,
+        "status_counts": {"NOT_STARTED": 1},
+        "metric_summaries": [],
+    }]
 
 
 def _buyer_seller_control(tmp_path):
@@ -794,6 +884,88 @@ def test_episode_detail_carries_the_lanes_and_cursor_the_browser_cannot_derive(t
         assert LocalStackHandler._episode_detail("no-such-episode") is None
     finally:
         LocalStackHandler.database = previous
+
+
+def test_episode_detail_enriches_declared_lanes_with_reviewed_roles(tmp_path):
+    workspace = Path(__file__).resolve().parents[2]
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
+    design = """schema_version: 1
+release: word_guess@v1
+parameters:
+  secret_word: {pin: dog}
+  max_turns: {pin: 6}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: guesser_1
+    role: guesser
+    kind: scripted
+    binding: baseline
+  - id: host_1
+    role: host
+    kind: scripted
+    binding: baseline
+seed:
+  root: 41
+"""
+    experiment = control.create_experiment(
+        name="Role lanes", release_id="word_guess", design_text=design,
+    )
+    locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
+    legacy_text = locked.design_text.replace("    role: guesser\n", "").replace("    role: host\n", "")
+    legacy_digest = parse_design_text(legacy_text).content_sha256()
+    with control._session() as db:
+        cells = db.execute(
+            "SELECT cell_id, episode_configs FROM cells WHERE experiment_id = ?", (locked.id,)
+        ).fetchall()
+        for cell in cells:
+            configs = json.loads(cell["episode_configs"])
+            for stored in configs:
+                stored["provenance"]["design_sha256"] = legacy_digest
+            db.execute(
+                "UPDATE cells SET episode_configs = ? WHERE cell_id = ?",
+                (json.dumps(configs), cell["cell_id"]),
+            )
+        db.execute(
+            "UPDATE experiments SET design_text = ?, design_sha256 = ?, config_sha256 = ? WHERE id = ?",
+            (legacy_text, legacy_digest, legacy_digest, locked.id),
+        )
+        db.execute("UPDATE participants SET role = NULL WHERE experiment_id = ?", (locked.id,))
+    resumed = ControlPlane(control.path, workspace=workspace)
+    config = resumed._design_episode_configs(resumed.experiment(locked.id), mode="live")[0]
+    trace = EpisodeTrace(
+        episode_uid="role-lanes",
+        config=EpisodeConfigBase.model_validate(config),
+        events=[
+            Event(type="message", data={"speaker": "guesser", "text": "is it an animal?"}),
+            Event(type="message", data={"speaker": "host", "text": "yes"}),
+        ],
+    )
+    provenance = config["provenance"]
+    manifest = EpisodeManifest.from_run(
+        config=config, experiment_name=locked.name, cell_id=provenance["cell_id"],
+        episode_idx=provenance["episode_idx"], episode_uid=trace.episode_uid,
+    )
+    manifest.episode_id = config["episode_id"]
+    manifest.environment_id = "word_guess"
+    SQLiteEpisodeStore(path=resumed.path).put_episode(trace, manifest)
+
+    previous_database = LocalStackHandler.database
+    previous_control = LocalStackHandler._control_plane
+    try:
+        LocalStackHandler.database = resumed.path
+        LocalStackHandler._control_plane = None
+        before = LocalStackHandler._trace(trace.episode_uid)
+        detail = LocalStackHandler._episode_detail(trace.episode_uid)
+        assert detail is not None
+        assert detail["lanes"] == [
+            {"participant_id": "guesser_1", "kind": "scripted", "binding": "baseline", "role": "guesser"},
+            {"participant_id": "host_1", "kind": "scripted", "binding": "baseline", "role": "host"},
+        ]
+        assert LocalStackHandler._trace(trace.episode_uid) == before
+    finally:
+        LocalStackHandler.database = previous_database
+        LocalStackHandler._control_plane = previous_control
 
 
 def test_episode_detail_survives_a_trace_with_no_events_and_no_provenance(tmp_path):

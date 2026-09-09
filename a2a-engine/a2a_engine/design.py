@@ -65,6 +65,7 @@ class Disposition(_StrictModel):
 
 class ParticipantConfig(_StrictModel):
     id: str
+    role: str | None = None
     kind: Literal["llm", "scripted", "human"] = "llm"
     binding: str | None = None
 
