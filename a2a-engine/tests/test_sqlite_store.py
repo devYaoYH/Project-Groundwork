@@ -21,6 +21,7 @@ from a2a_engine.schemas import (
     EpisodeTrace,
 )
 from a2a_engine.storage import check_store, make_store
+from a2a_engine.storage.schema import SCHEMA, apply_schema
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 
@@ -319,3 +320,90 @@ def test_summary_filters_are_pushed_into_sql_and_unknown_keys_dropped(store):
     rows, _ = store.episode_summaries({"1=1; DROP TABLE episodes": "x"})
     assert len(rows) == 1
     assert store.get_episode("g1") is not None
+
+
+def test_episode_search_uses_all_normalized_name_tokens_and_multi_value_facets(store):
+    records = [
+        ("one", "Testing.Word-Guess_fork.cell-a.000", "word_guess", False),
+        ("two", "Testing-Calendar-fork.cell-b.000", "calendar", False),
+        ("three", "Unrelated.cell-c.000", "word_guess", True),
+    ]
+    for uid, episode_id, environment_id, stopped in records:
+        trace, manifest = make_trace(uid, run_id=episode_id, environment_id=environment_id)
+        trace.stopped = stopped
+        store.put_episode(trace, manifest)
+
+    matched, _ = store.episode_summaries({"q": "testing fork"})
+    assert {row["episode_uid"] for row in matched} == {"one", "two"}
+    punctuated, _ = store.episode_summaries({"q": "testing,fork"})
+    assert {row["episode_uid"] for row in punctuated} == {"one", "two"}
+    filtered, _ = store.episode_summaries({
+        "q": "testing fork",
+        "environment_id": ["word_guess", "calendar"],
+        "status": ["COMPLETED"],
+    })
+    assert {row["episode_uid"] for row in filtered} == {"one", "two"}
+    only_word_guess, _ = store.episode_summaries({
+        "q": "testing fork", "environment_id": ["word_guess"], "status": ["COMPLETED"],
+    })
+    assert [row["episode_uid"] for row in only_word_guess] == ["one"]
+
+    facets = store.episode_facets()
+    assert facets["environments"] == [
+        {"value": "calendar", "count": 1}, {"value": "word_guess", "count": 2},
+    ]
+    assert facets["statuses"] == [
+        {"value": "COMPLETED", "count": 2}, {"value": "STOPPED", "count": 1},
+    ]
+
+
+def test_episode_search_cursor_continues_the_same_ordered_result_set(store):
+    for index in range(3):
+        store.put_episode(*make_trace(
+            f"g{index}", run_id=f"Testing.Fork.cell-{index}.000", environment_id="word_guess",
+        ))
+    conn = store._connect()
+    try:
+        for index in range(3):
+            conn.execute(
+                "UPDATE episodes SET created_at = ? WHERE episode_uid = ?",
+                (f"2026-01-01T00:00:0{index}Z", f"g{index}"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    first, cursor = store.episode_summaries({"q": "testing fork"}, limit=2)
+    second, next_cursor = store.episode_summaries({"q": "testing fork"}, limit=2, cursor=cursor)
+    assert [row["episode_uid"] for row in first] == ["g2", "g1"]
+    assert [row["episode_uid"] for row in second] == ["g0"]
+    assert next_cursor is None
+
+
+def test_phase_three_schema_migrates_a_pre_token_episode_table_before_indexing(tmp_path):
+    """``CREATE TABLE IF NOT EXISTS`` must not index a column it has not added yet."""
+    path = tmp_path / "legacy.db"
+    legacy_schema = SCHEMA.replace(
+        "    -- Lower-cased, punctuation-delimited episode-id tokens. This is a\n"
+        "    -- rebuildable search projection; the durable episode identity remains\n"
+        "    -- ``episode_id`` and trace config/provenance.\n"
+        "    episode_tokens    TEXT NOT NULL DEFAULT '',\n",
+        "",
+    )
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(legacy_schema)
+        conn.execute(
+            "INSERT INTO episodes (episode_uid, episode_id, config, events, final_state, metrics, manifest) "
+            "VALUES ('legacy', 'Testing.Word-Guess_fork.cell-a.000', '{}', '[]', '{}', '{}', '{}')"
+        )
+        apply_schema(conn)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(episodes)")}
+        indexes = {row["name"] for row in conn.execute("PRAGMA index_list(episodes)")}
+        tokens = conn.execute(
+            "SELECT episode_tokens FROM episodes WHERE episode_uid = 'legacy'"
+        ).fetchone()["episode_tokens"]
+
+    assert "episode_tokens" in columns
+    assert "idx_episodes_tokens" in indexes
+    assert tokens == "testing word guess fork cell a 000"

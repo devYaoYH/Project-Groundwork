@@ -32,6 +32,7 @@ import statistics
 import threading
 import time
 import uuid
+import re
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -56,6 +57,13 @@ _FILTERABLE = {
     "cell_id", "episode_idx", "stopped",
     "experiment_id", "release_id", "item_id", "attempt", "seed", "status",
 }
+
+_MULTI_FILTERABLE = {"environment_id", "status"}
+
+
+def episode_name_tokens(value: object) -> list[str]:
+    """Return case-folded episode-name tokens with punctuation as boundaries."""
+    return re.sub(r"[^0-9A-Za-z]+", " ", str(value or "")).lower().split()
 
 # The identity and provenance columns a list view needs. Selecting them by name
 # is what keeps the episode list off the eight-``json.loads``-per-row path the
@@ -140,6 +148,7 @@ class SQLiteEpisodeStore:
             manifest.environment_id or payload.get("config", {}).get("environment_id"),
             manifest.experiment_name,
             manifest.episode_id,
+            " ".join(episode_name_tokens(manifest.episode_id)),
             manifest.cell_id,
             manifest.episode_idx,
             promoted["experiment_id"],
@@ -173,11 +182,11 @@ class SQLiteEpisodeStore:
                     conn.execute(
                         "INSERT OR REPLACE INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
-                        "  cell_id, episode_idx, experiment_id, release_id, item_id,"
+                        "  episode_tokens, cell_id, episode_idx, experiment_id, release_id, item_id,"
                         "  attempt, seed, status,"
                         "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
@@ -314,6 +323,38 @@ class SQLiteEpisodeStore:
             ).fetchone()["n"])
         finally:
             conn.close()
+
+    def episode_facets(self, filters: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Stable environment and status option sets for the episode browser.
+
+        Facets are global unless the caller narrows the corpus to an experiment.
+        They deliberately do not disappear as other search controls change.
+        """
+        experiment_filters = {
+            key: value for key, value in (filters or {}).items()
+            if key in {"experiment_id", "experiment_name"}
+        }
+        where, params = self._where(experiment_filters)
+        suffix = f" AND {where.removeprefix('WHERE ')}" if where else ""
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            environments = conn.execute(
+                "SELECT environment_id AS value, COUNT(*) AS count FROM episodes "
+                f"WHERE environment_id IS NOT NULL{suffix} GROUP BY environment_id ORDER BY environment_id",
+                params,
+            ).fetchall()
+            statuses = conn.execute(
+                "SELECT status AS value, COUNT(*) AS count FROM episodes "
+                f"WHERE status IS NOT NULL{suffix} GROUP BY status ORDER BY status",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        return {
+            "environments": [{"value": row["value"], "count": int(row["count"])} for row in environments],
+            "statuses": [{"value": row["value"], "count": int(row["count"])} for row in statuses],
+        }
 
     def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
         """Summarize one latest execution for each locked logical replication.
@@ -466,11 +507,29 @@ class SQLiteEpisodeStore:
 
     @staticmethod
     def _where(filters: dict[str, Any] | None) -> tuple[str, tuple]:
-        filters = {k: v for k, v in (filters or {}).items() if k in _FILTERABLE}
-        if not filters:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for key, raw_value in (filters or {}).items():
+            if key == "q":
+                for token in episode_name_tokens(raw_value):
+                    clauses.append("instr(' ' || episode_tokens || ' ', ' ' || ? || ' ') > 0")
+                    params.append(token)
+                continue
+            if key not in _FILTERABLE:
+                continue
+            values = raw_value if isinstance(raw_value, (list, tuple, set)) else [raw_value]
+            accepted = [value for value in values if value not in {None, ""}]
+            if not accepted:
+                continue
+            if key in _MULTI_FILTERABLE:
+                clauses.append(f"{key} IN ({', '.join('?' for _ in accepted)})")
+                params.extend(accepted)
+            else:
+                clauses.append(f"{key} = ?")
+                params.append(accepted[0])
+        if not clauses:
             return "", ()
-        clause = " AND ".join(f"{k} = ?" for k in filters)
-        return f"WHERE {clause}", tuple(filters.values())
+        return f"WHERE {' AND '.join(clauses)}", tuple(params)
 
     @staticmethod
     def _row_to_trace(row: sqlite3.Row) -> EpisodeTrace | None:

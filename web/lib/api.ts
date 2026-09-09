@@ -108,12 +108,15 @@ export type EpisodeSummary = {
 };
 
 export type EpisodeFilters = {
+  q?: string;
   experiment_id?: string;
   experiment_name?: string;
-  environment_id?: string;
+  environment_id?: string[];
   cell_id?: string;
-  status?: string;
+  status?: string[];
 };
+
+export type EpisodeFacet = { value: string; count: number };
 
 // One emitted event. `type` is environment-defined and `data` is a free dict,
 // so nothing beyond those two may be assumed present.
@@ -163,7 +166,8 @@ export type ArtifactPage = {
 export type EpisodePage = {
   episodes: EpisodeSummary[];
   next_cursor: string | null;
-  filters: Record<string, string>;
+  filters: Record<string, string | string[]>;
+  facets: { environments: EpisodeFacet[]; statuses: EpisodeFacet[] };
 };
 
 export type Experiment = {
@@ -322,7 +326,11 @@ export function getItems(id: string, cursor?: string): Promise<ItemPage> {
 export function listEpisodes(filters: EpisodeFilters, cursor?: string): Promise<EpisodePage> {
   const query = new URLSearchParams({ limit: "50" });
   for (const [key, value] of Object.entries(filters)) {
-    if (value) query.set(key, value);
+    if (Array.isArray(value)) {
+      for (const entry of value) if (entry) query.append(key, entry);
+    } else if (value) {
+      query.set(key, value);
+    }
   }
   if (cursor) query.set("cursor", cursor);
   return request<EpisodePage>(`/api/episodes?${query}`);

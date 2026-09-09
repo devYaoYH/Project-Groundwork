@@ -280,6 +280,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         "experiment_id", "experiment_name", "cell_id", "environment_id",
         "episode_id", "release_id", "item_id", "status",
     )
+    EPISODE_MULTI_FILTERS = {"environment_id", "status"}
 
     @classmethod
     def _episode_page(cls, query: dict[str, list[str]]) -> dict[str, object]:
@@ -289,18 +290,42 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         written on every request. Filters are pushed into SQL, where the
         promoted provenance columns are indexed.
         """
-        filters = {
-            key: query[key][0] for key in cls.EPISODE_FILTERS
-            if query.get(key) and query[key][0] != ""
-        }
-        limit = int(query.get("limit", ["100"])[0])
+        filters: dict[str, object] = {}
+        for key in cls.EPISODE_FILTERS:
+            values = query.get(key, [])
+            if not values:
+                continue
+            if any(value == "" for value in values):
+                raise ValueError(f"{key} values must not be empty")
+            if key not in cls.EPISODE_MULTI_FILTERS and len(values) > 1:
+                raise ValueError(f"{key} accepts exactly one value")
+            filters[key] = values if key in cls.EPISODE_MULTI_FILTERS else values[0]
+        queries = query.get("q", [])
+        if len(queries) > 1:
+            raise ValueError("q accepts exactly one value")
+        if queries and queries[0].strip():
+            filters["q"] = queries[0]
+        limit_values = query.get("limit", ["100"])
+        if len(limit_values) != 1:
+            raise ValueError("limit accepts exactly one value")
+        limit = int(limit_values[0])
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
-        cursor = query.get("cursor", [None])[0]
+        cursor_values = query.get("cursor", [])
+        if len(cursor_values) > 1:
+            raise ValueError("cursor accepts exactly one value")
+        cursor = cursor_values[0] if cursor_values else None
+        if cursor is not None and (not cursor.isdigit() or int(cursor) < 0):
+            raise ValueError("cursor must be a non-negative integer")
         episodes, next_cursor = cls._store().episode_summaries(
             filters, limit=limit, cursor=cursor,
         )
-        return {"episodes": episodes, "next_cursor": next_cursor, "filters": filters}
+        return {
+            "episodes": episodes,
+            "next_cursor": next_cursor,
+            "filters": filters,
+            "facets": cls._store().episode_facets(filters),
+        }
 
     @classmethod
     def _trace(cls, episode_uid: str) -> dict[str, object] | None:

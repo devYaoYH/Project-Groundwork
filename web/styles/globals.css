@@ -74,6 +74,18 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
 .filter-bar label span { color: var(--muted); font-size: 11px; }
 .filter-bar input { background: var(--card); border: 1px solid var(--rule-strong); border-radius: 4px; color: var(--ink); font: inherit; font-size: 13px; min-width: 13rem; padding: 6px 9px; }
 .filter-bar input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.episode-search { padding: 14px 16px; }
+.episode-query { display: grid; gap: 4px; max-width: 48rem; }
+.episode-query span, .facet-groups legend, .facet-groups span { color: var(--muted); font-size: 11px; }
+.episode-query input { background: var(--card); border: 1px solid var(--rule-strong); border-radius: 4px; color: var(--ink); font-size: 13px; padding: 7px 9px; width: 100%; }
+.episode-query input:focus-visible, .facet-groups input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.episode-query-help { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.applied-tokens { align-items: center; display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0 0; }
+.facet-groups { border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; gap: 18px 32px; margin-top: 13px; padding-top: 12px; }
+.facet-groups fieldset { border: 0; display: grid; gap: 5px; margin: 0; min-width: 13rem; padding: 0; }
+.facet-groups legend { margin-bottom: 3px; padding: 0; }
+.facet-groups label { align-items: center; display: flex; gap: 5px; font-size: 12px; }
+.facet-groups input { accent-color: var(--accent); margin: 0; }
 .bank-digest { color: var(--muted); font-size: 11px; margin: -7px 0 14px; }
 .bank-digest strong { color: var(--ink); font-size: 10px; font-weight: 400; word-break: break-all; }
 .item-params code { color: var(--muted); font-size: 11px; white-space: nowrap; }

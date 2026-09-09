@@ -180,6 +180,53 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
         LocalStackHandler.database = previous
 
 
+def test_episode_page_accepts_multi_facets_search_and_rejects_invalid_query_shapes(tmp_path):
+    import pytest
+
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    for uid, environment_id, episode_id in (
+        ("word", "word_guess", "Testing.Word-Guess_fork.cell-a.000"),
+        ("calendar", "calendar", "Testing-Calendar-fork.cell-b.000"),
+        ("other", "word_guess", "Other.cell-c.000"),
+    ):
+        config = EpisodeConfigBase(
+            environment_id=environment_id, num_agents=2, experiment_name="Testing",
+            episode_id=episode_id,
+        )
+        trace = EpisodeTrace(episode_uid=uid, config=config)
+        manifest = EpisodeManifest.from_run(
+            config=config.model_dump(), experiment_name="Testing", cell_id="cell",
+            episode_idx=0, episode_uid=uid,
+        )
+        manifest.episode_id = episode_id
+        manifest.environment_id = environment_id
+        store.put_episode(trace, manifest)
+
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        page = LocalStackHandler._episode_page({
+            "q": ["testing fork"],
+            "environment_id": ["word_guess", "calendar"],
+            "status": ["COMPLETED"],
+        })
+        assert {episode["episode_uid"] for episode in page["episodes"]} == {"word", "calendar"}
+        assert page["filters"] == {
+            "q": "testing fork", "environment_id": ["word_guess", "calendar"], "status": ["COMPLETED"],
+        }
+        assert page["facets"]["environments"] == [
+            {"value": "calendar", "count": 1}, {"value": "word_guess", "count": 2},
+        ]
+        with pytest.raises(ValueError, match="exactly one value"):
+            LocalStackHandler._episode_page({"q": ["one", "two"]})
+        with pytest.raises(ValueError, match="must not be empty"):
+            LocalStackHandler._episode_page({"status": [""]})
+        with pytest.raises(ValueError, match="non-negative"):
+            LocalStackHandler._episode_page({"cursor": ["-1"]})
+    finally:
+        LocalStackHandler.database = previous
+
+
 def test_control_plane_correlates_local_otel_spans_by_trace_id(tmp_path):
     config = EpisodeConfigBase(environment_id="word_guess", num_agents=2)
     trace = EpisodeTrace(

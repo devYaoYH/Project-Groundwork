@@ -125,6 +125,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     environment_id    TEXT,
     experiment_name   TEXT,
     episode_id        TEXT,
+    -- Lower-cased, punctuation-delimited episode-id tokens. This is a
+    -- rebuildable search projection; the durable episode identity remains
+    -- ``episode_id`` and trace config/provenance.
+    episode_tokens    TEXT NOT NULL DEFAULT '',
     cell_id           TEXT,
     episode_idx       INTEGER,
     experiment_id     TEXT REFERENCES experiments(id),
@@ -261,6 +265,8 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("episodes", "item_id", "ALTER TABLE episodes ADD COLUMN item_id TEXT"),
     ("episodes", "attempt",
      "ALTER TABLE episodes ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
+    ("episodes", "episode_tokens",
+     "ALTER TABLE episodes ADD COLUMN episode_tokens TEXT NOT NULL DEFAULT ''"),
     ("episodes", "seed", "ALTER TABLE episodes ADD COLUMN seed INTEGER"),
     ("episodes", "status",
      "ALTER TABLE episodes ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"),
@@ -294,6 +300,11 @@ def apply_schema(conn) -> None:
     statement is ``IF NOT EXISTS`` and each migration is guarded by an actual
     column check rather than by a version number nobody maintains.
     """
+    # Schema DDL can safely reference the columns a fresh table declares, but
+    # an ``IF NOT EXISTS`` table leaves an older table unchanged. Keep indexes
+    # for newly migrated columns out of this script until their migration has
+    # run below; otherwise SQLite rejects the whole schema application before
+    # it reaches the additive ALTER.
     conn.executescript(SCHEMA)
     existing: dict[str, set[str]] = {}
     for table, column, statement in MIGRATIONS:
@@ -302,4 +313,21 @@ def apply_schema(conn) -> None:
         if existing[table] and column not in existing[table]:
             conn.execute(statement)
             existing[table].add(column)
+    # ``episode_tokens`` is only a read projection, so old traces retain every
+    # durable byte while becoming searchable after an additive migration.
+    if "episodes" in existing and "episode_tokens" in existing["episodes"]:
+        from re import sub
+
+        rows = conn.execute(
+            "SELECT episode_uid, episode_id FROM episodes WHERE episode_tokens = ''"
+        ).fetchall()
+        conn.executemany(
+            "UPDATE episodes SET episode_tokens = ? WHERE episode_uid = ?",
+            [
+                (" ".join(token for token in sub(r"[^0-9A-Za-z]+", " ", row["episode_id"] or "").lower().split()),
+                 row["episode_uid"])
+                for row in rows
+            ],
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_tokens ON episodes(episode_tokens)")
     conn.commit()

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { forkDesign, getEnvironment, getItems, runOracle, saveDesign } from "./api.ts";
+import { forkDesign, getEnvironment, getItems, listEpisodes, runOracle, saveDesign } from "./api.ts";
 
 test("Word-Guess environment navigation preserves its API identifier", async () => {
   const originalFetch = globalThis.fetch;
@@ -94,4 +94,23 @@ test("forkDesign uses the explicit fork endpoint", async () => {
   assert.equal(path, "/api/experiments/experiment%20id/fork");
   assert.equal(init?.method, "POST");
   assert.equal(init?.body, "{}");
+});
+
+test("listEpisodes preserves repeated environment and status filters", async () => {
+  const originalFetch = globalThis.fetch;
+  let path = "";
+  globalThis.fetch = async (input) => {
+    path = String(input);
+    return new Response(JSON.stringify({ episodes: [], next_cursor: null, filters: {}, facets: { environments: [], statuses: [] } }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    await listEpisodes({ q: "testing fork", environment_id: ["word_guess", "calendar"], status: ["COMPLETED", "PARTIAL"] });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(path, "/api/episodes?limit=50&q=testing+fork&environment_id=word_guess&environment_id=calendar&status=COMPLETED&status=PARTIAL");
 });
