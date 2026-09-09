@@ -36,9 +36,11 @@ units:
   episodes_per_cell: 2
 roster:
   - id: seller
+    role: seller
     kind: scripted
     binding: seller-baseline
   - id: buyer
+    role: buyer
     kind: scripted
     binding: buyer-baseline
 seed:

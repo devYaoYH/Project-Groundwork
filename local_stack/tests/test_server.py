@@ -12,6 +12,7 @@ from pathlib import Path
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.derived import DerivedArtifact, trace_digest
 from a2a_engine.provenance import build_provenance
+from a2a_engine.design import parse_design_text
 from a2a_engine.schemas import Event, ParticipantBinding, EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
@@ -294,9 +295,11 @@ units:
   episodes_per_cell: 1
 roster:
   - id: seller
+    role: seller
     kind: scripted
     binding: seller-baseline
   - id: buyer
+    role: buyer
     kind: scripted
     binding: buyer-baseline
 seed:
@@ -834,6 +837,88 @@ def test_episode_detail_carries_the_lanes_and_cursor_the_browser_cannot_derive(t
         assert LocalStackHandler._episode_detail("no-such-episode") is None
     finally:
         LocalStackHandler.database = previous
+
+
+def test_episode_detail_enriches_declared_lanes_with_reviewed_roles(tmp_path):
+    workspace = Path(__file__).resolve().parents[2]
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
+    design = """schema_version: 1
+release: word_guess@v1
+parameters:
+  secret_word: {pin: dog}
+  max_turns: {pin: 6}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: guesser_1
+    role: guesser
+    kind: scripted
+    binding: baseline
+  - id: host_1
+    role: host
+    kind: scripted
+    binding: baseline
+seed:
+  root: 41
+"""
+    experiment = control.create_experiment(
+        name="Role lanes", release_id="word_guess", design_text=design,
+    )
+    locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
+    legacy_text = locked.design_text.replace("    role: guesser\n", "").replace("    role: host\n", "")
+    legacy_digest = parse_design_text(legacy_text).content_sha256()
+    with control._session() as db:
+        cells = db.execute(
+            "SELECT cell_id, episode_configs FROM cells WHERE experiment_id = ?", (locked.id,)
+        ).fetchall()
+        for cell in cells:
+            configs = json.loads(cell["episode_configs"])
+            for stored in configs:
+                stored["provenance"]["design_sha256"] = legacy_digest
+            db.execute(
+                "UPDATE cells SET episode_configs = ? WHERE cell_id = ?",
+                (json.dumps(configs), cell["cell_id"]),
+            )
+        db.execute(
+            "UPDATE experiments SET design_text = ?, design_sha256 = ?, config_sha256 = ? WHERE id = ?",
+            (legacy_text, legacy_digest, legacy_digest, locked.id),
+        )
+        db.execute("UPDATE participants SET role = NULL WHERE experiment_id = ?", (locked.id,))
+    resumed = ControlPlane(control.path, workspace=workspace)
+    config = resumed._design_episode_configs(resumed.experiment(locked.id), mode="live")[0]
+    trace = EpisodeTrace(
+        episode_uid="role-lanes",
+        config=EpisodeConfigBase.model_validate(config),
+        events=[
+            Event(type="message", data={"speaker": "guesser", "text": "is it an animal?"}),
+            Event(type="message", data={"speaker": "host", "text": "yes"}),
+        ],
+    )
+    provenance = config["provenance"]
+    manifest = EpisodeManifest.from_run(
+        config=config, experiment_name=locked.name, cell_id=provenance["cell_id"],
+        episode_idx=provenance["episode_idx"], episode_uid=trace.episode_uid,
+    )
+    manifest.episode_id = config["episode_id"]
+    manifest.environment_id = "word_guess"
+    SQLiteEpisodeStore(path=resumed.path).put_episode(trace, manifest)
+
+    previous_database = LocalStackHandler.database
+    previous_control = LocalStackHandler._control_plane
+    try:
+        LocalStackHandler.database = resumed.path
+        LocalStackHandler._control_plane = None
+        before = LocalStackHandler._trace(trace.episode_uid)
+        detail = LocalStackHandler._episode_detail(trace.episode_uid)
+        assert detail is not None
+        assert detail["lanes"] == [
+            {"participant_id": "guesser_1", "kind": "scripted", "binding": "baseline", "role": "guesser"},
+            {"participant_id": "host_1", "kind": "scripted", "binding": "baseline", "role": "host"},
+        ]
+        assert LocalStackHandler._trace(trace.episode_uid) == before
+    finally:
+        LocalStackHandler.database = previous_database
+        LocalStackHandler._control_plane = previous_control
 
 
 def test_episode_detail_survives_a_trace_with_no_events_and_no_provenance(tmp_path):

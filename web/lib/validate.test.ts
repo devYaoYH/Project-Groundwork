@@ -23,7 +23,7 @@ test("mirrors missing-disposition and randomize-on-design checks", () => {
     "parameters:",
     "  mode: {randomize: true}",
     "units: {episodes_per_cell: 1}",
-    "roster: [{id: p, kind: scripted, binding: baseline}]",
+    "roster: [{id: p, role: player, kind: scripted, binding: baseline}]",
     "seed: {root: 1}",
   ].join("\n"));
   const messages = validateClientDesign(design, detail).map((issue) => issue.message).join(" ");
@@ -37,7 +37,7 @@ test("rejects unknown item levels without server I/O", () => {
     "parameters:",
     "  item: {pin: missing}",
     "units: {episodes_per_cell: 1}",
-    "roster: [{id: p, kind: scripted, binding: baseline}]",
+    "roster: [{id: p, role: player, kind: scripted, binding: baseline}]",
     "seed: {root: 1}",
   ].join("\n"));
   assert.match(validateClientDesign(design, detail)[0].message, /no stratum/);
@@ -108,7 +108,7 @@ test("typing the word_guess design one character at a time never throws", () => 
     "  item: {factor: [a, b]}",
     "  mode: {pin: on}",
     "units: {episodes_per_cell: 2}",
-    "roster: [{id: p, kind: scripted, binding: baseline}]",
+    "roster: [{id: p, role: player, kind: scripted, binding: baseline}]",
     "seed: {root: 1}",
   ].join("\n");
   for (let index = 0; index <= full.length; index += 1) {

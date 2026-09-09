@@ -16,7 +16,7 @@ export type ClientDesign = {
   release?: string;
   parameters?: Record<string, ClientDisposition>;
   units?: { episodes_per_cell?: number };
-  roster?: { id?: string; kind?: string; binding?: string | null }[];
+  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null }[];
   seed?: { mode?: string; root?: number };
 };
 
@@ -104,21 +104,32 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
   }
   const ids = roster.map((participant) => participant.id).filter(Boolean);
   if (ids.length !== new Set(ids).size) issues.push({ path: "roster", message: "Participant ids must be unique." });
-  const expectedRoles = (detail.roles ?? []).flatMap((role) => Array.from({ length: role.count ?? 0 }, () => role));
+  const rolesById = new Map((detail.roles ?? []).map((role) => [role.id, role]));
+  const expectedRoleCount = (detail.roles ?? []).reduce((total, role) => total + (role.count ?? 0), 0);
   // Arity is about what the author wrote, so it counts the entries on the page
   // rather than the ones complete enough to inspect below.
-  if ((rawRoster ?? []).length !== expectedRoles.length) {
-    issues.push({ path: "roster", message: `Release requires ${expectedRoles.length} participants.` });
+  if ((rawRoster ?? []).length !== expectedRoleCount) {
+    issues.push({ path: "roster", message: `Release requires ${expectedRoleCount} participants.` });
   }
   roster.forEach((participant, index) => {
     if (participant.kind !== "human" && !participant.binding) {
       issues.push({ path: `roster[${index}].binding`, message: "A non-human participant needs a binding." });
     }
-    const role = expectedRoles[index];
-    if (role && participant.kind && !role.accepts.includes(participant.kind)) {
+    const role = typeof participant.role === "string" ? rolesById.get(participant.role) : undefined;
+    if (!participant.role) {
+      issues.push({ path: `roster[${index}].role`, message: "Select one declared environment role." });
+    } else if (!role) {
+      issues.push({ path: `roster[${index}].role`, message: "This role is not declared by the release." });
+    } else if (participant.kind && !role.accepts.includes(participant.kind)) {
       issues.push({ path: `roster[${index}].kind`, message: `This role accepts ${role.accepts.join(", ")}.` });
     }
   });
+  for (const role of detail.roles ?? []) {
+    const assigned = roster.filter((participant) => participant.role === role.id).length;
+    if (assigned !== role.count) {
+      issues.push({ path: "roster", message: `Role ${role.id} requires exactly ${role.count} participant(s).` });
+    }
+  }
 
   if (detail.item_policy?.mode === "sample" && design.seed?.mode === "static") {
     issues.push({ path: "seed.mode", message: "Static seeds are incompatible with sampled items." });

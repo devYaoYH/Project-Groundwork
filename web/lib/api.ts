@@ -142,6 +142,7 @@ export type Lane = {
   participant_id: string;
   kind: string;
   binding: string | null;
+  role?: string | null;
 };
 
 // The trace, plus the two read-time projections the browser cannot derive:
@@ -271,7 +272,7 @@ export type ExperimentDetail = {
   experiment: Experiment;
   cells: CompiledPlan["cells"];
   cell_evidence: CellEvidence[];
-  roster: { participant_id: string; kind: string; binding: string | null; config_sha256: string }[];
+  roster: { participant_id: string; kind: string; binding: string | null; role: string | null; config_sha256: string }[];
   launches: { launch: Launch; progress: { planned: number; completed: number; failed: number; by_cell: { cell_id: string; planned: number; completed: number; failed: number }[] } }[];
 };
 

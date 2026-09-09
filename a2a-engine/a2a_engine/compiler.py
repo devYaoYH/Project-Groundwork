@@ -12,6 +12,7 @@ import hashlib
 import itertools
 import json
 import random
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -266,20 +267,36 @@ def _validate_roster(
             issues.append(ValidationIssue(
                 f"roster[{index}].binding", "a non-human participant needs a binding"
             ))
-    expected_accepts = [
-        role.accepts for role in declaration.roles for _ in range(role.count)
-    ]
-    if len(design.roster) != len(expected_accepts):
+    declared_roles = {role.id: role for role in declaration.roles}
+    required_counts = Counter({role.id: role.count for role in declaration.roles})
+    expected_count = sum(required_counts.values())
+    if len(design.roster) != expected_count:
         issues.append(ValidationIssue(
-            "roster", f"release requires {len(expected_accepts)} participant(s), "
+            "roster", f"release requires {expected_count} participant(s), "
             f"but the design names {len(design.roster)}"
         ))
-        return
-    for index, (participant, accepted) in enumerate(zip(design.roster, expected_accepts)):
-        if participant.kind not in accepted:
+    assigned_counts: Counter[str] = Counter()
+    for index, participant in enumerate(design.roster):
+        path = f"roster[{index}].role"
+        if not participant.role:
+            issues.append(ValidationIssue(path, "select one declared environment role"))
+            continue
+        role = declared_roles.get(participant.role)
+        if role is None:
+            issues.append(ValidationIssue(path, f"unknown declared role {participant.role!r}"))
+            continue
+        assigned_counts[participant.role] += 1
+        if participant.kind not in role.accepts:
             issues.append(ValidationIssue(
                 f"roster[{index}].kind",
-                f"role at position {index} accepts {', '.join(accepted)}, not {participant.kind}",
+                f"role {participant.role!r} accepts {', '.join(role.accepts)}, not {participant.kind}",
+            ))
+    for role_id, required in required_counts.items():
+        assigned = assigned_counts[role_id]
+        if assigned != required:
+            issues.append(ValidationIssue(
+                "roster",
+                f"role {role_id!r} requires exactly {required} participant(s), but has {assigned}",
             ))
 
 

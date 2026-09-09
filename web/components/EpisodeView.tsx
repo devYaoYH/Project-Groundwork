@@ -177,7 +177,7 @@ export function EpisodeView() {
                     <strong style={{ color: `hsl(${laneHue(projection.rows, row.participant_id)} 42% 42%)` }}>
                       {row.participant_id}
                     </strong>
-                    <span>{row.declared ? row.binding ?? row.kind : "from events"}</span>
+                    <span>{row.declared ? [row.role, row.binding ?? row.kind].filter(Boolean).join(" · ") : "from events"}</span>
                   </div>
                 ))}
                 {projection.rows.map((row, index) =>

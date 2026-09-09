@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS experiments (
     design_sha256     TEXT,
     locked_at         TEXT,
     forked_from       TEXT REFERENCES experiments(id),
+    -- Compatibility normalization records the original content when a
+    -- narrowly-scoped metadata correction creates a current design revision.
+    -- Execution plans and traces retain their original provenance bytes.
+    authored_design_text TEXT,
+    authored_design_sha256 TEXT,
+    authored_config_sha256 TEXT,
+    role_normalization TEXT,
     created_at        TEXT NOT NULL
 );
 
@@ -101,6 +108,7 @@ CREATE TABLE IF NOT EXISTS participants (
     experiment_id     TEXT NOT NULL REFERENCES experiments(id),
     kind              TEXT NOT NULL,
     binding           TEXT,
+    role              TEXT,
     config_sha256     TEXT NOT NULL,
     PRIMARY KEY (participant_id, experiment_id)
 );
@@ -266,6 +274,11 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("experiments", "design_sha256", "ALTER TABLE experiments ADD COLUMN design_sha256 TEXT"),
     ("experiments", "locked_at", "ALTER TABLE experiments ADD COLUMN locked_at TEXT"),
     ("experiments", "forked_from", "ALTER TABLE experiments ADD COLUMN forked_from TEXT"),
+    ("experiments", "authored_design_text", "ALTER TABLE experiments ADD COLUMN authored_design_text TEXT"),
+    ("experiments", "authored_design_sha256", "ALTER TABLE experiments ADD COLUMN authored_design_sha256 TEXT"),
+    ("experiments", "authored_config_sha256", "ALTER TABLE experiments ADD COLUMN authored_config_sha256 TEXT"),
+    ("experiments", "role_normalization", "ALTER TABLE experiments ADD COLUMN role_normalization TEXT"),
+    ("participants", "role", "ALTER TABLE participants ADD COLUMN role TEXT"),
     ("attempts", "attempt", "ALTER TABLE attempts ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
     ("launches", "mode", "ALTER TABLE launches ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'"),
     ("launches", "execution_path", "ALTER TABLE launches ADD COLUMN execution_path TEXT"),

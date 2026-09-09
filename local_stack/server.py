@@ -330,8 +330,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             "cursor_max": len(trace.events),
         }
 
-    @staticmethod
-    def _lanes(trace) -> list[dict[str, object]]:
+    @classmethod
+    def _lanes(cls, trace) -> list[dict[str, object]]:
         """The pinned roster, as one lane per participant.
 
         Provenance is the durable copy, so it is read first. A trace written
@@ -353,7 +353,19 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 "kind": str(entry.get("kind") or "llm"),
                 "binding": entry.get("binding"),
             })
-        return [lane for lane in lanes if lane["participant_id"]]
+        lanes = [lane for lane in lanes if lane["participant_id"]]
+        experiment_id = block.get("experiment_id")
+        if not isinstance(experiment_id, str) or not experiment_id:
+            return lanes
+        roles = {
+            str(entry["participant_id"]): entry["role"]
+            for entry in cls._control().participant_roster(experiment_id)
+            if isinstance(entry.get("role"), str) and entry["role"]
+        }
+        return [
+            {**lane, **({"role": roles[lane["participant_id"]]} if lane["participant_id"] in roles else {})}
+            for lane in lanes
+        ]
 
     @staticmethod
     def _index_label(environment_id: str) -> str | None:

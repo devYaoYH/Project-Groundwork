@@ -31,6 +31,7 @@ function initialDesign(detail: EnvironmentDetail) {
     units: { episodes_per_cell: 1 },
     roster: detail.roles.flatMap((role) => Array.from({ length: role.count }, (_, index) => ({
       id: `${role.id}_${index + 1}`,
+      role: role.id,
       kind: role.accepts.includes("scripted") ? "scripted" : role.accepts[0],
       binding: "baseline",
     }))),
