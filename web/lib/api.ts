@@ -179,6 +179,27 @@ export type Experiment = {
   forked_from: string | null;
 };
 
+export type MetricSummary = {
+  name: string;
+  kind: "number" | "boolean";
+  n: number;
+  mean?: number;
+  min?: number;
+  max?: number;
+  stddev?: number;
+  true_count?: number;
+  false_count?: number;
+};
+
+export type CellEvidence = {
+  cell_id: string;
+  levels: Record<string, unknown>;
+  planned_replicas: number;
+  completed_replicas: number;
+  status_counts: Record<string, number>;
+  metric_summaries: MetricSummary[];
+};
+
 export type AgentBinding = {
   name: string;
   description: string;
@@ -249,6 +270,7 @@ export type LaunchLog = {
 export type ExperimentDetail = {
   experiment: Experiment;
   cells: CompiledPlan["cells"];
+  cell_evidence: CellEvidence[];
   roster: { participant_id: string; kind: string; binding: string | null; config_sha256: string }[];
   launches: { launch: Launch; progress: { planned: number; completed: number; failed: number; by_cell: { cell_id: string; planned: number; completed: number; failed: number }[] } }[];
 };

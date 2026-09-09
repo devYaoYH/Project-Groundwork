@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
+import statistics
 import threading
 import time
 import uuid
@@ -312,6 +314,138 @@ class SQLiteEpisodeStore:
             ).fetchone()["n"])
         finally:
             conn.close()
+
+    def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
+        """Summarize one latest execution for each locked logical replication.
+
+        Cells are the immutable plan, while attempts and episode rows describe
+        physical executions. Selecting the highest attempt before decoding
+        metrics means a retry replaces the prior execution as a logical
+        observation without erasing the older trace from the fact table.
+        """
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            cells = conn.execute(
+                "SELECT cell_id, levels, episodes_planned, episode_configs "
+                "FROM cells WHERE experiment_id = ? ORDER BY cell_id",
+                (experiment_id,),
+            ).fetchall()
+            executions = conn.execute(
+                """
+                WITH latest_attempts AS (
+                    SELECT a.cell_id, a.episode_id, a.attempt, a.status,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY a.episode_id
+                               ORDER BY a.attempt DESC, a.id DESC
+                           ) AS attempt_rank
+                    FROM attempts a
+                    JOIN cells c ON c.cell_id = a.cell_id
+                    WHERE c.experiment_id = ?
+                ), latest_traces AS (
+                    SELECT e.episode_id, e.attempt, e.status AS trace_status, e.metrics,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY e.episode_id, e.attempt
+                               ORDER BY e.created_at DESC, e.episode_uid DESC
+                           ) AS trace_rank
+                    FROM episodes e
+                )
+                SELECT a.cell_id, a.episode_id, a.attempt, a.status,
+                       e.trace_status, e.metrics
+                FROM latest_attempts a
+                LEFT JOIN latest_traces e
+                    ON e.episode_id = a.episode_id
+                    AND e.attempt = a.attempt
+                    AND e.trace_rank = 1
+                WHERE a.attempt_rank = 1
+                """,
+                (experiment_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        latest_by_episode = {
+            (row["cell_id"], row["episode_id"]): row for row in executions
+        }
+        evidence: list[dict[str, Any]] = []
+        for cell in cells:
+            try:
+                levels = json.loads(cell["levels"])
+            except json.JSONDecodeError:
+                levels = {}
+            try:
+                configs = json.loads(cell["episode_configs"])
+            except json.JSONDecodeError:
+                configs = []
+            planned_ids = {
+                str(config.get("episode_id"))
+                for config in configs
+                if isinstance(config, dict) and config.get("episode_id")
+            }
+            status_counts: dict[str, int] = {"NOT_STARTED": int(cell["episodes_planned"])}
+            completed_replicas = 0
+            metric_values: dict[str, dict[str, list[float] | list[bool]]] = {}
+
+            for episode_id in planned_ids:
+                execution = latest_by_episode.get((cell["cell_id"], episode_id))
+                if execution is None:
+                    continue
+                status_counts["NOT_STARTED"] -= 1
+                status = str(execution["status"])
+                status_counts[status] = status_counts.get(status, 0) + 1
+                if status != "COMPLETED" or execution["trace_status"] != "COMPLETED":
+                    continue
+                completed_replicas += 1
+                try:
+                    metrics = json.loads(execution["metrics"] or "{}")
+                except json.JSONDecodeError:
+                    metrics = {}
+                if not isinstance(metrics, dict):
+                    continue
+                for name, value in metrics.items():
+                    if isinstance(value, bool):
+                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["boolean"].append(value)
+                    elif isinstance(value, (int, float)) and math.isfinite(value):
+                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["number"].append(float(value))
+
+            status_counts = {name: count for name, count in status_counts.items() if count}
+            metric_summaries: list[dict[str, Any]] = []
+            for name in sorted(metric_values):
+                values = metric_values[name]
+                numbers = values["number"]
+                booleans = values["boolean"]
+                # A metric whose native type changes between traces cannot be
+                # compared safely, so leave it out rather than coerce it.
+                if numbers and not booleans:
+                    summary: dict[str, Any] = {
+                        "name": name,
+                        "kind": "number",
+                        "n": len(numbers),
+                        "mean": statistics.fmean(numbers),
+                        "min": min(numbers),
+                        "max": max(numbers),
+                    }
+                    if len(numbers) > 1:
+                        summary["stddev"] = statistics.stdev(numbers)
+                    metric_summaries.append(summary)
+                elif booleans and not numbers:
+                    true_count = sum(booleans)
+                    metric_summaries.append({
+                        "name": name,
+                        "kind": "boolean",
+                        "n": len(booleans),
+                        "true_count": true_count,
+                        "false_count": len(booleans) - true_count,
+                    })
+            evidence.append({
+                "cell_id": cell["cell_id"],
+                "levels": levels if isinstance(levels, dict) else {},
+                "planned_replicas": int(cell["episodes_planned"]),
+                "completed_replicas": completed_replicas,
+                "status_counts": status_counts,
+                "metric_summaries": metric_summaries,
+            })
+        return evidence
 
     def iter_episodes(
         self, filters: dict[str, Any] | None = None

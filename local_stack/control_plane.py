@@ -708,6 +708,7 @@ class ControlPlane:
                  "episodes_planned": row["episodes_planned"]}
                 for row in cells
             ],
+            "cell_evidence": self._store().cell_evidence(experiment_id),
             "roster": [dict(row) for row in participants],
             "launches": [self.launch_detail(row["id"]) for row in launches],
         }

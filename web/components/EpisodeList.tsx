@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
-import { EpisodeFilters, EpisodeSummary, listEpisodes } from "../lib/api";
+import { ReplicationHistory } from "./ReplicationHistory";
+import { EpisodeFilters, EpisodeSummary, getExperiment, listEpisodes } from "../lib/api";
+import { groupReplicationExecutions, replicationProgress } from "../lib/replications";
 
 // PARTIAL is a trace recovered from an interrupted episode's event log. It is
 // evidence for inspection and retry, so it is shown — and marked as not being
@@ -37,11 +40,24 @@ function headline(metrics: Record<string, unknown>) {
 }
 
 export function EpisodeList() {
-  const [filters, setFilters] = useState<EpisodeFilters>({});
+  const search = useSearchParams();
+  const linkedCellId = search.get("cell_id") || "";
+  const [filters, setFilters] = useState<EpisodeFilters>(() => (
+    linkedCellId ? { cell_id: linkedCellId } : {}
+  ));
   const [episodes, setEpisodes] = useState<EpisodeSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [plannedReplicationsByCell, setPlannedReplicationsByCell] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!linkedCellId) return;
+    setFilters((current) => current.cell_id === linkedCellId ? current : {
+      ...current,
+      cell_id: linkedCellId,
+    });
+  }, [linkedCellId]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -59,6 +75,26 @@ export function EpisodeList() {
 
   useEffect(load, [load]);
 
+  useEffect(() => {
+    const experimentIds = [...new Set(
+      episodes.map((episode) => episode.experiment_id).filter((id): id is string => Boolean(id)),
+    )];
+    if (experimentIds.length === 0) return;
+    let current = true;
+    Promise.all(experimentIds.map(getExperiment))
+      .then((details) => {
+        if (!current) return;
+        const nextPlans = Object.fromEntries(details.flatMap((detail) => (
+          (detail.cells ?? []).map((cell) => [cell.cell_id, cell.episodes_planned] as const)
+        )));
+        setPlannedReplicationsByCell((existing) => ({ ...existing, ...nextPlans }));
+      })
+      // Trace results remain useful even when an older experiment record is no
+      // longer available to provide its locked plan count.
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [episodes]);
+
   async function loadMore() {
     if (!cursor) return;
     const page = await listEpisodes(filters, cursor);
@@ -73,8 +109,9 @@ export function EpisodeList() {
         <div>
           <h1>Episodes</h1>
           <p>
-            One row per attempt. Cell, seed and attempt are promoted from the provenance block
-            stamped when the episode was expanded, so this list is a query rather than a scan.
+            One row per logical replication, showing its latest physical result. Earlier physical runs remain
+            accessible evidence. Cell, seed and replication are promoted from the provenance block stamped when
+            the episode was expanded, so this list is a query rather than a scan.
           </p>
         </div>
       </header>
@@ -102,42 +139,43 @@ export function EpisodeList() {
         ) : null}
         {episodes.length > 0 ? (
           <DataTable
-            rows={episodes}
-            rowKey={(episode) => episode.episode_uid}
+            rows={groupReplicationExecutions(episodes)}
+            rowKey={(group) => group.key}
             columns={[
               {
                 label: "episode",
-                render: (episode) => (
-                  <Link className="table-link" href={`/episode/?uid=${encodeURIComponent(episode.episode_uid)}`}>
-                    <strong>{episode.episode_id ?? episode.episode_uid}</strong>
-                    <span>{episode.environment_id ?? "unknown environment"}</span>
+                render: (group) => (
+                  <Link className="table-link" href={`/episode/?uid=${encodeURIComponent(group.latest.episode_uid)}`}>
+                    <strong>{group.latest.episode_id ?? group.latest.episode_uid}</strong>
+                    <span>{group.latest.environment_id ?? "unknown environment"}</span>
                   </Link>
                 ),
               },
-              { label: "cell", className: "mono", render: (episode) => episode.cell_id ?? "-" },
+              { label: "cell", className: "mono", render: (group) => group.latest.cell_id ?? "-" },
               {
-                label: "attempt",
+                label: "replication",
                 className: "mono",
-                render: (episode) => episode.attempt,
+                render: (group) => replicationProgress(group.latest, plannedReplicationsByCell),
               },
+              { label: "prior runs", render: (group) => <ReplicationHistory executions={group.priorExecutions} /> },
               {
                 label: "seed",
                 className: "mono",
-                render: (episode) =>
-                  episode.seed === null ? <span className="muted">-</span> : episode.seed,
+                render: (group) =>
+                  group.latest.seed === null ? <span className="muted">-</span> : group.latest.seed,
               },
               {
                 label: "item",
                 className: "mono",
-                render: (episode) => episode.item_id ?? <span className="muted">-</span>,
+                render: (group) => group.latest.item_id ?? <span className="muted">-</span>,
               },
               {
-                label: "status",
-                render: (episode) => (
-                  <Chip tone={TONE[episode.status] ?? "plain"}>{episode.status}</Chip>
+                label: "latest status",
+                render: (group) => (
+                  <Chip tone={TONE[group.latest.status] ?? "plain"}>{group.latest.status}</Chip>
                 ),
               },
-              { label: "measures", render: (episode) => headline(episode.metrics) },
+              { label: "measures", render: (group) => headline(group.latest.metrics) },
             ]}
           />
         ) : null}

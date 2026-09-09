@@ -279,6 +279,46 @@ def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts
     assert all(attempt["redis_stream"].startswith(f"a2a:launch:{launch.id}:") for attempt in detail["attempts"])
 
 
+def test_experiment_detail_response_includes_empty_locked_cell_evidence(tmp_path):
+    """The read model accompanies the immutable cell plan before any run exists."""
+    workspace = Path(__file__).resolve().parents[2]
+    control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
+    design = """schema_version: 1
+release: buyer_seller@v1
+parameters:
+  seller_cost: {randomize: true}
+  buyer_value: {pin: 30}
+  num_items: {pin: 3}
+  discount_factor: {pin: 0.5}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: seller
+    kind: scripted
+    binding: seller-baseline
+  - id: buyer
+    kind: scripted
+    binding: buyer-baseline
+seed:
+  root: 41
+"""
+    experiment = control.create_experiment(
+        name="Evidence response", release_id="buyer_seller", design_text=design,
+    )
+    locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
+
+    payload = control.experiment_detail(locked.id)
+
+    assert payload["cell_evidence"] == [{
+        "cell_id": payload["cells"][0]["cell_id"],
+        "levels": payload["cells"][0]["levels"],
+        "planned_replicas": 1,
+        "completed_replicas": 0,
+        "status_counts": {"NOT_STARTED": 1},
+        "metric_summaries": [],
+    }]
+
+
 def _buyer_seller_control(tmp_path):
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)

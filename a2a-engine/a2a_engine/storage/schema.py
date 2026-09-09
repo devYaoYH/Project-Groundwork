@@ -188,6 +188,8 @@ CREATE TABLE IF NOT EXISTS attempts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_unique ON attempts(episode_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_attempt_launch ON attempts(launch_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_cell_execution
+    ON attempts(cell_id, episode_id, attempt DESC);
 
 CREATE TABLE IF NOT EXISTS launch_events (
     id                INTEGER PRIMARY KEY,
