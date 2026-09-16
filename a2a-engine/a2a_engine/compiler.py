@@ -16,7 +16,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .design import Design, DesignValidationError, ValidationIssue
+from .design import Design, DesignValidationError, ParticipantConfig, ValidationIssue
 from .environment import ParameterConfig, ReleaseDeclaration
 from .items import Item, ItemBank
 from .provenance import build_provenance
@@ -291,6 +291,17 @@ def _validate_roster(
                 f"roster[{index}].kind",
                 f"role {participant.role!r} accepts {', '.join(role.accepts)}, not {participant.kind}",
             ))
+        if (
+            participant.kind == "scripted"
+            and participant.binding
+            and role.scripted_bindings
+            and participant.binding not in role.scripted_bindings
+        ):
+            supported = ", ".join(sorted(role.scripted_bindings))
+            issues.append(ValidationIssue(
+                f"roster[{index}].binding",
+                f"unsupported scripted binding {participant.binding!r}; supported bindings: {supported}",
+            ))
     for role_id, required in required_counts.items():
         assigned = assigned_counts[role_id]
         if assigned != required:
@@ -403,7 +414,7 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
     defaults["agents"] = [
         {
             "id": participant.id,
-            "type": participant.kind,
+            "type": _runtime_agent_type(participant, declaration),
             **(
                 {"model": participant.binding}
                 if participant.kind == "llm" and participant.binding
@@ -413,6 +424,15 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
         for participant in design.roster
     ]
     return defaults
+
+
+def _runtime_agent_type(participant: ParticipantConfig, declaration: ReleaseDeclaration) -> str:
+    if participant.kind != "scripted" or not participant.role or not participant.binding:
+        return participant.kind
+    role = next((role for role in declaration.roles if role.id == participant.role), None)
+    if role is None:
+        return participant.kind
+    return role.scripted_bindings.get(participant.binding, participant.kind)
 
 
 def _trace_release(declaration: ReleaseDeclaration, release_id: str) -> dict[str, Any]:
