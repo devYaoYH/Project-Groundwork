@@ -1008,9 +1008,14 @@ class ControlPlane:
         experiment = self.experiment(experiment_id)
         execution_path: str | None = None
         design_configs: list[dict[str, Any]] | None = None
+        design_bank: ItemBank | None = None
         if experiment.design_text is not None:
             if mode == "live" and experiment.locked_at is None:
                 raise ValueError("live launch requires a locked preregistration")
+            # Smoke launches may run an unlocked draft, so locking has not yet
+            # projected its frozen item bank into the shared trace database.
+            # Every compiled episode references one of these item ids.
+            design_bank = self._item_bank(experiment.environment_id)
             design_configs = self._design_episode_configs(experiment, mode=mode)
             effective_shard_count = shard_count or 1
             effective_shard_index = shard_index or 0
@@ -1058,6 +1063,12 @@ class ControlPlane:
             )
 
         with self._session() as db:
+            if design_bank is not None:
+                self._ensure_items(
+                    db,
+                    design_bank,
+                    {str(config["item_id"]) for config in design_configs or []},
+                )
             db.execute(
                 "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
                 "mode, execution_path, shard_index, shard_count, created_at, started_at, ended_at, error) "
@@ -1453,6 +1464,44 @@ class ControlPlane:
             [
                 (item.item_id, bank.item_bank_sha256, _json(item.params), _json(item.oracle_result))
                 for item in bank.items
+            ],
+        )
+
+    @staticmethod
+    def _ensure_items(db: sqlite3.Connection, bank: ItemBank, item_ids: set[str]) -> None:
+        """Synchronize only launch-selected rows missing from or stale in SQLite."""
+        if not item_ids:
+            return
+        selected_items = {item_id: bank.get(item_id) for item_id in item_ids}
+        existing_hashes: dict[str, str] = {}
+        # SQLite limits bound variables (often to 999), while a full design may
+        # select more items than fit in one IN clause.
+        item_id_list = sorted(selected_items)
+        for start in range(0, len(item_id_list), 900):
+            batch = item_id_list[start:start + 900]
+            placeholders = ", ".join("?" for _ in batch)
+            existing_hashes.update({
+                str(row["item_id"]): str(row["item_bank_sha256"])
+                for row in db.execute(
+                    f"SELECT item_id, item_bank_sha256 FROM items "
+                    f"WHERE item_id IN ({placeholders})",
+                    batch,
+                )
+            })
+        stale_or_missing = [
+            selected_items[item_id]
+            for item_id in item_id_list
+            if existing_hashes.get(item_id) != bank.item_bank_sha256
+        ]
+        if not stale_or_missing:
+            return
+        db.executemany(
+            "INSERT INTO items (item_id, item_bank_sha256, params, oracle_result) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(item_id) DO UPDATE SET item_bank_sha256 = excluded.item_bank_sha256, "
+            "params = excluded.params, oracle_result = excluded.oracle_result",
+            [
+                (item.item_id, bank.item_bank_sha256, _json(item.params), _json(item.oracle_result))
+                for item in stale_or_missing
             ],
         )
 

@@ -47,6 +47,25 @@ seed:
   root: 41
 """
 
+CALENDAR_DRAFT_SMOKE_DESIGN = """schema_version: 1
+release: calendar@v1
+parameters:
+  density: {pin: 0.8}
+  num_slots: {pin: 8}
+  num_meetings: {pin: 1}
+  communication_protocol: {factor: [dm, groupchat]}
+units:
+  episodes_per_cell: 1
+roster:
+  - {id: calendar_agent_0, role: calendar-agent, kind: scripted, binding: baseline}
+  - {id: calendar_agent_1, role: calendar-agent, kind: scripted, binding: baseline}
+  - {id: calendar_agent_2, role: calendar-agent, kind: scripted, binding: baseline}
+  - {id: calendar_agent_3, role: calendar-agent, kind: scripted, binding: baseline}
+  - {id: calendar_agent_4, role: calendar-agent, kind: scripted, binding: baseline}
+seed:
+  root: 41
+"""
+
 
 def _control(tmp_path: Path) -> ControlPlane:
     return ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
@@ -145,6 +164,44 @@ def test_a_recovered_partial_episode_does_not_count_as_progress(tmp_path):
     _record_episode(control, planned[0], partial=True)
 
     assert control.progress(launch.id)["completed"] == 0
+
+
+def test_unlocked_calendar_smoke_launch_syncs_item_rows_before_episode_writes(tmp_path):
+    """Draft smoke launches still need the compiled item's foreign-key row."""
+    control = _control(tmp_path)
+    experiment = control.create_experiment(
+        name="Calendar draft smoke", release_id="calendar",
+        design_text=CALENDAR_DRAFT_SMOKE_DESIGN,
+    )
+    control.launcher = SilentLauncher(control)
+
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    configs = control._design_episode_configs(experiment, mode="smoke")
+    item_ids = {str(config["provenance"]["item_id"]) for config in configs}
+
+    with sqlite3.connect(control.path) as db:
+        rows = db.execute(
+            f"SELECT item_id FROM items WHERE item_id IN ({', '.join('?' for _ in item_ids)})",
+            tuple(item_ids),
+        ).fetchall()
+        item_count = db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    assert {row[0] for row in rows} == item_ids
+    assert item_count == len(item_ids)
+
+    bank = control._item_bank("calendar")
+    with control._session() as db:
+        before = db.total_changes
+        control._ensure_items(db, bank, item_ids)
+        assert db.total_changes == before
+
+    for index, config in enumerate(configs):
+        _record_planned_episode(
+            control, config, episode_uid=f"calendar-draft-{index}", metrics={"ok": True},
+        )
+    control._finish_launch(launch.id, 0)
+
+    assert control.launch(launch.id).status == "COMPLETED"
+    assert control.progress(launch.id)["completed"] == len(configs)
 
 
 def test_a_restart_reconciles_a_stranded_running_launch(tmp_path):
