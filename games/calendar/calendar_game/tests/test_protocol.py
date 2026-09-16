@@ -11,7 +11,14 @@ from a2a_engine import EventLog, EpisodeTrace
 from calendar_game.game import CalendarGame, CalendarGameConfig
 from calendar_game.agents import Agent, BaseClient, CapturingClient, GameConfig, TurnResult, DecideResult, ReflectionResult
 from calendar_game.calendar import Calendar, validate_cell, apply_cell
-from calendar_game.clients import LLMClient, ScriptedClient
+from calendar_game.clients import (
+    DSMClient,
+    IncrementalMAPClient,
+    PaperDSMClient,
+    PrivateDSMClient,
+    SDClient,
+    ScriptedClient,
+)
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import solve_greedy, solve_optimal
 
@@ -55,23 +62,27 @@ def test_llm_agent_specs_preserve_explicit_temperature():
     assert spec["temperature"] == 0.7
 
 
-def test_live_agent_setup_uses_scripted_clients_for_scripted_bindings():
-    environment = CalendarGame(
-        CalendarGameConfig(
-            seed=42,
-            num_agents=2,
-            num_meetings=1,
-            agents=[
-                {"type": "llm", "model": "example/model"},
-                {"type": "scripted", "binding": "baseline"},
-            ],
-        )
-    )
+@pytest.mark.parametrize(
+    ("agent_type", "client_type"),
+    [
+        ("scripted", ScriptedClient),
+        ("dsm", DSMClient),
+        ("paper_dsm", PaperDSMClient),
+        ("private_dsm", PrivateDSMClient),
+        ("imap", IncrementalMAPClient),
+        ("sd", SDClient),
+    ],
+)
+def test_agent_specs_construct_the_expected_deterministic_client(agent_type, client_type):
+    game = CalendarGame({
+        "num_agents": 1,
+        "num_slots": 1,
+        "agents": [{"type": agent_type}],
+    })
 
-    agents = environment._build_agents(environment.generate_scenario())
+    agents = game._build_agents({"calendars": [[None]], "meetings": []})
 
-    assert isinstance(agents[0].client.delegate, LLMClient)
-    assert isinstance(agents[1].client.delegate, ScriptedClient)
+    assert isinstance(agents[0].client.delegate, client_type)
 
 
 # ---------------------------------------------------------------------------

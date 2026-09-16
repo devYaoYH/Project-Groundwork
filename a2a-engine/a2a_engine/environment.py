@@ -147,6 +147,7 @@ class RoleConfig(_StrictModel):
     accepts: list[Literal["llm", "scripted", "human"]] = Field(
         default_factory=lambda: ["llm"]
     )
+    scripted_bindings: dict[str, str] = Field(default_factory=dict)
     description: str = ""
 
     @field_validator("accepts")
@@ -157,6 +158,17 @@ class RoleConfig(_StrictModel):
         if len(value) != len(set(value)):
             raise ValueError("accepted participant kinds must be unique")
         return value
+
+    @model_validator(mode="after")
+    def _scripted_bindings_require_scripted_roles(self) -> "RoleConfig":
+        if self.scripted_bindings and "scripted" not in self.accepts:
+            raise ValueError("scripted bindings require a role that accepts scripted participants")
+        if any(
+            not binding or not runtime_type
+            for binding, runtime_type in self.scripted_bindings.items()
+        ):
+            raise ValueError("scripted binding names and runtime types must not be empty")
+        return self
 
 
 class ResourceConfig(_StrictModel):

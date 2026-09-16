@@ -30,7 +30,19 @@ DECLARATION = ReleaseDeclaration(
             domain=["dm", "groupchat", "mixed"],
         ),
     ],
-    roles=[RoleConfig(id="calendar-agent", count=5, accepts=["llm", "scripted", "human"])],
+    roles=[RoleConfig(
+        id="calendar-agent",
+        count=5,
+        accepts=["llm", "scripted", "human"],
+        scripted_bindings={
+            "baseline": "scripted",
+            "dsm": "dsm",
+            "paper_dsm": "paper_dsm",
+            "private_dsm": "private_dsm",
+            "imap": "imap",
+            "sd": "sd",
+        },
+    )],
     item_policy=ItemPolicy(
         mode="enumerate",
         bank_path="games/calendar/tasks/tiny_varied_density_5a3p.jsonl",
