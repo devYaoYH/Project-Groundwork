@@ -11,7 +11,7 @@ from a2a_engine import EventLog, EpisodeTrace
 from calendar_game.game import CalendarGame, CalendarGameConfig
 from calendar_game.agents import Agent, BaseClient, CapturingClient, GameConfig, TurnResult, DecideResult, ReflectionResult
 from calendar_game.calendar import Calendar, validate_cell, apply_cell
-from calendar_game.clients import ScriptedClient
+from calendar_game.clients import LLMClient, ScriptedClient
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import solve_greedy, solve_optimal
 
@@ -53,6 +53,25 @@ def test_llm_agent_specs_preserve_explicit_temperature():
     )
 
     assert spec["temperature"] == 0.7
+
+
+def test_live_agent_setup_uses_scripted_clients_for_scripted_bindings():
+    environment = CalendarGame(
+        CalendarGameConfig(
+            seed=42,
+            num_agents=2,
+            num_meetings=1,
+            agents=[
+                {"type": "llm", "model": "example/model"},
+                {"type": "scripted", "binding": "baseline"},
+            ],
+        )
+    )
+
+    agents = environment._build_agents(environment.generate_scenario())
+
+    assert isinstance(agents[0].client.delegate, LLMClient)
+    assert isinstance(agents[1].client.delegate, ScriptedClient)
 
 
 # ---------------------------------------------------------------------------

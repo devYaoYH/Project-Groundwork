@@ -833,7 +833,9 @@ class CalendarGame:
             else:
                 cfg = self._agent_spec_for(agent_id)
                 agent_type = cfg.get("type", "llm")
-                if agent_type == "dsm":
+                if agent_type == "scripted":
+                    client = ScriptedClient()
+                elif agent_type == "dsm":
                     client = DSMClient()
                 elif agent_type == "paper_dsm":
                     client = PaperDSMClient()
