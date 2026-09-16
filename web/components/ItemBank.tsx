@@ -5,7 +5,23 @@ import { useEffect, useState } from "react";
 import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
+import { JsonTree } from "./JsonTree";
 import { Item, getItems } from "../lib/api";
+import { jsonPreview } from "../lib/json-tree";
+
+function ItemParameters({ item }: { item: Item }) {
+  return (
+    <details className="item-parameters">
+      <summary>
+        <span className="item-parameters-summary">
+          <code>{jsonPreview(item.params)}</code>
+          <span>Inspect parameters</span>
+        </span>
+      </summary>
+      <JsonTree value={item.params} />
+    </details>
+  );
+}
 
 export function ItemBank({ id }: { id: string }) {
   const [items, setItems] = useState<Item[]>([]);
@@ -53,7 +69,7 @@ export function ItemBank({ id }: { id: string }) {
             rowKey={(item) => item.item_id}
             columns={[
               { label: "item", className: "mono", render: (item) => item.item_id },
-              { label: "item parameters", className: "item-params", render: (item) => <code>{JSON.stringify(item.params)}</code> },
+              { label: "item parameters", className: "item-params", render: (item) => <ItemParameters item={item} /> },
               { label: "oracle", render: (item) => item.oracle_result === null ? <span className="muted">not available</span> : <Chip tone="good">available</Chip> },
             ]}
           />

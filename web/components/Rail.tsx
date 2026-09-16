@@ -20,7 +20,7 @@ export function Rail() {
 
   return (
     <aside className="rail">
-      <Link className="wordmark" href="/environments/">Groundwork</Link>
+      <Link className="wordmark" href="/">Groundwork</Link>
       <p className="tagline">research control plane</p>
       <nav aria-label="Primary navigation">
         <p className="rail-group">Workspace</p>
