@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator, Protocol, runtime_checkable
+from typing import Any, Callable, Iterator, Protocol, Sequence, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -74,6 +74,87 @@ class EpisodeStore(Protocol):
         burned its budget.
         """
         ...
+
+
+@runtime_checkable
+class ControlPlaneReader(EpisodeStore, Protocol):
+    """The wider read surface a control plane needs from an episode store.
+
+    ``make_store`` alone does not unblock the viewer.  The viewer calls seven
+    store methods and only two of them -- ``get_episode`` and ``put_episode``
+    -- are on the four-method :class:`EpisodeStore` protocol; the rest are the
+    paginated episode browser, its facets, the replication rollup, and derived
+    artifacts.  Naming them here is what lets the viewer resolve its store by
+    name instead of importing a concrete backend, without pretending a bucket
+    could serve an episode browser: SQLite is the only registered
+    implementation, and a backend that cannot answer these is simply not a
+    control-plane reader.
+    """
+
+    def uri(self, episode_uid: str = "") -> str:
+        """Address one episode, or the store itself when ``episode_uid`` is empty."""
+        ...
+
+    def episode_summaries(
+        self,
+        filters: dict[str, Any] | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """One page of the episode browser."""
+        ...
+
+    def episode_facets(self, filters: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """The option sets that make the browser's filters selectable."""
+        ...
+
+    def count_episodes(self, filters: dict[str, Any] | None = None) -> int:
+        ...
+
+    def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
+        """Per-cell replication rollup for one experiment."""
+        ...
+
+    def get_derived_artifacts(self, episode_uid: str) -> list[Any]:
+        ...
+
+    def completed_executions(
+        self, episode_ids: "Sequence[str] | None" = None
+    ) -> dict[tuple[str, int], str]:
+        """``(episode_id, attempt) -> episode_uid`` for completed episodes.
+
+        The one primitive the launch-truth join needs from the episode side.
+        Isolating it is what keeps that join implementable without the two
+        tables sharing a file: the control plane knows what it planned, the
+        store knows what it holds, and the join happens in between.
+        """
+        ...
+
+
+def make_control_plane_reader(
+    spec: dict[str, Any] | None, *, results_dir: str | Path
+) -> ControlPlaneReader:
+    """Resolve a store by name and require it to serve a control plane.
+
+    Deliberately a hard failure rather than a degraded viewer: a backend that
+    answers ``get_episode`` but not ``episode_summaries`` would render an
+    episode page and an empty browser, which reads as "no episodes" rather than
+    "wrong backend".
+    """
+    store = make_store(spec, results_dir=results_dir)
+    if not isinstance(store, ControlPlaneReader):
+        missing = [
+            name for name in (
+                "uri", "episode_summaries", "episode_facets", "count_episodes",
+                "cell_evidence", "get_derived_artifacts", "completed_executions",
+            )
+            if not hasattr(store, name)
+        ]
+        raise TypeError(
+            f"trace store backend {getattr(store, 'name', type(store).__name__)!r} "
+            f"cannot serve a control plane: missing {missing}"
+        )
+    return store
 
 
 def check_store(store: Any) -> StoreCheck:

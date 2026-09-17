@@ -52,8 +52,12 @@ services:
       # stack writes goes to the data volume, never back into the repository.
       - ./:/workspace:ro
       - a2a-data:/data
+    # The worker writes its run artifacts into a directory of its own. The
+    # control plane never reads it -- evidence crosses through /data/artifacts
+    # and nowhere else, so "read the runner's files" is structurally
+    # unavailable rather than merely discouraged.
     command: ["a2a-run", "experiments/all_games_smoke.yaml", "--smoke-test",
-              "--results-dir", "/data/results"]
+              "--results-dir", "/data/worker-results"]
     depends_on:
       redis:
         condition: service_healthy
@@ -92,7 +96,7 @@ services:
     ports:
       - "8080:8080"
     command:
-      ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
+      ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--artifact-root", "/data/artifacts", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       redis:
         condition: service_healthy

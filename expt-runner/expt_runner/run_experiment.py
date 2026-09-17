@@ -45,8 +45,17 @@ from a2a_engine import (
     run_with_parallelism,
 )
 from a2a_engine._context import current_conversation_id
-from a2a_engine.artifacts import ArtifactDigestMismatch, ArtifactRef, materialize
-from a2a_engine.event_sink import current_event_sink, open_event_sink
+from a2a_engine.artifacts import (
+    ArtifactDigestMismatch,
+    ArtifactRef,
+    make_artifact_store,
+    materialize,
+)
+from a2a_engine.event_sink import (
+    configure_event_artifacts,
+    current_event_sink,
+    open_event_sink,
+)
 from a2a_engine.experiment import resolve_storage
 from a2a_engine.manifest import EpisodeManifest, git_hash
 from a2a_engine.provenance import build_provenance
@@ -532,6 +541,15 @@ def main(argv: list[str] | None = None) -> int:
                              "with --launch-input; a mismatch refuses to run.")
     parser.add_argument("--max-parallelism", type=int, default=4)
     parser.add_argument("--results-dir", default="./results")
+    parser.add_argument("--artifact-root",
+                        help="Shared artifact store root. Every episode's event "
+                             "stream is published here as it is written, so a "
+                             "worker that is killed still leaves evidence a "
+                             "reader with no access to --results-dir can find.")
+    parser.add_argument("--launch-id",
+                        help="The launch these episodes belong to. Required with "
+                             "--artifact-root: it is what a published artifact is "
+                             "addressed under.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Check LLM API keys and run scripted agents; persist nothing.")
     parser.add_argument("--smoke-test", action="store_true",
@@ -566,6 +584,17 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("pass exactly one of yaml_path or --launch-input")
     if args.launch_input and not args.launch_input_sha256:
         parser.error("--launch-input requires --launch-input-sha256")
+    if bool(args.artifact_root) != bool(args.launch_id):
+        parser.error("--artifact-root and --launch-id are passed together or not at all")
+
+    if args.artifact_root:
+        # Declared once for the process. Every episode opened afterwards
+        # publishes its event stream as it plays; a run with no launch identity
+        # keeps exactly the local-file behaviour it had.
+        configure_event_artifacts(
+            make_artifact_store({"backend": "local"}, root=args.artifact_root),
+            launch_id=args.launch_id,
+        )
 
     discover_environments()
 

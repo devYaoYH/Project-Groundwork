@@ -57,6 +57,16 @@ class EventLog:
             self._on_event(ev)
         return ev
 
+    def snapshot(self) -> list[Event]:
+        """The events recorded so far, without ending the episode's log.
+
+        Separate from :meth:`all` because reading mid-episode must not release
+        the sink: a environment that exposes its own ``events`` view is asking
+        what has happened, not declaring that nothing more will.
+        """
+        with self._lock:
+            return list(self._events)
+
     def all(self) -> list[Event]:
         # Games call this once, when assembling the trace they return, so the
         # episode's event log is complete and the file can be released. The
@@ -65,8 +75,7 @@ class EventLog:
             self._sink.close()
         if self._publisher is not None:
             self._publisher.flush()
-        with self._lock:
-            return list(self._events)
+        return self.snapshot()
 
 
 def write_episode(trace: EpisodeTrace, results_dir: str | Path, experiment_name: str | None = None) -> Path:

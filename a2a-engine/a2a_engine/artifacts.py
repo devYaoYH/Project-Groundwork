@@ -22,11 +22,16 @@ worker resolve a reference without being told which store produced it.
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, NamedTuple, Protocol, runtime_checkable
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
+
+log = logging.getLogger("a2a_engine.artifacts")
 
 
 class ArtifactDigestMismatch(ValueError):
@@ -62,8 +67,29 @@ class ArtifactStore(Protocol):
         """Publish ``data`` under ``key`` and return its reference."""
         ...
 
+    def append(self, key: str, data: bytes) -> str:
+        """Durably add ``data`` to the object at ``key``, returning its URI.
+
+        Separate from :meth:`put` because an event stream is published one
+        event at a time and re-publishing the whole object per event is
+        quadratic.  A backend with no native append implements this as
+        read-modify-write; a local directory implements it as an append and an
+        ``fsync``.
+        """
+        ...
+
     def get(self, uri: str) -> bytes:
         """Read back bytes previously published by this store."""
+        ...
+
+    def iter_keys(self, prefix: str = "") -> Iterator[str]:
+        """Every key this store holds under ``prefix``.
+
+        Enumeration is on the protocol because recovery is enumeration: the
+        control plane finds a crashed worker's evidence by listing a prefix,
+        which is the one thing every object store can do and no shared
+        filesystem is required for.
+        """
         ...
 
 
@@ -106,6 +132,19 @@ class LocalArtifactStore:
         staged.replace(path)
         return ArtifactRef(uri=path.as_uri(), sha256=sha256_bytes(data))
 
+    def append(self, key: str, data: bytes) -> str:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("ab") as handle:
+            handle.write(data)
+            # Flushed, not fsynced -- exactly the posture ``JsonlEventSink``
+            # takes one layer up. The case this exists for is a killed worker
+            # process, and an unflushed Python buffer is what a SIGKILL
+            # discards; paying an fsync per event would buy durability against
+            # a power loss at a cost the per-event publish cannot afford.
+            handle.flush()
+        return path.as_uri()
+
     def get(self, uri: str) -> bytes:
         return read_file_uri(uri)
 
@@ -116,6 +155,139 @@ class LocalArtifactStore:
         for path in sorted(base.rglob("*")):
             if path.is_file():
                 yield path.relative_to(self.root).as_posix()
+
+    def iter_event_sinks(
+        self, launch_id: str, *, episode_id: str | None = None
+    ) -> Iterator["EventSinkArtifact"]:
+        return iter_event_sinks(self, launch_id, episode_id=episode_id)
+
+
+# --- the event-artifact key layout ------------------------------------------
+#
+#   <artifact root>/
+#   └── launches/<launch_id>/
+#       ├── plan.yaml                                   # the launch input
+#       └── episodes/<episode_id>/<episode_uid>/
+#           ├── events.jsonl                            # published per event
+#           └── watermark.json                          # {"durable_through", "closed"}
+#
+# This is what replaces "glob the worker's results directory".  The control
+# plane enumerates a prefix it owns rather than a filesystem the worker owns,
+# which is the whole difference between recovery that works locally and
+# recovery that works at all.
+
+LAUNCHES_PREFIX = "launches"
+EVENTS_OBJECT = "events.jsonl"
+WATERMARK_OBJECT = "watermark.json"
+
+
+def _segment(value: str) -> str:
+    """One key segment, safe for a path and reversible.
+
+    ``episode_id`` is ``"<experiment name>.<cell_id>.<idx>"`` and an experiment
+    is named by a researcher, so it can hold spaces and, in principle, a
+    separator.  Percent-encoding keeps a key one segment deep without inventing
+    a second identifier nothing else in the record uses.
+    """
+    return quote(value, safe="")
+
+
+def plan_key(launch_id: str) -> str:
+    return f"{LAUNCHES_PREFIX}/{_segment(launch_id)}/plan.yaml"
+
+
+def episode_prefix(launch_id: str, episode_id: str | None = None,
+                   episode_uid: str | None = None) -> str:
+    key = f"{LAUNCHES_PREFIX}/{_segment(launch_id)}/episodes"
+    if episode_id is not None:
+        key += f"/{_segment(episode_id)}"
+        if episode_uid is not None:
+            key += f"/{_segment(episode_uid)}"
+    return key
+
+
+def event_sink_key(launch_id: str, episode_id: str, episode_uid: str) -> str:
+    return f"{episode_prefix(launch_id, episode_id, episode_uid)}/{EVENTS_OBJECT}"
+
+
+def watermark_key(launch_id: str, episode_id: str, episode_uid: str) -> str:
+    return f"{episode_prefix(launch_id, episode_id, episode_uid)}/{WATERMARK_OBJECT}"
+
+
+@dataclass(frozen=True)
+class EventSinkArtifact:
+    """One episode's durable event stream, as the control plane sees it.
+
+    ``watermark`` is how far durability actually reached, recorded by the sink
+    when it closed.  ``None`` means the sink never got to say -- which is
+    precisely the SIGKILL case -- and the honest reading is then the number of
+    entries the artifact holds, because an event that is in the artifact is an
+    event that was durable.
+    """
+
+    launch_id: str
+    episode_id: str
+    episode_uid: str
+    uri: str
+    store: Any = field(repr=False, default=None)
+    watermark: int | None = None
+    closed: bool = False
+
+    def read_bytes(self) -> bytes:
+        return self.store.get(self.uri)
+
+    def __str__(self) -> str:
+        # ``project_events_to_trace`` records ``str(source)`` as the origin, so
+        # a recovered trace names the artifact it came from rather than a path
+        # on a machine the reader cannot see.
+        return self.uri
+
+
+def iter_event_sinks(
+    store: ArtifactStore, launch_id: str, *, episode_id: str | None = None
+) -> Iterator[EventSinkArtifact]:
+    """Every durable event stream this launch published, newest last.
+
+    Generic over the store: it needs only prefix enumeration and a read, which
+    is the intersection of a directory tree and a bucket.
+    """
+    prefix = episode_prefix(launch_id, episode_id)
+    for key in store.iter_keys(prefix):
+        if not key.endswith(f"/{EVENTS_OBJECT}"):
+            continue
+        parts = key.split("/")
+        if len(parts) < 3:  # pragma: no cover - defensive
+            continue
+        found_uid = unquote(parts[-2])
+        found_episode_id = unquote(parts[-3])
+        watermark, closed = _read_watermark(store, key)
+        yield EventSinkArtifact(
+            launch_id=launch_id,
+            episode_id=found_episode_id,
+            episode_uid=found_uid,
+            uri=store.uri(key),
+            store=store,
+            watermark=watermark,
+            closed=closed,
+        )
+
+
+def _read_watermark(store: ArtifactStore, events_key: str) -> tuple[int | None, bool]:
+    """The sink's own account of how far it got, when it survived to write one.
+
+    Fails open: an unreadable or absent watermark degrades to "unknown", which
+    the caller replaces with the entry count.  Refusing here would discard a
+    recoverable transcript over a missing annotation.
+    """
+    key = events_key.removesuffix(EVENTS_OBJECT) + WATERMARK_OBJECT
+    try:
+        payload = json.loads(store.get(store.uri(key)).decode("utf-8"))
+    except Exception:
+        return None, False
+    if not isinstance(payload, dict):
+        return None, False
+    raw = payload.get("durable_through")
+    return (int(raw) if isinstance(raw, int) else None), bool(payload.get("closed"))
 
 
 def read_file_uri(uri: str) -> bytes:
@@ -240,14 +412,22 @@ __all__ = [
     "ArtifactDigestMismatch",
     "ArtifactRef",
     "ArtifactStore",
+    "EVENTS_OBJECT",
+    "EventSinkArtifact",
     "LocalArtifactStore",
+    "WATERMARK_OBJECT",
     "copy_into",
+    "episode_prefix",
+    "event_sink_key",
     "fetch",
     "fetch_verified",
+    "iter_event_sinks",
     "list_artifact_stores",
     "local_path_for",
     "make_artifact_store",
     "materialize",
+    "plan_key",
     "register_artifact_store",
     "sha256_bytes",
+    "watermark_key",
 ]

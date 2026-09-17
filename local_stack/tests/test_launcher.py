@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from a2a_engine.agent_pool import load_agent_pool
 from a2a_engine.artifacts import ArtifactRef, sha256_bytes
 from a2a_engine.design import parse_design_text
+from a2a_engine.event_sink import read_event_sink
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.schemas import EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
@@ -438,6 +439,40 @@ def test_cancel_terminates_a_real_worker_and_the_reconciler_settles_it(tmp_path)
     # A cancelled attempt is still settled from evidence, so partial traces
     # would have been recovered rather than discarded.
     assert {attempt["status"] for attempt in detail["attempts"]} == {"CANCELLED"}
+
+
+def test_a_dispatched_worker_publishes_its_evidence_where_the_control_plane_looks(tmp_path):
+    """The seam, end to end, on the path a browser launch actually takes.
+
+    The worker gets a results directory the control plane never reads, so the
+    only place its transcript can be found is the shared artifact store -- and
+    it has to be findable by the launch and episode ids the control plane
+    already holds, because those are the only things it knows.
+    """
+    control = _control(tmp_path)
+    locked = _locked(control, BUYER_SELLER_DESIGN, release_id="buyer_seller", name="Published")
+    control.launcher = LocalProcessLauncher(
+        control.workspace, artifact_root=control.artifact_root
+    )
+
+    launch = control.launch_experiment(locked.id, mode="smoke")
+    assert _settle(control, launch.id) == "COMPLETED"
+
+    worker_results = LocalProcessLauncher._results_dir(control.launch(launch.id))
+    assert worker_results != control.results_dir
+    assert control.results_dir not in worker_results.parents
+
+    published = {
+        ref.episode_id: ref for ref in control.artifacts.iter_event_sinks(launch.id)
+    }
+    assert set(published) == set(control.planned_episode_ids(launch.id))
+
+    ref = published[control.planned_episode_ids(launch.id)[0]]
+    entries = read_event_sink(ref)
+    assert entries and entries[0]["event"]["type"] == "game_start"
+    # The episode finished, so the sink closed and said how far it got.
+    assert ref.closed is True
+    assert ref.watermark == len(entries)
 
 
 def test_cancel_reports_false_when_there_is_nothing_to_stop(tmp_path):

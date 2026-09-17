@@ -15,6 +15,14 @@ The sink is deliberately dumb -- append, flush, no rotation, no index -- because
 its whole job is to survive a ``SIGKILL`` between two events.  Each line is the
 same envelope ``decode_stream_events`` produces for a Redis entry, so one
 projection reads either source.
+
+A local file only helps a reader who can see the worker's disk.  Once the
+worker is elsewhere, the same bytes also have to reach somewhere the control
+plane can read, so :class:`DurableEventSink` publishes each line to the shared
+artifact store as it is written and records a high-water mark when it closes.
+The four functions below keep their signatures; the worker declares its
+artifact target once, with :func:`configure_event_artifacts`, and every episode
+it opens afterwards publishes.
 """
 
 from __future__ import annotations
@@ -23,9 +31,16 @@ import json
 import logging
 import threading
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from a2a_engine.artifacts import (
+    ArtifactStore,
+    EventSinkArtifact,
+    event_sink_key,
+    watermark_key,
+)
 from a2a_engine.schemas import Event
 
 log = logging.getLogger("a2a_engine.event_sink")
@@ -61,9 +76,9 @@ class JsonlEventSink:
         self._lock = threading.Lock()
         self._closed = False
 
-    def write(self, event: Event) -> None:
-        """Put one event on disk. Never raises: a full disk must not lose a run."""
-        line = json.dumps(
+    def encode(self, event: Event) -> str:
+        """The one on-the-wire envelope, shared by the file and the artifact."""
+        return json.dumps(
             {
                 "episode_uid": self.episode_uid,
                 "episode_id": self.episode_id,
@@ -74,6 +89,10 @@ class JsonlEventSink:
             sort_keys=True,
             default=str,
         )
+
+    def write(self, event: Event) -> None:
+        """Put one event on disk. Never raises: a full disk must not lose a run."""
+        line = self.encode(event)
         with self._lock:
             if self._closed:
                 return
@@ -97,6 +116,120 @@ class JsonlEventSink:
                 log.warning("could not close %s", self.path, exc_info=True)
 
 
+@dataclass(frozen=True)
+class EventArtifactTarget:
+    """Where this worker publishes the evidence it produces.
+
+    Process-wide rather than a ``ContextVar`` deliberately: one worker executes
+    one launch, and the episodes of that launch fan out across a thread pool
+    that does not copy context.  The *sink* is per-episode and stays a
+    ContextVar; the destination is not.
+    """
+
+    store: ArtifactStore
+    launch_id: str
+
+
+_artifact_target: EventArtifactTarget | None = None
+
+
+def configure_event_artifacts(store: ArtifactStore | None, *, launch_id: str | None) -> None:
+    """Declare where durable event artifacts go, or clear the declaration.
+
+    A run with no launch identity -- ``a2a-run`` from a shell, a test, a
+    notebook -- publishes nothing and keeps exactly the local-file behaviour it
+    had.  Publishing is what a *dispatched* worker does, because only a
+    dispatched worker has a control plane that will come looking.
+    """
+    global _artifact_target
+    if store is None or not launch_id:
+        _artifact_target = None
+        return
+    _artifact_target = EventArtifactTarget(store=store, launch_id=launch_id)
+
+
+def event_artifact_target() -> EventArtifactTarget | None:
+    return _artifact_target
+
+
+class DurableEventSink(JsonlEventSink):
+    """A local sink that also publishes every event to shared storage.
+
+    Same local-first posture one layer down: the file is written and flushed
+    first and unconditionally, the artifact is published after, and a failed
+    publish is logged rather than raised -- losing recoverability is bad,
+    losing the run is worse.  What the high-water mark adds is that the
+    degradation becomes *visible*: a ``PARTIAL`` trace says how far durability
+    reached instead of presenting a truncated event list as the whole story.
+    """
+
+    def __init__(self, *args: Any, store: ArtifactStore, launch_id: str, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._store = store
+        self._launch_id = launch_id
+        self._durable_through = 0
+        self._watermark_written = False
+        self._key = event_sink_key(launch_id, self.episode_id or "", self.episode_uid)
+        self._watermark_key = watermark_key(launch_id, self.episode_id or "", self.episode_uid)
+
+    @property
+    def durable_through(self) -> int:
+        """How many events reached the artifact store."""
+        return self._durable_through
+
+    @property
+    def artifact(self) -> EventSinkArtifact:
+        """This episode's stream as a reader would address it."""
+        return EventSinkArtifact(
+            launch_id=self._launch_id,
+            episode_id=self.episode_id or "",
+            episode_uid=self.episode_uid,
+            uri=self._store.uri(self._key),
+            store=self._store,
+            watermark=self._durable_through,
+            closed=self._watermark_written,
+        )
+
+    def write(self, event: Event) -> None:
+        super().write(event)
+        line = self.encode(event)
+        with self._lock:
+            # A write after close is dropped by the file copy, so it must be
+            # dropped here too: an artifact holding an event the sink says it
+            # never wrote would make the watermark a lie.
+            if self._closed:
+                return
+            try:
+                self._store.append(self._key, (line + "\n").encode("utf-8"))
+            except Exception:
+                log.warning("could not publish an event to %s", self._key, exc_info=True)
+                return
+            self._durable_through += 1
+
+    def close(self) -> None:
+        self._publish_watermark()
+        super().close()
+
+    def _publish_watermark(self) -> None:
+        with self._lock:
+            if self._closed or self._watermark_written:
+                return
+            durable_through = self._durable_through
+        try:
+            self._store.put(
+                self._watermark_key,
+                json.dumps(
+                    {"durable_through": durable_through, "closed": True},
+                    separators=(",", ":"), sort_keys=True,
+                ).encode("utf-8"),
+            )
+        except Exception:
+            log.warning("could not publish the watermark for %s", self._key, exc_info=True)
+            return
+        with self._lock:
+            self._watermark_written = True
+
+
 def open_event_sink(
     results_dir: str | Path,
     *,
@@ -113,42 +246,62 @@ def open_event_sink(
     base = Path(results_dir)
     if experiment_name:
         base = base / experiment_name
+    path = base / f"{episode_uid}{SINK_SUFFIX}"
+    target = event_artifact_target()
     try:
-        return JsonlEventSink(
-            base / f"{episode_uid}{SINK_SUFFIX}",
+        # Without an episode id there is nothing the control plane could match
+        # a published artifact back to, so publishing it would be evidence
+        # nobody can find. The local file is still written.
+        if target is None or not episode_id:
+            return JsonlEventSink(
+                path,
+                episode_uid=episode_uid,
+                episode_id=episode_id,
+                environment_id=environment_id,
+            )
+        return DurableEventSink(
+            path,
             episode_uid=episode_uid,
             episode_id=episode_id,
             environment_id=environment_id,
+            store=target.store,
+            launch_id=target.launch_id,
         )
     except OSError:
         log.warning("event sink unavailable under %s; this episode is not recoverable", base)
         return None
 
 
-def read_event_sink(path: str | Path) -> list[dict[str, Any]]:
-    """Decode a sink file into stream-shaped entries.
+def read_event_sink(source: "str | Path | EventSinkArtifact") -> list[dict[str, Any]]:
+    """Decode a sink into stream-shaped entries, from a file or an artifact.
 
     A process killed mid-write leaves a truncated final line.  That line is
     skipped rather than fatal -- the same tolerance ``decode_stream_events``
     already has -- because everything before it is still evidence.
+
+    The artifact form is what recovery uses once the worker's filesystem is not
+    the reader's: same decoding, same tolerance, different transport.
     """
+    if isinstance(source, EventSinkArtifact):
+        text = source.read_bytes().decode("utf-8", errors="replace")
+    else:
+        text = Path(source).read_text(encoding="utf-8", errors="replace")
     entries: list[dict[str, Any]] = []
-    with Path(path).open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
-                continue
-            try:
-                Event.model_validate(entry["event"])
-            except Exception:
-                continue
-            entries.append(entry)
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
+            continue
+        try:
+            Event.model_validate(entry["event"])
+        except Exception:
+            continue
+        entries.append(entry)
     return entries
 
 

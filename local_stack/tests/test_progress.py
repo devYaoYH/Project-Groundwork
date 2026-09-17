@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from a2a_engine.event_sink import open_event_sink
+from a2a_engine.event_sink import configure_event_artifacts, open_event_sink
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.schemas import EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
@@ -249,21 +249,32 @@ def test_a_restart_marks_episodes_that_never_ran_unreported(tmp_path):
 
 def test_reconcile_recovers_a_partial_trace_from_the_event_log(tmp_path):
     """An attempt whose process died is resolved to a recoverable partial
-    trace -- evidence for inspection and retry -- rather than to a bare gap."""
+    trace -- evidence for inspection and retry -- rather than to a bare gap.
+
+    The worker writes into a results directory of its own and publishes to the
+    shared artifact store; the control plane recovers from the artifact, which
+    is the only copy it can reach.
+    """
     control = _control(tmp_path)
     experiment = _experiment(control)
     launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     episode_id = control.planned_episode_ids(launch.id)[0]
 
-    sink = open_event_sink(
-        control.results_dir, experiment_name=experiment.name,
-        episode_uid="killed-1", episode_id=episode_id, environment_id="buyer_seller",
-    )
-    log = EventLog(sink=sink)
-    log.append("game_start", {"num_agents": 2})
-    log.append("offer", {"speaker": "seller", "price": 7})
-    # No terminal event: this is where the process died.
+    worker_results = tmp_path / "worker-results"
+    configure_event_artifacts(control.artifacts, launch_id=launch.id)
+    try:
+        sink = open_event_sink(
+            worker_results, experiment_name=experiment.name,
+            episode_uid="killed-1", episode_id=episode_id, environment_id="buyer_seller",
+        )
+        log = EventLog(sink=sink)
+        log.append("game_start", {"num_agents": 2})
+        log.append("offer", {"speaker": "seller", "price": 7})
+        # No terminal event, and no close(): this is where the process died, so
+        # there is no watermark either.
+    finally:
+        configure_event_artifacts(None, launch_id=None)
 
     restarted = ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
 
@@ -278,6 +289,10 @@ def test_reconcile_recovers_a_partial_trace_from_the_event_log(tmp_path):
     assert trace.stopped is True
     assert trace.observability["partial"] is True
     assert [event.type for event in trace.events] == ["game_start", "offer"]
+    # The worker never got to record a watermark, so the honest reading is what
+    # the artifact holds: every event that was durable.
+    assert trace.observability["durable_through"] == 2
+    assert trace.observability["durable_closed"] is False
     # It is not a result, so it must not count as one.
     assert restarted.progress(launch.id)["completed"] == 0
 

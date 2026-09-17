@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from a2a_engine.registry import discover_environments, get_environment_spec
 from a2a_engine.ratings import rebuild_rating_snapshot
-from a2a_engine.storage.sqlite import SQLiteEpisodeStore
+from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
 from a2a_engine.provenance import pinned_participants, provenance_of
@@ -100,6 +100,10 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     # own directory, under ``/environment-replays/``.
     static_dir = Path("web/out")
     workspace = Path.cwd()
+    # Where a worker publishes the evidence it produces, and the one path the
+    # control plane and a worker still share. ``None`` keeps the default beside
+    # the control plane's own results tree.
+    artifact_root: Path | None = None
     _control_plane: ControlPlane | None = None
     _control_lock = threading.Lock()
 
@@ -283,8 +287,18 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     @classmethod
-    def _store(cls) -> SQLiteEpisodeStore:
-        return SQLiteEpisodeStore(path=cls.database)
+    def _store(cls) -> ControlPlaneReader:
+        """The episode store, resolved by name rather than imported.
+
+        The viewer calls seven store methods, only two of which are on the
+        four-method ``EpisodeStore`` protocol, so ``make_store`` alone would not
+        have unblocked it -- ``ControlPlaneReader`` is the wider surface those
+        reads actually need, with SQLite as its only registered implementation.
+        """
+        return make_control_plane_reader(
+            {"backend": "sqlite", "path": str(cls.database)},
+            results_dir=cls.database.parent / "results",
+        )
 
     @classmethod
     def _control(cls) -> ControlPlane:
@@ -302,6 +316,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     control = ControlPlane(
                         cls.database,
                         workspace=cls.workspace,
+                        artifact_root=cls.artifact_root,
                         launcher_spec={
                             "credentials": resolve_declared_credentials(cls.workspace),
                         },
@@ -657,6 +672,11 @@ def main() -> int:
     # are one file, which is what lets progress be a SQL join.
     parser.add_argument("--database", default="/data/a2a.db")
     parser.add_argument("--otel-file", default="/data/otel-spans.jsonl")
+    parser.add_argument("--artifact-root", default=None,
+                        help="Shared artifact root. Launch inputs are published "
+                             "here and workers publish their event streams here; "
+                             "it is the only path a worker and the control plane "
+                             "both touch.")
     parser.add_argument("--static-dir", default="web/out")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--host", default="127.0.0.1")
@@ -664,6 +684,7 @@ def main() -> int:
     args = parser.parse_args()
     LocalStackHandler.database = Path(args.database)
     LocalStackHandler.otel_file = Path(args.otel_file)
+    LocalStackHandler.artifact_root = Path(args.artifact_root) if args.artifact_root else None
     LocalStackHandler.static_dir = Path(args.static_dir)
     LocalStackHandler.workspace = Path(args.workspace).resolve()
     LocalStackHandler._control_plane = None

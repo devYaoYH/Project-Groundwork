@@ -68,6 +68,11 @@ DEFAULT_ENV_ALLOWLIST: tuple[str, ...] = (
     "A2A_REDIS_URL",
 )
 
+#: The worker's results tree, a sibling of the control plane's rather than the
+#: same directory. Named here because the Compose worker has to agree with it:
+#: a test parsing ``docker-compose.yml`` asserts the two do not overlap.
+WORKER_RESULTS_DIRNAME = "worker-results"
+
 #: Names that must never be forwarded implicitly, even if an allowlist grows
 #: carelessly. Belt and braces: the allowlist above already excludes them, and
 #: this is what a test can point at.
@@ -97,8 +102,14 @@ class LocalProcessLauncher:
         credentials: Mapping[str, str] | None = None,
         env_allowlist: tuple[str, ...] = DEFAULT_ENV_ALLOWLIST,
         python: str | None = None,
+        artifact_root: str | Path | None = None,
     ) -> None:
         self.workspace = Path(workspace)
+        # Where the worker publishes the evidence it produces. The one path the
+        # two sides still share, and deliberately the only one: the worker's
+        # results directory is its own, so "read the runner's files" is not
+        # available to the control plane even locally.
+        self.artifact_root = Path(artifact_root) if artifact_root else None
         # The worker's credential environment, supplied explicitly. Empty by
         # default: an always-on control plane that never read a provider key
         # cannot leak one, and the local inner loop gets its keys back through
@@ -175,10 +186,18 @@ class LocalProcessLauncher:
             "--max-parallelism",
             str(launch.max_parallelism),
             # The workspace may be mounted read-only so host edits are live;
-            # run artifacts belong beside the trace database regardless.
+            # run artifacts belong beside the trace database regardless. This
+            # directory belongs to the worker alone -- the control plane never
+            # reads it, which is what makes the artifact seam load-bearing
+            # rather than merely present.
             "--results-dir",
             str(self._results_dir(launch)),
         ]
+        if self.artifact_root is not None:
+            command += [
+                "--artifact-root", str(self.artifact_root),
+                "--launch-id", launch.id,
+            ]
         if launch.mode == "smoke":
             command += [
                 "--smoke-test",
@@ -191,7 +210,14 @@ class LocalProcessLauncher:
 
     @staticmethod
     def _results_dir(launch: "Launch") -> Path:
-        return Path(launch.trace_database).parent / "results"
+        """The worker's own results tree, never the control plane's.
+
+        ``_recover_partial`` used to work only because these were the same
+        directory. Keeping them distinct is what makes the shortcut
+        structurally unavailable rather than merely discouraged: a launch whose
+        evidence the control plane can find is one whose worker published it.
+        """
+        return Path(launch.trace_database).parent / WORKER_RESULTS_DIRNAME / launch.id
 
     def _environment(self, launch: "Launch") -> dict[str, str]:
         env = {

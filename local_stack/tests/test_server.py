@@ -1077,8 +1077,11 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
 
     assert "--results-dir" in command
     results = command[command.index("--results-dir") + 1]
-    assert results.endswith("/results")
     assert not results.startswith(str(control.workspace)), "artifacts must not land in the repo"
+    # And not the control plane's results tree either: recovery goes through the
+    # artifact store, so the worker's own files are nobody else's input.
+    assert Path(results) != control.results_dir
+    assert control.results_dir not in Path(results).parents
     # The plan crosses as an address and a digest, never as a workspace path.
     assert command[command.index("--launch-input") + 1] == "file:///plan.yaml"
     assert command[command.index("--launch-input-sha256") + 1] == "deadbeef"

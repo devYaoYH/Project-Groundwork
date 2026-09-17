@@ -39,18 +39,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from a2a_engine.artifacts import ArtifactRef, make_artifact_store, sha256_bytes
+from a2a_engine.artifacts import ArtifactRef, make_artifact_store, plan_key, sha256_bytes
 from a2a_engine.compiler import ExecutionPlan as CompiledExecutionPlan
 from a2a_engine.compiler import compile as compile_design
 from a2a_engine.compiler import validate as validate_design
 from a2a_engine.design import DesignValidationError, ValidationIssue, parse_design_text
-from a2a_engine.event_sink import iter_event_sinks, read_event_sink
+from a2a_engine.event_sink import read_event_sink
 from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.items import ItemBank, derive_item_domain
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.registry import get_environment_spec, installed_environments
+from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.storage.schema import apply_schema
-from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace
 import yaml
 
@@ -218,7 +218,9 @@ class ControlPlane:
     def __init__(self, path: str | Path, *, workspace: str | Path,
                  results_dir: str | Path | None = None,
                  artifact_root: str | Path | None = None,
-                 launcher_spec: dict[str, Any] | None = None) -> None:
+                 launcher_spec: dict[str, Any] | None = None,
+                 store_spec: dict[str, Any] | None = None,
+                 colocated_reads: bool | None = None) -> None:
         self.path = Path(path)
         self.workspace = Path(workspace).resolve()
         # One database. The episode store writes ``episodes`` into the same
@@ -232,13 +234,29 @@ class ControlPlane:
         self.artifact_root = (
             Path(artifact_root) if artifact_root else self.results_dir / "artifacts"
         )
+        # Resolved by name, not imported. Locally it is the same file the
+        # control-plane tables live in, which is what keeps the single-statement
+        # join available as an optimization.
+        self.store_spec = dict(store_spec or {"backend": "sqlite", "path": str(self.path)})
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self.artifacts = make_artifact_store(
             {"backend": "local"}, root=self.artifact_root
         )
-        self.launcher: Launcher = make_launcher(
-            {"backend": "local_process", "workspace": self.workspace, **(launcher_spec or {})}
+        self.launcher: Launcher = make_launcher({
+            "backend": "local_process",
+            "workspace": self.workspace,
+            # The worker publishes here; it gets a results directory of its own.
+            "artifact_root": self.artifact_root,
+            **(launcher_spec or {}),
+        })
+        # Whether the episode store is the same file the control-plane tables
+        # live in. When it is, launch truth can be settled in one statement;
+        # when it is not, the two-step is the only implementation that works,
+        # and both must agree.
+        self.colocated_reads = (
+            colocated_reads if colocated_reads is not None
+            else Path(getattr(self._store(), "path", "")) == self.path
         )
         self.reconciler = Reconciler(self)
         # Launches this process is between committing and submitting. A
@@ -285,8 +303,15 @@ class ControlPlane:
         finally:
             connection.close()
 
-    def _store(self) -> SQLiteEpisodeStore:
-        return SQLiteEpisodeStore(path=self.path, results_dir=self.results_dir)
+    def _store(self) -> ControlPlaneReader:
+        """The episode store, resolved by name rather than imported.
+
+        Locally this still lands on the same SQLite file, so nothing about the
+        one-command workflow changes -- but the control plane no longer *names*
+        a backend, which is what has to be true before the episodes it reads
+        can live anywhere else.
+        """
+        return make_control_plane_reader(self.store_spec, results_dir=self.results_dir)
 
     def _init_db(self) -> None:
         with self._session() as db:
@@ -1207,7 +1232,7 @@ class ControlPlane:
         so the two may legitimately differ and nothing downstream may assume
         they agree.
         """
-        return self.artifacts.put(f"launches/{launch_id}/plan.yaml", plan_bytes)
+        return self.artifacts.put(plan_key(launch_id), plan_bytes)
 
     def _reference_launch_input(self, experiment: Experiment) -> ArtifactRef:
         """Reference a legacy experiment YAML in place, bound to its digest.
@@ -1317,6 +1342,46 @@ class ControlPlane:
         return self._progress_rows(launch_id)
 
     def _progress_rows(self, launch_id: str) -> dict[str, Any]:
+        if self.colocated_reads:
+            return self._progress_rows_sql(launch_id)
+        return self._progress_rows_two_step(launch_id)
+
+    def _progress_rows_two_step(self, launch_id: str) -> dict[str, Any]:
+        """The reference: plan from here, evidence from the store, join in memory.
+
+        Deliberately id-level rather than ``(episode_id, attempt)``-level, which
+        is the one place progress and settlement ask different questions.
+        Settlement asks "did *this* attempt produce an episode", because that is
+        what an attempt row is a claim about. Progress asks "do we hold a
+        completed run for this episode id" -- the same question ``--resume``
+        asks -- so a re-launch of a design that already has results reads as
+        already done rather than as no progress at all.
+        """
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT cell_id, episode_id, status FROM attempts WHERE launch_id = ? "
+                "ORDER BY cell_id",
+                (launch_id,),
+            ).fetchall()
+        planned = sorted({row["episode_id"] for row in rows})
+        done = {
+            episode_id
+            for episode_id, _ in self._store().completed_executions(planned)
+        }
+        by_cell: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            cell = by_cell.setdefault(
+                row["cell_id"],
+                {"cell_id": row["cell_id"], "planned": 0, "completed": 0, "failed": 0},
+            )
+            cell["planned"] += 1
+            # ``DISTINCT`` in the SQL form: a cell counts an episode once
+            # however many rows the store holds for it.
+            cell["completed"] += 1 if row["episode_id"] in done else 0
+            cell["failed"] += 1 if row["status"] == "FAILED" else 0
+        return self._progress_totals([by_cell[key] for key in sorted(by_cell)])
+
+    def _progress_rows_sql(self, launch_id: str) -> dict[str, Any]:
         with self._session() as db:
             rows = db.execute(
                 """
@@ -1334,17 +1399,90 @@ class ControlPlane:
                 """,
                 (launch_id,),
             ).fetchall()
-        by_cell = [
+        return self._progress_totals([
             {"cell_id": row["cell_id"], "planned": row["planned"],
              "completed": row["completed"], "failed": row["failed"]}
             for row in rows
-        ]
+        ])
+
+    @staticmethod
+    def _progress_totals(by_cell: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "by_cell": by_cell,
             "planned": sum(cell["planned"] for cell in by_cell),
             "completed": sum(cell["completed"] for cell in by_cell),
             "failed": sum(cell["failed"] for cell in by_cell),
         }
+
+    # --- launch truth, written twice on purpose ---------------------------
+    #
+    # Two queries define whether a launch succeeded, and both are a join of
+    # what the control plane planned against what the episode store holds.
+    # Written as one SQL statement they are correct and fast and quietly
+    # require the two tables to share a file -- which would make an
+    # object-store episode backend impossible to adopt later without rewriting
+    # the definition of launch truth. So each is written both ways: the
+    # two-step is the reference, the single statement is an optimization that
+    # applies when the store happens to be co-located, and a test asserts they
+    # agree.
+
+    def completed_executions(self, launch_id: str) -> dict[tuple[str, int], str]:
+        """``(episode_id, attempt) -> episode_uid`` for this launch's episodes."""
+        if self.colocated_reads:
+            return self._completed_executions_sql(launch_id)
+        return self._completed_executions_two_step(launch_id)
+
+    def _completed_executions_sql(self, launch_id: str) -> dict[tuple[str, int], str]:
+        """One statement, co-located: ``attempts`` joined to ``episodes``."""
+        with self._session() as db:
+            rows = db.execute(
+                """
+                SELECT a.episode_id AS episode_id, a.attempt AS attempt,
+                       e.episode_uid AS episode_uid
+                FROM attempts a
+                JOIN episodes e
+                  ON e.episode_id = a.episode_id
+                 AND e.attempt = a.attempt
+                 AND e.status = 'COMPLETED'
+                WHERE a.launch_id = ?
+                """,
+                (launch_id,),
+            ).fetchall()
+        return {
+            (row["episode_id"], int(row["attempt"])): row["episode_uid"] for row in rows
+        }
+
+    def _completed_executions_two_step(self, launch_id: str) -> dict[tuple[str, int], str]:
+        """Two steps, no co-location required.
+
+        Ask the control plane what it planned, ask the episode store which of
+        those ids it holds a completed run for, and join in memory. This is the
+        shape ``server._lanes`` already uses to put a roster beside a trace, and
+        it is the only one that survives the two stores being different things.
+        """
+        with self._session() as db:
+            planned = [
+                (row["episode_id"], int(row["attempt"]))
+                for row in db.execute(
+                    "SELECT episode_id, attempt FROM attempts WHERE launch_id = ?",
+                    (launch_id,),
+                ).fetchall()
+            ]
+        held = self._store().completed_executions(sorted({eid for eid, _ in planned}))
+        return {key: held[key] for key in planned if key in held}
+
+    def _experiment_name(self, launch: Launch) -> str:
+        """The experiment name a recovered episode's manifest is filed under.
+
+        Read from the control plane's own record rather than from a directory
+        name on the worker's disk, which is the last thing recovery used the
+        shared filesystem for.
+        """
+        with self._session() as db:
+            row = db.execute(
+                "SELECT name FROM experiments WHERE id = ?", (launch.experiment_id,)
+            ).fetchone()
+        return str(row["name"]) if row is not None else ""
 
     def _open_launches(self) -> list[Launch]:
         """Every launch the reconciler is still responsible for."""
@@ -1386,12 +1524,8 @@ class ControlPlane:
                     (launch.id,),
                 ).fetchall()
             ]
-            completed = {
-                (row["episode_id"], row["attempt"]): row["episode_uid"]
-                for row in db.execute(
-                    "SELECT episode_id, attempt, episode_uid FROM episodes WHERE status = 'COMPLETED'"
-                ).fetchall()
-            }
+        completed = self.completed_executions(launch.id)
+        experiment_name = self._experiment_name(launch)
         recovered: list[str] = []
         unreported: list[str] = []
         for attempt in attempts:
@@ -1407,7 +1541,7 @@ class ControlPlane:
                     attempt, status="DRY_RUN", episode_uri=None, error=None, ended_at=now,
                 )
                 continue
-            partial_uri = self._recover_partial(attempt)
+            partial_uri = self._recover_partial(attempt, experiment_name=experiment_name)
             if partial_uri is not None:
                 recovered.append(attempt.episode_id)
             else:
@@ -1455,23 +1589,35 @@ class ControlPlane:
                 (status, episode_uri, error, ended_at, attempt.id),
             )
 
-    def _recover_partial(self, attempt: Attempt) -> str | None:
+    def _recover_partial(self, attempt: Attempt, *, experiment_name: str = "") -> str | None:
         """Persist whatever the interrupted episode's event log holds.
 
-        The sink was flushed event by event as the episode played, so a run
-        killed between two events still has everything up to that point. The
-        recovered trace is stored with ``status = PARTIAL``: it is evidence for
-        inspection and retry, never a successful experimental result.
+        Every entry was flushed locally and published to the shared artifact
+        store as it was written, so a run killed between two events still has
+        everything up to that point -- and the control plane finds it by
+        enumerating a prefix it owns rather than by reading the worker's
+        filesystem, which it no longer can. The recovered trace is stored with
+        ``status = PARTIAL``: it is evidence for inspection and retry, never a
+        successful experimental result.
         """
-        for path in iter_event_sinks(self.results_dir):
-            entries = read_event_sink(path)
+        for ref in self.artifacts.iter_event_sinks(
+            attempt.launch_id, episode_id=attempt.episode_id
+        ):
+            entries = read_event_sink(ref)
             if not entries or entries[0].get("episode_id") != attempt.episode_id:
                 continue
             try:
-                trace = project_events_to_trace(path)
+                trace = project_events_to_trace(ref)
             except ValueError:
                 continue
-            experiment_name = path.parent.name
+            # How far durability actually reached, so a PARTIAL says what it is
+            # rather than presenting a truncated event list as the whole story.
+            # An absent watermark is the SIGKILL case: the sink never got to
+            # say, and what is in the artifact is what was durable.
+            trace.observability["durable_through"] = (
+                ref.watermark if ref.watermark is not None else len(entries)
+            )
+            trace.observability["durable_closed"] = ref.closed
             manifest = EpisodeManifest.from_run(
                 config=trace.config.model_dump(),
                 experiment_name=experiment_name,

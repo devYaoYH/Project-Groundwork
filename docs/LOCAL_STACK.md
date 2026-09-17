@@ -167,6 +167,29 @@ than the only incremental one, so an episode killed mid-run is recoverable with
 no Redis in the picture. Each line carries the same envelope a Redis stream
 entry does, so one projection reads either source.
 
+A local file only helps a reader who can see the worker's disk, so a dispatched
+worker publishes the same lines to the shared artifact root as it writes them:
+
+```text
+<artifact root>/                      # --artifact-root, /data/artifacts in Compose
+└── launches/<launch_id>/
+    ├── plan.yaml                     # the launch input, digest-bound
+    └── episodes/<episode_id>/<episode_uid>/
+        ├── events.jsonl              # published per event, as written
+        └── watermark.json            # {"durable_through": 47, "closed": true}
+```
+
+The worker's `--results-dir` is its own — `/data/worker-results` in Compose,
+never the control plane's `/data/results` — so recovery enumerates the artifact
+root and nothing else. The watermark is how far durability actually reached; a
+killed worker never writes one, and a recovered `PARTIAL` trace then reports
+what the artifact holds rather than presenting a truncated event list as the
+whole story. Both values land on the recovered trace as
+`observability.durable_through` and `observability.durable_closed`.
+
+A run with no launch identity — `a2a-run` from a shell — publishes nothing and
+keeps exactly the local-file behaviour it had.
+
 ## Components and boundary
 
 | Component | Local implementation | Later cloud replacement |

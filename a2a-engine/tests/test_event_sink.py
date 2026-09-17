@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 
+from a2a_engine.artifacts import LocalArtifactStore, make_artifact_store, watermark_key
 from a2a_engine.event_sink import (
+    DurableEventSink,
     JsonlEventSink,
+    configure_event_artifacts,
     current_event_sink,
     iter_event_sinks,
     open_event_sink,
@@ -143,3 +146,111 @@ def test_closing_twice_is_harmless(tmp_path):
     log.all()
     sink.close()
     assert len(read_event_sink(sink.path)) == 1
+
+
+# --- publishing to shared storage -------------------------------------------
+
+
+def _artifacts(tmp_path):
+    return make_artifact_store({"backend": "local"}, root=tmp_path / "artifacts")
+
+
+def test_a_configured_worker_publishes_every_event_as_it_is_written(tmp_path):
+    """Durability is per event, not per episode.
+
+    The reader is handed only the artifact store, never the results directory,
+    which is the whole difference between recovery that happens to work locally
+    and recovery that works at all.
+    """
+    store = _artifacts(tmp_path)
+    configure_event_artifacts(store, launch_id="L1")
+    try:
+        sink = open_event_sink(
+            tmp_path / "worker-results", experiment_name="exp",
+            episode_uid="e1", episode_id="exp.cell.000", environment_id="buyer_seller",
+        )
+        assert isinstance(sink, DurableEventSink)
+        log = EventLog(sink=sink)
+        log.append("game_start", {"num_agents": 2})
+        # Read it back mid-episode: the artifact is current before the episode
+        # ends, which is the case a SIGKILL lands in.
+        ref = next(iter(store.iter_event_sinks("L1")))
+        assert [entry["event"]["type"] for entry in read_event_sink(ref)] == ["game_start"]
+        log.append("offer", {"price": 7})
+        assert len(read_event_sink(ref)) == 2
+        assert sink.durable_through == 2
+        log.all()
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+
+    ref = next(iter(store.iter_event_sinks("L1", episode_id="exp.cell.000")))
+    assert (ref.episode_id, ref.episode_uid) == ("exp.cell.000", "e1")
+    # ``EventLog.all()`` closed the sink, so it got to say how far it reached.
+    assert (ref.watermark, ref.closed) == (2, True)
+
+
+def test_a_failing_publish_never_fails_the_run(tmp_path):
+    """Losing recoverability is bad; losing the run is worse.
+
+    The local copy is written and flushed first and unconditionally, so a
+    broken remote costs visibility into the episode, never the episode.
+    """
+    class BrokenStore(LocalArtifactStore):
+        def append(self, key, data):
+            raise OSError("the bucket is gone")
+
+    store = BrokenStore(tmp_path / "artifacts")
+    configure_event_artifacts(store, launch_id="L1")
+    try:
+        sink = open_event_sink(
+            tmp_path / "worker-results", experiment_name="exp",
+            episode_uid="e1", episode_id="exp.cell.000",
+        )
+        log = EventLog(sink=sink)
+        log.append("game_start", {})
+        log.all()
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+
+    assert [entry["event"]["type"] for entry in read_event_sink(sink.path)] == ["game_start"]
+    # Nothing reached shared storage, so there is nothing to recover -- and the
+    # sink says so rather than the gap being silent.
+    assert sink.durable_through == 0
+    assert not list(store.iter_event_sinks("L1"))
+    assert json.loads(
+        (store.root / watermark_key("L1", "exp.cell.000", "e1")).read_text()
+    ) == {"closed": True, "durable_through": 0}
+
+
+def test_an_undeclared_target_keeps_the_plain_local_sink(tmp_path):
+    configure_event_artifacts(None, launch_id=None)
+    sink = open_event_sink(tmp_path, experiment_name="exp", episode_uid="e1",
+                           episode_id="exp.cell.000")
+    assert isinstance(sink, JsonlEventSink) and not isinstance(sink, DurableEventSink)
+
+
+def test_the_two_copies_project_to_the_same_trace(tmp_path):
+    """The artifact is the same bytes, so it must be the same episode.
+
+    Only the recorded origin may differ: a recovered trace names the artifact it
+    was read from rather than a path on a machine the reader cannot see.
+    """
+    store = _artifacts(tmp_path)
+    configure_event_artifacts(store, launch_id="L1")
+    try:
+        sink = open_event_sink(tmp_path / "worker-results", experiment_name="exp",
+                               episode_uid="e1", episode_id="exp.cell.000",
+                               environment_id="buyer_seller")
+        log = EventLog(sink=sink)
+        log.append("game_start", {"num_agents": 2})
+        log.append("game_end", {"price": 7})
+        log.all()
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+
+    ref = next(iter(store.iter_event_sinks("L1")))
+    from_file = project_events_to_trace(sink.path).model_dump(mode="json")
+    from_artifact = project_events_to_trace(ref).model_dump(mode="json")
+    assert from_file.pop("observability")["event_sink"] == str(sink.path)
+    assert from_artifact.pop("observability")["event_sink"] == ref.uri
+    assert from_file == from_artifact

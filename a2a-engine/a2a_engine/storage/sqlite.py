@@ -34,7 +34,7 @@ import time
 import uuid
 import re
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from a2a_engine.derived import DerivedArtifact
 from a2a_engine.manifest import EpisodeManifest
@@ -571,6 +571,39 @@ class SQLiteEpisodeStore:
         finally:
             conn.close()
         return {r["episode_id"] for r in rows if r["episode_id"]}
+
+    def completed_executions(
+        self, episode_ids: Sequence[str] | None = None
+    ) -> dict[tuple[str, int], str]:
+        """``(episode_id, attempt) -> episode_uid`` for completed episodes.
+
+        This is the episode-store half of the launch-truth join, asked as a
+        question a store can answer about itself rather than as a table a
+        caller can reach into. ``PARTIAL`` rows are excluded for the same
+        reason ``completed_episode_ids`` excludes them: a recovered fragment is
+        evidence, not a result.
+        """
+        clause = "WHERE status = 'COMPLETED'"
+        params: list[Any] = []
+        wanted = list(episode_ids) if episode_ids is not None else None
+        if wanted is not None:
+            if not wanted:
+                return {}
+            clause += f" AND episode_id IN ({', '.join('?' for _ in wanted)})"
+            params.extend(wanted)
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            rows = conn.execute(
+                f"SELECT episode_id, attempt, episode_uid FROM episodes {clause}",
+                tuple(params),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {
+            (row["episode_id"], int(row["attempt"])): row["episode_uid"]
+            for row in rows if row["episode_id"]
+        }
 
     # --- derived artifacts and trace-derived ratings ---
 

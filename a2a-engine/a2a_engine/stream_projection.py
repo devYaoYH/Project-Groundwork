@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from a2a_engine.artifacts import EventSinkArtifact
 from a2a_engine.event_sink import read_event_sink
 from a2a_engine.schemas import EpisodeConfigBase, Event, EpisodeTrace
 
@@ -141,17 +142,21 @@ def project_stream_to_trace(
 
 
 def project_events_to_trace(
-    path: str | Path, *, environment_id: str | None = None
+    source: "str | Path | EventSinkArtifact", *, environment_id: str | None = None
 ) -> EpisodeTrace:
     """Build a ``EpisodeTrace`` from one episode's durable event sink.
 
-    This is what turns a ``SIGKILL``ed episode into evidence: the file was
-    flushed event by event as it played, so whatever it holds is real, and a
-    missing terminal event marks the result partial rather than absent.
+    This is what turns a ``SIGKILL``ed episode into evidence: every entry was
+    flushed and published as it was written, so whatever survives is real, and
+    a missing terminal event marks the result partial rather than absent.
+
+    ``source`` is a local file when the reader shares the worker's disk and a
+    published artifact when it does not; the projection is the same either way,
+    and ``origin`` records which it was.
     """
     return _project(
-        read_event_sink(path),
-        origin=str(path),
+        read_event_sink(source),
+        origin=str(source),
         source="event_sink_projection",
         origin_key="event_sink",
         environment_id=environment_id,

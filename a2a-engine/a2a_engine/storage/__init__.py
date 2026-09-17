@@ -2,8 +2,10 @@
 
 from a2a_engine.storage.base import (
     StoreCheck,
+    ControlPlaneReader,
     EpisodeStore,
     check_store,
+    make_control_plane_reader,
     iter_episodes,
     list_stores,
     make_store,
@@ -15,8 +17,10 @@ _import_backends()
 
 __all__ = [
     "StoreCheck",
+    "ControlPlaneReader",
     "EpisodeStore",
     "check_store",
+    "make_control_plane_reader",
     "iter_episodes",
     "list_stores",
     "make_store",

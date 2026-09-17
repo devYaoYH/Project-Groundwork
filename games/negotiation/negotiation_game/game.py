@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import Field
 
 from a2a_engine import EpisodeConfigBase, Event, EpisodeTrace, register_environment
-from a2a_engine.redis_stream import publisher_from_config
+from a2a_engine.tracing import EventLog
 
 from negotiation_game.backend.agents import make_agent
 from negotiation_game.backend.engine import GameConfig, GameEngine, GameMode
@@ -123,8 +123,18 @@ class NegotiationGame:
     def __init__(self, config: dict, dry_run: bool = False) -> None:
         self.config = NegotiationConfig(**config)
         self.dry_run = dry_run
-        self.events: list[Event] = []
-        self._publisher = publisher_from_config(self.config)
+        # Through ``EventLog`` like every other environment, rather than a list
+        # plus a publisher. The list was durable nowhere: negotiation published
+        # to Redis but never wrote the sink recovery reads, so a negotiation
+        # episode killed mid-run left nothing to recover. The funnel is what
+        # makes durability a property of the framework instead of a property of
+        # how each environment happens to log.
+        self._log = EventLog.from_config(self.config)
+
+    @property
+    def events(self) -> list[Event]:
+        """The events recorded so far. A read, never the end of the log."""
+        return self._log.snapshot()
 
     # --- event adaptation ---
 
@@ -142,10 +152,7 @@ class NegotiationGame:
             if speaker is not None and text is not None:
                 payload.setdefault("speaker", speaker)
                 payload.setdefault("text", text)
-        event = Event(type=event_type, timestamp=datetime.now(timezone.utc), data=payload)
-        self.events.append(event)
-        if self._publisher is not None:
-            self._publisher.publish(event)
+        self._log.append(event_type, payload, timestamp=datetime.now(timezone.utc))
 
     def _make_agents(self) -> tuple[Any, Any]:
         """Build agent implementations, ordered by first_speaker.
@@ -177,13 +184,11 @@ class NegotiationGame:
 
         result = asyncio.run(engine.run_game())
         ended = datetime.now(timezone.utc)
-        if self._publisher is not None:
-            self._publisher.flush()
 
         return EpisodeTrace(
             episode_uid="",  # the runner assigns this
             config=self.config,
-            events=self.events,
+            events=self._log.all(),
             final_state=result,
             metrics=_metrics_from_result(result),
             started_at=started,
