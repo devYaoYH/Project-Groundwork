@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import mimetypes
 import os
 import threading
@@ -35,6 +36,45 @@ try:  # Works both as ``python local_stack/server.py`` and as a package import.
     from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
 except ModuleNotFoundError:  # pragma: no cover - exercised by the Compose entrypoint
     from control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
+
+
+log = logging.getLogger(__name__)
+
+
+def resolve_declared_credentials(workspace: Path | str) -> dict[str, str]:
+    """The provider keys the agent pool declares, resolved for this host.
+
+    A name, a lookup, a value. Never ``dict(os.environ)``, never a prefix
+    match, never a pattern: adding a provider to the pool is what widens this
+    set, which is what keeps the forwarded set small enough to review. A name
+    the pool never declared cannot reach a worker no matter what is exported
+    here, and a declared name nothing satisfies is simply absent -- forwarding
+    an empty string would turn a gap ``missing_credentials`` reports by name
+    into a 401 the worker discovers mid-episode.
+
+    This is deliberately the temporary half. It leaves the always-on control
+    plane holding provider *values*, which is precisely what the credential
+    boundary exists to remove; what survives is the shape of the call, because
+    naming what a launch needs never required reading a value. The later move
+    replaces this mapping with a list of names the worker's platform resolves.
+    """
+    from a2a_engine.agent_pool import load_agent_pool
+
+    try:
+        pool = load_agent_pool(Path(workspace) / "experiments")
+    except Exception as exc:  # pragma: no cover - a broken pool must not
+        # stop the control plane serving everything that is not a live launch.
+        # The gap still surfaces by name: the pool is read again per launch to
+        # report which credentials are unsatisfied.
+        log.warning("agent pool unreadable, forwarding no credentials: %s", exc)
+        return {}
+
+    resolved: dict[str, str] = {}
+    for name in pool.required_credentials(sorted(pool.agents)):
+        value = os.environ.get(name)
+        if value:
+            resolved[name] = value
+    return resolved
 
 
 def sse_frame(event: dict) -> str:
@@ -254,7 +294,18 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     # Constructing the control plane reconciles any launch left
                     # RUNNING by a previous process, so a restart resolves
                     # stranded launches instead of leaving them there forever.
-                    control = ControlPlane(cls.database, workspace=cls.workspace)
+                    #
+                    # The launcher's credential set is declared, not inherited:
+                    # it is exactly the names the agent pool binds, so a worker
+                    # can reach a provider while the child's environment stays
+                    # an allowlist rather than a copy of this process's.
+                    control = ControlPlane(
+                        cls.database,
+                        workspace=cls.workspace,
+                        launcher_spec={
+                            "credentials": resolve_declared_credentials(cls.workspace),
+                        },
+                    )
                     control.seed_installed_releases()
                     cls._control_plane = control
         return cls._control_plane

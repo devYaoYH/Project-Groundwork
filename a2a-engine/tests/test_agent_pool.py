@@ -72,6 +72,55 @@ def test_missing_credentials_are_reported_by_variable_name(monkeypatch):
     assert pool.missing_credentials(["gpt-mini", "haiku", "heuristic"]) == ["OPENAI_API_KEY"]
 
 
+def test_required_credentials_names_a_binding_need_without_reading_a_value(monkeypatch):
+    """Naming what a launch needs is the half that survives the value moving.
+
+    A control plane forwards against this set and a worker platform resolves
+    against it, so it must answer the same way whether or not anything is set
+    here."""
+    pool = AgentPool(agents={
+        "gpt-mini": AgentPoolEntry(model="gpt-5-mini", credential="OPENAI_API_KEY"),
+        "haiku": AgentPoolEntry(model="haiku", credential="ANTHROPIC_API_KEY"),
+        "heuristic": AgentPoolEntry(type="heuristic"),
+    })
+    names = ["gpt-mini", "haiku", "heuristic"]
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert pool.required_credentials(names) == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    assert pool.required_credentials(names) == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+
+    # A binding that calls nothing widens neither half.
+    assert pool.required_credentials(["heuristic"]) == []
+
+
+def test_every_missing_credential_is_a_required_credential(monkeypatch):
+    """The two halves read one field, so the forwarded set and the preflight
+    report cannot disagree about what a line-up needs."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    pool = AgentPool(agents={
+        "gpt-mini": AgentPoolEntry(model="gpt-5-mini", credential="OPENAI_API_KEY"),
+        "haiku": AgentPoolEntry(model="haiku", credential="ANTHROPIC_API_KEY"),
+        "routed": AgentPoolEntry(model="haiku", credential="OPENROUTER_API_KEY"),
+        "heuristic": AgentPoolEntry(type="heuristic"),
+    })
+    names = sorted(pool.agents)
+
+    required = pool.required_credentials(names)
+    missing = pool.missing_credentials(names)
+
+    assert set(missing) <= set(required)
+    # Present-but-empty counts as missing: Compose exports every provider
+    # variable with a ``${VAR:-}`` default, so absence is not how a gap looks.
+    assert missing == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
+    assert sorted(missing) == missing, "both halves report sorted names"
+
+
 def test_hydration_is_positional_and_repeats_are_independent_seats():
     pool = AgentPool(agents={"a": AgentPoolEntry(model="m-a"), "b": AgentPoolEntry(model="m-b")})
 

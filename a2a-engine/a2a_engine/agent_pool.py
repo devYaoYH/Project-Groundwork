@@ -67,14 +67,32 @@ class AgentPool(BaseModel):
                 f"Add it to {LOCAL_POOL_NAME} or {SHARED_POOL_RELATIVE}."
             ) from None
 
-    def missing_credentials(self, names: list[str]) -> list[str]:
-        """Release variables these bindings need that are not set."""
-        missing = {
+    def required_credentials(self, names: list[str]) -> list[str]:
+        """Release variables these bindings declare, satisfied or not.
+
+        The half that never has to read a value. Naming what a launch needs is
+        a property of the pool, so this is what a control plane forwards
+        against and what a worker platform resolves against; whether a name is
+        currently satisfiable is a separate question, answered below.
+
+        Both halves read the same ``credential`` field, which is what keeps the
+        forwarded set and the preflight report from ever disagreeing about what
+        a line-up needs.
+        """
+        declared = {
             entry.credential
             for entry in (self.entry(name) for name in names)
-            if entry.credential and not os.environ.get(entry.credential)
+            if entry.credential
         }
-        return sorted(missing)
+        return sorted(declared)
+
+    def missing_credentials(self, names: list[str]) -> list[str]:
+        """Release variables these bindings need that are not set."""
+        return [
+            credential
+            for credential in self.required_credentials(names)
+            if not os.environ.get(credential)
+        ]
 
 
 def _read_pool_file(path: Path) -> dict[str, Any]:

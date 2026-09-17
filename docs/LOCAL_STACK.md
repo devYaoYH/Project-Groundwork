@@ -93,6 +93,44 @@ episode adds a row rather than replacing one. A failed attempt is kept, not
 tombstoned: "the result for this episode" is a query — the completed attempt
 with the highest `attempt` — rather than a stored flag.
 
+## How a live launch from the browser gets its keys
+
+A worker's environment is an allowlist, not a copy of the control plane's: the
+allowlist names `PATH`, `TMPDIR`, the agent-pool path and the Redis URL, and
+nothing that authenticates to a provider. So a provider key reaches a worker
+only by being named.
+
+The names come from the agent pool. Every binding in `experiments/agents.yaml`
+already declares the variable it needs — that is what lets a missing key be
+reported by name before a run instead of as a 401 during one — and the control
+plane forwards exactly that set:
+
+```text
+agents.yaml   gpt-mini: {credential: OPENAI_API_KEY}   declares the name
+control plane OPENAI_API_KEY present in its environment? forward name -> value
+launcher      allowlisted operational variables, then the declared credentials
+```
+
+Three consequences worth stating, because each is a property a test pins:
+
+- **A name the pool never declares cannot be forwarded.** Adding a provider is
+  an edit to the pool, not an accident of what happens to be exported.
+- **A declared name nothing satisfies is omitted, not forwarded empty.**
+  Compose exports every provider variable with a `${VAR:-}` default, so an
+  unset key is present-and-empty; forwarding that would replace a gap named
+  before launch with a 401 discovered mid-episode.
+- **A launcher configured with no credentials forwards none.** That is the
+  default, and it is what `a2a-run` from a shell already looks like — it never
+  goes through the launcher at all and reads its own environment directly.
+
+Put the values in `.env`; Compose passes them to the `viewer` service, which is
+how they reach this resolution. This is the temporary half of the credential
+boundary: the always-on service still *holds* provider values. The permanent
+shape names credentials symbolically in the launch input and lets the worker's
+platform resolve them, so the control plane learns only whether each name is
+satisfiable. The call shape does not change when that lands — only where the
+value comes from.
+
 ## Progress, and what happens after a restart
 
 Progress is an identity join, not a log parse. The whole planned episode set is
