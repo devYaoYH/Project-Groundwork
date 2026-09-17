@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_stack.control_plane import ControlPlane, DesignDigestMismatch, _roleless_design_sha256
+from local_stack.tests.fakes import FakeLauncher
 from a2a_engine.design import parse_design_text
 from a2a_engine.storage.schema import apply_schema
 
@@ -41,15 +42,11 @@ seed:
 """
 
 
-class SilentLauncher:
-    def __init__(self, control: ControlPlane) -> None:
-        self.control = control
-
-    def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
-        self.control._mark_launch_started(launch.id)
-
-    def cancel(self, _launch_id):
-        return False
+def _silent(plane: ControlPlane) -> FakeLauncher:
+    """Dispatched, then silent: the launcher is asked about liveness only."""
+    launcher = FakeLauncher()
+    plane.launcher = launcher
+    return launcher
 
 
 def control(tmp_path: Path) -> ControlPlane:
@@ -250,7 +247,7 @@ def test_locked_design_requires_an_explicit_fork_before_editing(tmp_path):
 def test_live_launch_requires_a_lock_but_smoke_and_dry_run_are_allowed(tmp_path):
     plane = control(tmp_path)
     experiment = create(plane)
-    plane.launcher = SilentLauncher(plane)
+    _silent(plane)
 
     with pytest.raises(ValueError, match="locked preregistration"):
         plane.launch_experiment(experiment.id, mode="live")
@@ -282,7 +279,7 @@ def test_locked_launch_writes_the_runner_config_with_planned_provenance(tmp_path
     plane = control(tmp_path)
     experiment = create(plane)
     locked = plane.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
-    plane.launcher = SilentLauncher(plane)
+    _silent(plane)
 
     launch = plane.launch_experiment(locked.id, mode="smoke")
     plan = Path(launch.execution_path or "").read_text(encoding="utf-8")

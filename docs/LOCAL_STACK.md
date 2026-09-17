@@ -99,15 +99,26 @@ Progress is an identity join, not a log parse. The whole planned episode set is
 written at launch time and `episode_id` is deterministic, so
 `GET /api/launches/<id>` answers `progress.by_cell` from
 `attempts LEFT JOIN episodes` — the same question `--resume` asks the store.
-Runner stdout still feeds `launch_events` so a live launch feels responsive,
-but it is never the source of truth.
+The worker's stdout belongs to its own platform and is never read by the
+control plane; `launch_events` records what the control plane did (queued,
+submitted, settled) and what it then observed.
 
-Because that join needs no live process, a restart resolves what it stranded.
-Constructing the control plane reconciles every launch left `QUEUED`,
-`RUNNING`, or `CANCELLING`: each attempt is resolved from the join, and one
-with no episode is looked for in the durable event log before being written
-off. A recovered episode is stored with `status = PARTIAL` — evidence for
-inspection and retry, never a successful result, and never counted as progress.
+Launching is a dispatch, not a spawn. The control plane publishes the rendered
+plan as an addressable artifact, hands the launcher a `{uri, sha256}`
+reference, and persists the opaque execution handle it gets back. The worker
+verifies the digest before it parses anything and refuses a plan whose bytes
+changed after publication. Nothing else crosses: no inherited environment, no
+workspace path, no callback into the control plane.
+
+Every status transition afterwards belongs to the reconciler. It asks the
+launcher `describe(handle)` for liveness only — never for a verdict — and once
+an execution is terminal or unaccounted for it settles the launch from the same
+`attempts ⋈ episodes` join. Because that join needs no live process, a restart
+resolves what it stranded: a fresh launcher reports `UNKNOWN` for a handle it
+did not issue, and each attempt is resolved from the join, with one that has no
+episode looked for in the durable event log before being written off. A
+recovered episode is stored with `status = PARTIAL` — evidence for inspection
+and retry, never a successful result, and never counted as progress.
 
 ## The durable event log
 

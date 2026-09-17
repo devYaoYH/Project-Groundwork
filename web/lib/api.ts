@@ -265,10 +265,13 @@ export type LaunchAttempt = {
   redis_stream: string;
 };
 
+// Every launch event, not only the parsed stdout lines this used to carry.
+// The worker's output belongs to its platform; what a researcher reopens is
+// the control plane's own record of what it did and what it then observed.
 export type LaunchLog = {
   id: number;
-  kind: "runner.log";
-  payload: { line?: string };
+  kind: string;
+  payload: Record<string, unknown> & { line?: string };
   created_at: string;
 };
 

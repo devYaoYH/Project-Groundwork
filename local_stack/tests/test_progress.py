@@ -22,6 +22,8 @@ from a2a_engine.tracing import EventLog
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_stack.control_plane import ControlPlane
+from local_stack.launchers import ExecutionStatus
+from local_stack.tests.fakes import FakeLauncher
 
 WORKSPACE = Path(__file__).resolve().parents[2]
 
@@ -114,27 +116,23 @@ def _record_planned_episode(
     return SQLiteEpisodeStore(path=control.path).put_episode(trace, manifest)
 
 
-class SilentLauncher:
-    """Starts the launch and reports nothing at all.
+def _silent(control: ControlPlane) -> FakeLauncher:
+    """A worker that is dispatched and then reports nothing at all.
 
     This is the case the stdout regex could not survive: no ``OK`` line ever
-    arrives, so every attempt would have been written off as unreported.
+    arrives, so every attempt would have been written off as unreported. It is
+    also the case the new contract handles by construction -- the launcher is
+    never asked for a result, only for liveness.
     """
-
-    def __init__(self, control: ControlPlane) -> None:
-        self.control = control
-
-    def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
-        self.control._mark_launch_started(launch.id)
-
-    def cancel(self, _launch_id):
-        return False
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    return launcher
 
 
 def test_progress_comes_from_the_identity_join_not_from_the_runners_stdout(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
 
     assert control.progress(launch.id)["completed"] == 0
@@ -157,7 +155,7 @@ def test_progress_comes_from_the_identity_join_not_from_the_runners_stdout(tmp_p
 def test_a_recovered_partial_episode_does_not_count_as_progress(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
 
     planned = control.planned_episode_ids(launch.id)
@@ -173,7 +171,7 @@ def test_unlocked_calendar_smoke_launch_syncs_item_rows_before_episode_writes(tm
         name="Calendar draft smoke", release_id="calendar",
         design_text=CALENDAR_DRAFT_SMOKE_DESIGN,
     )
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
 
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     configs = control._design_episode_configs(experiment, mode="smoke")
@@ -198,19 +196,19 @@ def test_unlocked_calendar_smoke_launch_syncs_item_rows_before_episode_writes(tm
         _record_planned_episode(
             control, config, episode_uid=f"calendar-draft-{index}", metrics={"ok": True},
         )
-    control._finish_launch(launch.id, 0)
+    launcher.finish(launch.id)
 
     assert control.launch(launch.id).status == "COMPLETED"
     assert control.progress(launch.id)["completed"] == len(configs)
 
 
 def test_a_restart_reconciles_a_stranded_running_launch(tmp_path):
-    """A launcher persists no PID and its watcher thread dies with the
-    process, so without this the launch reads RUNNING forever and cancelling
-    it cannot help: there is no handle left to terminate."""
+    """A restarted control plane owns no execution it did not submit, so the
+    handle persisted on the launch row describes as UNKNOWN and the launch is
+    settled from evidence instead of reading RUNNING forever."""
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     assert control.launch(launch.id).status == "RUNNING"
 
@@ -233,7 +231,7 @@ def test_a_restart_reconciles_a_stranded_running_launch(tmp_path):
 def test_a_restart_marks_episodes_that_never_ran_unreported(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     planned = control.planned_episode_ids(launch.id)
     _record_episode(control, planned[0])
@@ -254,7 +252,7 @@ def test_reconcile_recovers_a_partial_trace_from_the_event_log(tmp_path):
     trace -- evidence for inspection and retry -- rather than to a bare gap."""
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     episode_id = control.planned_episode_ids(launch.id)[0]
 
@@ -287,7 +285,7 @@ def test_reconcile_recovers_a_partial_trace_from_the_event_log(tmp_path):
 def test_attempt_numbers_are_monotonic_per_episode_across_launches(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
 
     first = control.launch_experiment(experiment.id, smoke_test=True)
     second = control.launch_experiment(experiment.id, smoke_test=True)
@@ -311,7 +309,7 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
         name="Cell evidence", release_id="buyer_seller", design_text=CELL_EVIDENCE_DESIGN,
     )
     locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
 
     first = control.launch_experiment(locked.id)
     first_configs = control._design_episode_configs(locked, mode="live")
@@ -320,7 +318,8 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
             control, config, episode_uid=f"first-{index}",
             metrics={"score": [1.0, 5.0][index], "won": index == 0},
         )
-    control._finish_launch(first.id, 0)
+    launcher.finish(first.id)
+    assert control.launch(first.id).status == "COMPLETED"
 
     second = control.launch_experiment(locked.id)
     attempts = {
@@ -334,7 +333,8 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
             control, config, episode_uid=f"second-{index}",
             metrics={"score": [3.0, 7.0][index], "won": index == 1},
         )
-    control._finish_launch(second.id, 0)
+    launcher.finish(second.id)
+    assert control.launch(second.id).status == "COMPLETED"
 
     evidence = control.experiment_detail(locked.id)["cell_evidence"]
     assert len(evidence) == 1
@@ -358,7 +358,7 @@ def test_the_fact_table_joins_its_dimensions_in_one_file(tmp_path):
     """The join the two-file layout made impossible."""
     control = _control(tmp_path)
     experiment = _experiment(control)
-    control.launcher = SilentLauncher(control)
+    launcher = _silent(control)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     for episode_id in control.planned_episode_ids(launch.id):
         _record_episode(control, episode_id)

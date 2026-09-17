@@ -44,6 +44,6 @@ export function LaunchView() {
       { label: "status", render: (attempt) => <Chip tone={STATUS_TONE[attempt.status] ?? "plain"}>{attempt.status}</Chip> },
       { label: "diagnostic", render: (attempt) => attempt.error ?? (attempt.status === "DRY_RUN" ? "Validated by runner; no episode trace is persisted." : attempt.episode_uri ?? "-") },
     ]} /></section>
-    <section className="card section-card"><div className="section-heading"><h2>Runner log</h2><p>Persisted output remains available after reopening this terminal launch.</p></div>{logs.length ? <pre className="runner-log">{logs.map((entry) => `[${timestamp(entry.created_at)}] ${entry.payload.line ?? ""}`).join("\n")}</pre> : <p className="empty-state">No runner output was recorded for this launch.</p>}</section>
+    <section className="card section-card"><div className="section-heading"><h2>Launch log</h2><p>Persisted output remains available after reopening this terminal launch.</p></div>{logs.length ? <pre className="runner-log">{logs.map((entry) => `[${timestamp(entry.created_at)}] ${entry.payload.line ?? `${entry.kind} ${JSON.stringify(entry.payload)}`}`).join("\n")}</pre> : <p className="empty-state">No launch events were recorded for this launch.</p>}</section>
   </>;
 }

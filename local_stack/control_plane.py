@@ -17,6 +17,11 @@ Because that join needs no live process handle, reconciling after a restart
 follows for free: a launch whose runner died is resolved from the same query,
 and an attempt with no episode row is looked for in the durable event log
 before it is written off.
+
+Launching is a *dispatch*, not a spawn.  The control plane publishes the plan
+as a digest-bound artifact, hands a launcher the reference, persists the opaque
+handle it gets back, and stops caring how the work runs.  Every status
+transition afterwards belongs to :class:`local_stack.reconciler.Reconciler`.
 """
 
 from __future__ import annotations
@@ -26,17 +31,15 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
-import sys
 import threading
-import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterator
 
+from a2a_engine.artifacts import ArtifactRef, make_artifact_store, sha256_bytes
 from a2a_engine.compiler import ExecutionPlan as CompiledExecutionPlan
 from a2a_engine.compiler import compile as compile_design
 from a2a_engine.compiler import validate as validate_design
@@ -51,21 +54,15 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace
 import yaml
 
-
-_LIVE_RESULT = re.compile(r"INFO expt_runner: ok\s+(?P<episode>\S+)\s+->\s+(?P<uri>\S+)")
-_SMOKE_RESULT = re.compile(
-    r"^\s*OK\s+(?P<episode>\S+)\s+\[[^]]+\]\s+->\s+(?P<uri>\S+)"
+from local_stack.launchers import (
+    SMOKE_EPISODES_PER_CELL,
+    ExecutionHandle,
+    ExecutionStatus,
+    LaunchInputRef,
+    Launcher,
+    make_launcher,
 )
-_LIVE_FAILURE = re.compile(r"ERROR expt_runner: fail\s+(?P<episode>\S+):\s*(?P<error>.*)")
-_SMOKE_FAILURE = re.compile(
-    r"^\s*FAIL\s+(?P<episode>\S+)\s+\[[^]]+\]:\s*(?P<error>.*)"
-)
-
-# ``--smoke-test`` exercises the sink and the environment wiring, so the runner
-# executes this many runs per cell rather than the cell's declared count.
-# The control plane must plan exactly what the runner will execute; otherwise
-# it would record episode attempts that never ran.
-SMOKE_EPISODES_PER_CELL = 1
+from local_stack.reconciler import Reconciler
 
 
 def _now() -> str:
@@ -78,6 +75,38 @@ def _json(value: object) -> str:
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _attempt_diagnostic(execution: ExecutionStatus, *, cancelled: bool, partial: bool) -> str:
+    """Say why an attempt left no completed episode, without claiming a cause.
+
+    The evidence is identical in every branch -- no ``COMPLETED`` row -- so
+    this describes the execution around it rather than the result, and says so
+    when a partial trace was recovered instead of written off.
+    """
+    if cancelled:
+        subject = "this execution was cancelled"
+    elif execution is ExecutionStatus.FAILED:
+        subject = "the worker execution failed"
+    elif execution is ExecutionStatus.SUCCEEDED:
+        subject = "the worker execution finished"
+    else:
+        subject = "the worker execution did not survive"
+    if partial:
+        return (
+            f"{subject}; a partial trace was recovered from this episode's event log"
+        )
+    return f"{subject} and persisted no episode for this attempt"
+
+
+def _launch_diagnostic(execution: ExecutionStatus) -> str:
+    if execution is ExecutionStatus.FAILED:
+        return "the worker execution failed; settled from persisted evidence"
+    if execution is ExecutionStatus.SUCCEEDED:
+        return "the worker execution finished without persisting every planned episode"
+    if execution is ExecutionStatus.CANCELLED:
+        return "the execution was cancelled; settled from persisted evidence"
+    return "the worker execution did not survive; settled from persisted evidence"
 
 
 def _roleless_design_sha256(design) -> str:
@@ -138,6 +167,12 @@ class Launch:
     created_at: str
     mode: str = "live"
     execution_path: str | None = None
+    # The launch input as the worker sees it: an address and the digest it must
+    # hash to. Nothing else crosses -- no workspace path, no experiment id.
+    launch_input_uri: str | None = None
+    launch_input_sha256: str | None = None
+    # Opaque to everything here except the launcher that minted it.
+    execution_handle: str | None = None
     shard_index: int | None = None
     shard_count: int | None = None
     started_at: str | None = None
@@ -177,94 +212,13 @@ class DesignDigestMismatch(ValueError):
     """A lock or launch received text different from the preregistered digest."""
 
 
-
-class Launcher(Protocol):
-    def launch(self, launch: Launch, experiment: Experiment, on_line, *, smoke_test: bool = False) -> None: ...
-
-    def cancel(self, launch_id: str) -> bool: ...
-
-
-class LocalLauncher:
-    """Start the existing runner as a bounded local child process."""
-
-    def __init__(self, workspace: Path, control: "ControlPlane") -> None:
-        self.workspace = workspace
-        self.control = control
-        self._processes: dict[str, subprocess.Popen[str]] = {}
-        self._lock = threading.Lock()
-
-    def launch(self, launch: Launch, experiment: Experiment, on_line, *, smoke_test: bool = False) -> None:
-        command = [
-            sys.executable,
-            "-m",
-            "expt_runner.run_experiment",
-            launch.execution_path or experiment.yaml_path,
-            "--storage-path",
-            launch.trace_database,
-            "--max-parallelism",
-            str(launch.max_parallelism),
-            # The workspace may be mounted read-only so host edits are live;
-            # run artifacts belong beside the trace database regardless.
-            "--results-dir",
-            str(Path(launch.trace_database).parent / "results"),
-        ]
-        if smoke_test:
-            command += ["--smoke-test", "--smoke-episodes-per-cell", str(SMOKE_EPISODES_PER_CELL)]
-        if launch.mode == "dry_run":
-            command.append("--dry-run")
-        env = dict(os.environ)
-        env.setdefault("A2A_CAPTURE_CONTENT", "true")
-        env.setdefault("OTEL_TRACES_EXPORTER", "file")
-        env.setdefault(
-            "A2A_OTEL_TRACES_FILE",
-            str(Path(launch.trace_database).with_name("otel-spans.jsonl")),
-        )
-        # A launch uses one deterministic stream namespace; each runner
-        # context appends its own episode suffix.  The URL stays outside all
-        # persisted experiment/trace metadata.
-        if env.get("A2A_REDIS_URL"):
-            env["A2A_LAUNCH_ID"] = launch.id
-            env["A2A_REDIS_STREAM_PREFIX"] = f"a2a:launch:{launch.id}"
-        process = subprocess.Popen(
-            command,
-            cwd=self.workspace,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        with self._lock:
-            self._processes[launch.id] = process
-        self.control._mark_launch_started(launch.id)
-
-        def watch() -> None:
-            try:
-                assert process.stdout is not None
-                for line in process.stdout:
-                    on_line(line.rstrip())
-                code = process.wait()
-                self.control._finish_launch(launch.id, code)
-            finally:
-                with self._lock:
-                    self._processes.pop(launch.id, None)
-
-        threading.Thread(target=watch, name=f"a2a-launch-{launch.id}", daemon=True).start()
-
-    def cancel(self, launch_id: str) -> bool:
-        with self._lock:
-            process = self._processes.get(launch_id)
-        if process is None or process.poll() is not None:
-            return False
-        process.terminate()
-        return True
-
-
 class ControlPlane:
     """Persistence, validation, and event log for local releases and launches."""
 
     def __init__(self, path: str | Path, *, workspace: str | Path,
-                 results_dir: str | Path | None = None) -> None:
+                 results_dir: str | Path | None = None,
+                 artifact_root: str | Path | None = None,
+                 launcher_spec: dict[str, Any] | None = None) -> None:
         self.path = Path(path)
         self.workspace = Path(workspace).resolve()
         # One database. The episode store writes ``episodes`` into the same
@@ -272,14 +226,34 @@ class ControlPlane:
         # and retires the ``trace_uri`` regex entirely.
         self.trace_database = self.path
         self.results_dir = Path(results_dir) if results_dir else self.path.parent / "results"
+        # Where launch inputs are published. Separate from ``results_dir``
+        # already, because Phase 2 gives the worker a results directory the
+        # control plane cannot read while the artifact root stays shared.
+        self.artifact_root = (
+            Path(artifact_root) if artifact_root else self.results_dir / "artifacts"
+        )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
-        self.launcher: Launcher = LocalLauncher(self.workspace, self)
-        # A launcher persists no PID and its watcher thread dies with the
-        # process, so a launch interrupted by a restart would otherwise read
-        # RUNNING forever. Nothing is live yet at construction time, so every
-        # non-terminal launch found here is by definition stranded.
-        self.reconcile()
+        self.artifacts = make_artifact_store(
+            {"backend": "local"}, root=self.artifact_root
+        )
+        self.launcher: Launcher = make_launcher(
+            {"backend": "local_process", "workspace": self.workspace, **(launcher_spec or {})}
+        )
+        self.reconciler = Reconciler(self)
+        # Launches this process is between committing and submitting. A
+        # handle-less launch is normally stranded, but for the width of one
+        # submit() it is merely young, and the server is threaded: a read
+        # arriving in that window must not settle a launch that is starting.
+        # Deliberately in-memory and deliberately not persisted -- after a
+        # restart the set is empty, which is exactly when a handle-less launch
+        # really is an orphan nobody is dispatching.
+        self._dispatching: set[str] = set()
+        self._dispatching_lock = threading.Lock()
+        # A launcher this instance did not start owns nothing, so every
+        # non-terminal launch found at construction is by definition stranded
+        # and settles from the evidence its worker managed to persist.
+        self.reconciler.tick()
 
     def _connect(self) -> sqlite3.Connection:
         # The runner subprocess writes episodes into this same file, so the two
@@ -1058,9 +1032,22 @@ class ControlPlane:
 
         if design_configs is not None:
             execution_path = self._write_execution_plan(launch.id, experiment, design_configs)
-            launch = Launch(
-                **{**asdict(launch), "execution_path": execution_path}
+            input_ref = self._publish_launch_input(
+                launch.id, Path(execution_path).read_bytes()
             )
+        else:
+            # A legacy YAML experiment has no compiled plan to publish, so its
+            # launch input is the reviewed workspace file itself -- referenced
+            # in place, still digest-bound. Copying it would move it away from
+            # the sidecars and agent pool it resolves against, which is a
+            # behaviour change the boundary does not require.
+            input_ref = self._reference_launch_input(experiment)
+        launch = Launch(**{
+            **asdict(launch),
+            "execution_path": execution_path,
+            "launch_input_uri": input_ref.uri,
+            "launch_input_sha256": input_ref.sha256,
+        })
 
         with self._session() as db:
             if design_bank is not None:
@@ -1071,10 +1058,12 @@ class ControlPlane:
                 )
             db.execute(
                 "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
-                "mode, execution_path, shard_index, shard_count, created_at, started_at, ended_at, error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "mode, execution_path, launch_input_uri, launch_input_sha256, "
+                "shard_index, shard_count, created_at, started_at, ended_at, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (launch.id, launch.experiment_id, launch.status, launch.max_parallelism,
-                 launch.trace_database, launch.mode, launch.execution_path, launch.shard_index,
+                 launch.trace_database, launch.mode, launch.execution_path,
+                 launch.launch_input_uri, launch.launch_input_sha256, launch.shard_index,
                  launch.shard_count, launch.created_at, launch.started_at, launch.ended_at, launch.error),
             )
             db.executemany(
@@ -1087,11 +1076,59 @@ class ControlPlane:
             )
             self._event(db, launch.id, "launch.queued", {
                 "episode_count": len(attempt_rows), "mode": mode,
+                "launch_input_uri": launch.launch_input_uri,
+                "launch_input_sha256": launch.launch_input_sha256,
             })
-        self.launcher.launch(
-            launch, experiment, lambda line: self._line(launch.id, line), smoke_test=mode == "smoke",
-        )
+
+        # Everything above committed before anything was dispatched, so a
+        # process that dies here leaves a QUEUED launch the reconciler settles
+        # rather than an execution nothing recorded.
+        self._dispatch(launch, LaunchInputRef(
+            uri=str(launch.launch_input_uri), sha256=str(launch.launch_input_sha256),
+        ))
         return self.launch(launch.id)
+
+    def _dispatch(self, launch: Launch, input_ref: LaunchInputRef) -> None:
+        """Hand the launch to the launcher and persist the handle it returns."""
+        now = _now()
+        with self._dispatching_lock:
+            self._dispatching.add(launch.id)
+        try:
+            try:
+                handle = self.launcher.submit(launch, input_ref)
+            except Exception as exc:
+                # Dispatch is on the identity path, not the observability one: a
+                # launch that was never submitted must say so rather than sit in
+                # QUEUED waiting for a worker that does not exist.
+                with self._session() as db:
+                    db.execute(
+                        "UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?",
+                        ("FAILED", now, f"dispatch failed: {exc}", launch.id),
+                    )
+                    db.execute(
+                        "UPDATE attempts SET status = ?, ended_at = ?, error = ? "
+                        "WHERE launch_id = ? AND status = ?",
+                        ("FAILED", now, f"dispatch failed: {exc}", launch.id, "QUEUED"),
+                    )
+                    self._event(db, launch.id, "launch.failed", {"error": f"dispatch failed: {exc}"})
+                raise
+            with self._session() as db:
+                db.execute(
+                    "UPDATE launches SET execution_handle = ?, status = ?, started_at = ? WHERE id = ?",
+                    (handle.to_json(), "RUNNING", now, launch.id),
+                )
+                db.execute(
+                    "UPDATE attempts SET status = ?, started_at = ? WHERE launch_id = ? AND status = ?",
+                    ("RUNNING", now, launch.id, "QUEUED"),
+                )
+                self._event(db, launch.id, "launch.submitted", {
+                    "backend": handle.backend, "handle": handle.id,
+                })
+        finally:
+            # Released only once the handle is durable (or the failure is), so
+            # the reconciler never observes the gap between the two.
+            with self._dispatching_lock:
+                self._dispatching.discard(launch.id)
 
     def _design_episode_configs(self, experiment: Experiment, *, mode: str) -> list[dict[str, Any]]:
         """Read the locked fixed plan or compile an unlocked smoke/dry-run draft."""
@@ -1160,17 +1197,58 @@ class ControlPlane:
         )
         return str(path)
 
+    def _publish_launch_input(self, launch_id: str, plan_bytes: bytes) -> ArtifactRef:
+        """Publish the rendered plan as the launch's addressable input.
+
+        The digest binds the plan's *own* bytes, deliberately not the
+        experiment's current ``design_sha256``. Role normalization can rewrite
+        a locked design's text and digest while the frozen
+        ``episode_configs[].provenance.design_sha256`` keeps the authored one,
+        so the two may legitimately differ and nothing downstream may assume
+        they agree.
+        """
+        return self.artifacts.put(f"launches/{launch_id}/plan.yaml", plan_bytes)
+
+    def _reference_launch_input(self, experiment: Experiment) -> ArtifactRef:
+        """Reference a legacy experiment YAML in place, bound to its digest.
+
+        Nothing re-validated this file's bytes between registration and
+        execution before; now the worker refuses to parse it unless it still
+        hashes to what the launch recorded.
+        """
+        path = self._workspace_path(experiment.yaml_path)
+        return ArtifactRef(uri=path.as_uri(), sha256=sha256_bytes(path.read_bytes()))
+
     def cancel_launch(self, launch_id: str) -> Launch:
+        """Request termination; the reconciler settles the final status.
+
+        ``CANCELLING`` is a genuinely transient state rather than a claim: a
+        cancelled shard's in-flight episode is still recovered as ``PARTIAL``,
+        because recording partial evidence is strictly more information than
+        discarding it.
+        """
         launch = self.launch(launch_id)
         if launch.status not in {"QUEUED", "RUNNING"}:
             return launch
-        if self.launcher.cancel(launch_id):
+        handle = ExecutionHandle.from_json(launch.execution_handle)
+        if handle is not None and self.launcher.cancel(handle):
             with self._session() as db:
                 db.execute("UPDATE launches SET status = ? WHERE id = ?", ("CANCELLING", launch_id))
                 self._event(db, launch_id, "launch.cancelling", {})
-        return self.launch(launch_id)
+        # Deliberately not a reconciling read: a cancel request reports that it
+        # was accepted, and the next read settles the final status from the
+        # evidence the worker left behind.
+        return self._launch_row(launch_id)
 
     def launch(self, launch_id: str) -> Launch:
+        # Every read that asks about a launch first gives the reconciler a
+        # chance to advance it. Reconciliation is the only writer of launch
+        # status, so a read is where an unattended local stack learns that a
+        # worker exited -- no background thread, no cadence to tune.
+        self.reconciler.tick()
+        return self._launch_row(launch_id)
+
+    def _launch_row(self, launch_id: str) -> Launch:
         with self._session() as db:
             row = db.execute("SELECT * FROM launches WHERE id = ?", (launch_id,)).fetchone()
         if row is None:
@@ -1205,10 +1283,12 @@ class ControlPlane:
                 "episode_uid": row["episode_uid"],
                 "redis_stream": prefix + row["episode_id"],
             } for row in attempts],
-            "progress": self.progress(launch_id),
-            # This is a durable read of launch_events, not an SSE replay. A
-            # terminal launch can therefore be reopened with its runner output.
-            "runner_logs": [event for event in self.events(launch_id) if event["kind"] == "runner.log"],
+            "progress": self._progress_rows(launch_id),
+            # Every launch event, not only the parsed stdout lines that used to
+            # be the only kind here. The worker's stdout belongs to its
+            # platform now; what a researcher reopens is the control plane's
+            # own durable record of what it did and what it then observed.
+            "runner_logs": self.events(launch_id),
         }
 
     def planned_episode_ids(self, launch_id: str) -> list[str]:
@@ -1233,6 +1313,10 @@ class ControlPlane:
         A ``PARTIAL`` episode is a recovered fragment, not a completed run, so
         it is deliberately not counted.
         """
+        self.reconciler.tick()
+        return self._progress_rows(launch_id)
+
+    def _progress_rows(self, launch_id: str) -> dict[str, Any]:
         with self._session() as db:
             rows = db.execute(
                 """
@@ -1262,33 +1346,38 @@ class ControlPlane:
             "failed": sum(cell["failed"] for cell in by_cell),
         }
 
-    def reconcile(self) -> list[str]:
-        """Resolve launches whose runner process did not survive.
-
-        Called at construction, when no launch this instance started can be
-        live, so a non-terminal row here means the process that owned it is
-        gone. Each attempt is resolved from the identity join; one with no
-        episode row is looked for in the durable event log first, because an
-        attempt that died mid-episode is recoverable as a partial trace and
-        that is evidence worth keeping rather than a gap to write off.
-        """
-        live = set(getattr(self.launcher, "_processes", {}) or {})
+    def _open_launches(self) -> list[Launch]:
+        """Every launch the reconciler is still responsible for."""
         with self._session() as db:
-            stranded = [
-                self._launch(row) for row in db.execute(
-                    "SELECT * FROM launches WHERE status IN ('QUEUED', 'RUNNING', 'CANCELLING')"
-                ).fetchall()
-            ]
-        resolved: list[str] = []
-        for launch in stranded:
-            if launch.id in live:
-                continue
-            self._reconcile_launch(launch)
-            resolved.append(launch.id)
-        return resolved
+            rows = db.execute(
+                "SELECT * FROM launches WHERE status IN ('QUEUED', 'RUNNING', 'CANCELLING') "
+                "ORDER BY created_at"
+            ).fetchall()
+        with self._dispatching_lock:
+            in_flight = frozenset(self._dispatching)
+        return [self._launch(row) for row in rows if row["id"] not in in_flight]
 
-    def _reconcile_launch(self, launch: Launch) -> None:
-        cancelled = launch.status == "CANCELLING"
+    def reconcile(self) -> list[str]:
+        """Advance every open launch once. Kept as the public spelling of a tick."""
+        return self.reconciler.tick()
+
+    def _settle_from_evidence(self, launch: Launch, *,
+                              execution: ExecutionStatus = ExecutionStatus.UNKNOWN) -> None:
+        """Settle a launch by joining ``attempts`` against the fact table.
+
+        ``execution`` is the launcher's liveness hint. It never decides whether
+        an episode exists -- only the join does that -- and it is consulted for
+        exactly two things the evidence genuinely cannot answer: whether a stop
+        was requested, and how to *describe* an attempt that left no trace at
+        all. An attempt whose worker claimed success but persisted nothing
+        still lands ``UNREPORTED``, which is the gap staying visible rather
+        than a result being invented.
+        """
+        cancelled = launch.status == "CANCELLING" or execution is ExecutionStatus.CANCELLED
+        # A dry run validates reachability and deliberately writes no trace, so
+        # there is no evidence to join against and its absence is the expected
+        # outcome rather than a gap.
+        dry_run = launch.mode == "dry_run" and execution is ExecutionStatus.SUCCEEDED
         now = _now()
         with self._session() as db:
             attempts = [
@@ -1304,6 +1393,7 @@ class ControlPlane:
                 ).fetchall()
             }
         recovered: list[str] = []
+        unreported: list[str] = []
         for attempt in attempts:
             episode_uid = completed.get((attempt.episode_id, attempt.attempt))
             if episode_uid is not None:
@@ -1312,38 +1402,49 @@ class ControlPlane:
                     episode_uri=self._store().uri(episode_uid), error=None, ended_at=now,
                 )
                 continue
+            if dry_run:
+                self._resolve_attempt(
+                    attempt, status="DRY_RUN", episode_uri=None, error=None, ended_at=now,
+                )
+                continue
             partial_uri = self._recover_partial(attempt)
             if partial_uri is not None:
                 recovered.append(attempt.episode_id)
+            else:
+                unreported.append(attempt.episode_id)
             self._resolve_attempt(
                 attempt,
-                status="CANCELLED" if cancelled else "UNREPORTED",
-                episode_uri=partial_uri,
-                error=(
-                    "the runner process did not survive; a partial trace was recovered "
-                    "from this episode's event log"
-                    if partial_uri else
-                    "the runner process did not survive and reported no result for this episode"
+                status=(
+                    "CANCELLED" if cancelled
+                    else "FAILED" if execution is ExecutionStatus.FAILED
+                    else "UNREPORTED"
                 ),
+                episode_uri=partial_uri,
+                error=_attempt_diagnostic(execution, cancelled=cancelled, partial=bool(partial_uri)),
                 ended_at=now,
             )
         with self._session() as db:
             outstanding = db.execute(
-                "SELECT COUNT(*) AS n FROM attempts WHERE launch_id = ? AND status != 'COMPLETED'",
+                "SELECT COUNT(*) AS n FROM attempts WHERE launch_id = ? "
+                "AND status NOT IN ('COMPLETED', 'DRY_RUN')",
                 (launch.id,),
             ).fetchone()["n"]
             status = "CANCELLED" if cancelled else ("COMPLETED" if not outstanding else "FAILED")
             db.execute(
                 "UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?",
-                (status, now,
-                 None if status == "COMPLETED" else "reconciled after restart: the runner "
-                 "process did not survive",
+                (status, now, None if status == "COMPLETED" else _launch_diagnostic(execution),
                  launch.id),
             )
-            self._event(db, launch.id, "launch.reconciled", {
-                "status": status, "recovered_episode_ids": recovered,
+            if unreported:
+                self._event(db, launch.id, "launch.unreported_episodes",
+                            {"episode_ids": unreported})
+            self._event(db, launch.id, "launch.settled", {
+                "status": status, "execution_status": execution.value,
+                "recovered_episode_ids": recovered,
             })
-            self._event(db, launch.id, f"launch.{status.lower()}", {"reconciled": True})
+            self._event(db, launch.id, f"launch.{status.lower()}", {
+                "execution_status": execution.value,
+            })
 
     def _resolve_attempt(self, attempt: Attempt, *, status: str, episode_uri: str | None,
                          error: str | None, ended_at: str) -> None:
@@ -1392,6 +1493,7 @@ class ControlPlane:
         return int(row["next"])
 
     def launches(self) -> list[Launch]:
+        self.reconciler.tick()
         with self._session() as db:
             rows = db.execute("SELECT * FROM launches ORDER BY created_at DESC").fetchall()
         return [self._launch(row) for row in rows]
@@ -1545,116 +1647,6 @@ class ControlPlane:
         if row is None:
             raise ValueError(f"no local release registered for environment {environment_id!r}")
         return self._release(row)
-
-    def _line(self, launch_id: str, line: str) -> None:
-        """Fold one runner stdout line into the launch event log.
-
-        This is a *latency* path, not a truth path: it is what makes a live
-        launch feel responsive before the next progress query. Whether an
-        episode actually exists is settled by the identity join in
-        :meth:`progress` and :meth:`_finish_launch`, which is why a lost line
-        can no longer strand an attempt that in fact completed.
-        """
-        if not line:
-            return
-        with self._session() as db:
-            self._event(db, launch_id, "runner.log", {"line": line})
-            result = _LIVE_RESULT.search(line) or _SMOKE_RESULT.search(line)
-            if result:
-                identifier, uri = result["episode"], result["uri"]
-                # The URI is useful provenance, but an emitted line is never
-                # proof that a trace was committed. _finish_launch settles the
-                # attempt from the episodes identity join.
-                db.execute(
-                    "UPDATE attempts SET episode_uri = COALESCE(episode_uri, ?) "
-                    "WHERE launch_id = ? AND episode_id = ?",
-                    (uri, launch_id, identifier),
-                )
-                self._event(db, launch_id, "episode.reported", {"episode_id": identifier, "episode_uri": uri})
-                return
-            # A failed episode reports its own diagnostic. Attributing it to
-            # that attempt keeps the per-episode error out of the launch-wide
-            # exit status, which cannot say which run broke.
-            failure = _LIVE_FAILURE.search(line) or _SMOKE_FAILURE.search(line)
-            if failure:
-                identifier, error = failure["episode"], failure["error"].strip()
-                db.execute(
-                    "UPDATE attempts SET error = ? WHERE launch_id = ? AND episode_id = ?",
-                    (error, launch_id, identifier),
-                )
-                self._event(db, launch_id, "episode.failed", {"episode_id": identifier, "error": error})
-
-    def _mark_launch_started(self, launch_id: str) -> None:
-        now = _now()
-        with self._session() as db:
-            db.execute("UPDATE launches SET status = ?, started_at = ? WHERE id = ?", ("RUNNING", now, launch_id))
-            db.execute("UPDATE attempts SET status = ?, started_at = ? WHERE launch_id = ? AND status = ?", ("RUNNING", now, launch_id, "QUEUED"))
-            self._event(db, launch_id, "launch.started", {})
-
-    def _finish_launch(self, launch_id: str, code: int) -> None:
-        with self._session() as db:
-            current = db.execute("SELECT status, mode FROM launches WHERE id = ?", (launch_id,)).fetchone()
-            cancelled = current and current["status"] == "CANCELLING"
-            status = "CANCELLED" if cancelled else ("COMPLETED" if code == 0 else "FAILED")
-            error = None if code == 0 or cancelled else f"runner exited with status {code}"
-            now = _now()
-            db.execute("UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?", (status, now, error, launch_id))
-            # Settle every still-open attempt against the episodes table before
-            # judging it silent. A dropped stdout line is a reporting failure,
-            # not a missing episode, and the join can tell the two apart.
-            db.execute(
-                """
-                UPDATE attempts
-                SET status = 'COMPLETED', ended_at = ?,
-                    episode_uri = COALESCE(episode_uri, (
-                        SELECT ? || e.episode_uid FROM episodes e
-                        WHERE e.episode_id = attempts.episode_id
-                          AND e.attempt = attempts.attempt
-                          AND e.status = 'COMPLETED'
-                        LIMIT 1
-                    ))
-                WHERE launch_id = ? AND episode_id IN (
-                    SELECT e.episode_id FROM episodes e
-                    WHERE e.attempt = attempts.attempt AND e.status = 'COMPLETED'
-                )
-                """,
-                (now, f"{self._store().uri()}#", launch_id),
-            )
-            if current and current["mode"] == "dry_run" and code == 0 and not cancelled:
-                db.execute(
-                    "UPDATE attempts SET status = ?, ended_at = ?, error = NULL "
-                    "WHERE launch_id = ? AND status != 'COMPLETED'",
-                    ("DRY_RUN", now, launch_id),
-                )
-            elif code == 0 and not cancelled:
-                # The runner exits zero only after every scheduled run
-                # succeeded, so a still-RUNNING attempt means the CLI never
-                # reported that episode. Recording it as COMPLETED would
-                # invent a result and a missing trace URI; UNREPORTED keeps
-                # the gap visible instead.
-                unreported = [
-                    row["episode_id"]
-                    for row in db.execute(
-                        "SELECT episode_id FROM attempts WHERE launch_id = ? AND status != ?",
-                        (launch_id, "COMPLETED"),
-                    ).fetchall()
-                ]
-                if unreported:
-                    db.execute(
-                        "UPDATE attempts SET status = ?, ended_at = ?, error = ? "
-                        "WHERE launch_id = ? AND status != ?",
-                        ("UNREPORTED", now, "runner exited 0 without reporting this episode",
-                         launch_id, "COMPLETED"),
-                    )
-                    self._event(db, launch_id, "launch.unreported_episodes",
-                                {"episode_ids": unreported})
-            else:
-                db.execute(
-                    "UPDATE attempts SET status = ?, ended_at = ?, error = COALESCE(error, ?) "
-                    "WHERE launch_id = ? AND status != ?",
-                    ("CANCELLED" if cancelled else "FAILED", now, error, launch_id, "COMPLETED"),
-                )
-            self._event(db, launch_id, f"launch.{status.lower()}", {"exit_code": code, "error": error})
 
     @staticmethod
     def _event(db: sqlite3.Connection, launch_id: str, kind: str, payload: dict[str, Any]) -> None:

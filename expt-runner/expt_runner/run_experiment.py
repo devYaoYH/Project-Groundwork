@@ -45,6 +45,7 @@ from a2a_engine import (
     run_with_parallelism,
 )
 from a2a_engine._context import current_conversation_id
+from a2a_engine.artifacts import ArtifactDigestMismatch, ArtifactRef, materialize
 from a2a_engine.event_sink import current_event_sink, open_event_sink
 from a2a_engine.experiment import resolve_storage
 from a2a_engine.manifest import EpisodeManifest, git_hash
@@ -56,6 +57,31 @@ from a2a_engine.storage.local import LocalJSONStore
 from a2a_engine.tracing_otel import get_tracer, init_tracing, shutdown_tracing
 
 log = logging.getLogger("expt_runner")
+
+
+class LaunchInputMismatch(ValueError):
+    """The published launch input is not the one this worker was told to run.
+
+    Fail closed, deliberately. Every other digest in this codebase refuses
+    rather than degrades -- ``DesignDigestMismatch`` at lock time and again at
+    launch time -- and the hop between writing a plan and executing it was the
+    one that had no such check.
+    """
+
+
+def _resolve_launch_input(uri: str, sha256: str) -> Path:
+    """Fetch the launch input, verify its digest, and return a loadable path.
+
+    This is the whole worker side of the boundary. It receives an address and
+    a digest, and it refuses to parse anything that does not hash to what it
+    was told -- no workspace path, no experiment id, no call back to the
+    control plane.
+    """
+    try:
+        return materialize(ArtifactRef(uri=uri, sha256=sha256))
+    except ArtifactDigestMismatch as exc:
+        raise LaunchInputMismatch(str(exc)) from exc
+
 
 def _release_facts(environment_id: str | None) -> dict:
     """What the registered release declaration contributes to provenance.
@@ -496,7 +522,14 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run an a2a-engine experiment YAML.")
-    parser.add_argument("yaml_path", help="Path to experiment YAML file")
+    parser.add_argument("yaml_path", nargs="?",
+                        help="Path to experiment YAML file (direct invocation)")
+    parser.add_argument("--launch-input",
+                        help="URI of a published, digest-bound launch input to run "
+                             "instead of a local YAML path.")
+    parser.add_argument("--launch-input-sha256",
+                        help="The SHA-256 the launch input must hash to. Required "
+                             "with --launch-input; a mismatch refuses to run.")
     parser.add_argument("--max-parallelism", type=int, default=4)
     parser.add_argument("--results-dir", default="./results")
     parser.add_argument("--dry-run", action="store_true",
@@ -529,10 +562,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--shard-count must be >= 1")
     if args.shard_index < 0 or args.shard_index >= args.shard_count:
         parser.error("--shard-index must satisfy 0 <= index < shard-count")
+    if bool(args.yaml_path) == bool(args.launch_input):
+        parser.error("pass exactly one of yaml_path or --launch-input")
+    if args.launch_input and not args.launch_input_sha256:
+        parser.error("--launch-input requires --launch-input-sha256")
 
     discover_environments()
 
-    spec = load_experiment(args.yaml_path)
+    if args.launch_input:
+        # Identity is checked before anything is parsed, so an altered plan
+        # fails here rather than producing episodes attributed to the plan that
+        # was reviewed.
+        experiment_path = _resolve_launch_input(args.launch_input, args.launch_input_sha256)
+        log.info("Launch input %s verified as %s", args.launch_input, args.launch_input_sha256)
+    else:
+        experiment_path = Path(args.yaml_path)
+
+    spec = load_experiment(experiment_path)
     _configure_observability(spec.observability, results_dir=Path(args.results_dir))
     init_tracing("a2a-engine")
     log.info("Loaded experiment %r with %d cells", spec.name, len(spec.cells))

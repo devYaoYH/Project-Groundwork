@@ -173,6 +173,15 @@ CREATE TABLE IF NOT EXISTS launches (
     trace_database    TEXT NOT NULL,
     mode              TEXT NOT NULL DEFAULT 'live',
     execution_path    TEXT,
+    -- The addressable launch input and the digest a worker verifies before it
+    -- parses anything. ``execution_path`` keeps meaning what it meant: an
+    -- absolute host path to the rendered plan, useful to a human reading this
+    -- row and to nothing that crosses the execution boundary.
+    launch_input_uri  TEXT,
+    launch_input_sha256 TEXT,
+    -- Opaque to the control plane and persisted rather than held in memory,
+    -- which is what replaces the launcher-private process dict a restart lost.
+    execution_handle  TEXT,
     shard_index       INTEGER,
     shard_count       INTEGER,
     created_at        TEXT NOT NULL,
@@ -290,6 +299,12 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("launches", "execution_path", "ALTER TABLE launches ADD COLUMN execution_path TEXT"),
     ("launches", "shard_index", "ALTER TABLE launches ADD COLUMN shard_index INTEGER"),
     ("launches", "shard_count", "ALTER TABLE launches ADD COLUMN shard_count INTEGER"),
+    ("launches", "launch_input_uri",
+     "ALTER TABLE launches ADD COLUMN launch_input_uri TEXT"),
+    ("launches", "launch_input_sha256",
+     "ALTER TABLE launches ADD COLUMN launch_input_sha256 TEXT"),
+    ("launches", "execution_handle",
+     "ALTER TABLE launches ADD COLUMN execution_handle TEXT"),
 )
 
 

@@ -21,6 +21,8 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from local_stack.server import LocalStackHandler, sse_frame
 from local_stack.control_plane import ControlPlane
+from local_stack.launchers import ExecutionStatus, LaunchInputRef
+from local_stack.tests.fakes import FakeLauncher
 
 
 def _request(server: ThreadingHTTPServer, method: str, path: str) -> tuple[int, dict[str, str], bytes]:
@@ -299,30 +301,22 @@ def test_local_control_plane_registers_a_reviewed_experiment_and_tracks_attempts
         release_id="word_guess", yaml_path="games/word-guess/experiments/example.yaml",
     )
 
-    class CompletingLauncher:
-        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
-            assert smoke_test is True
-            control._mark_launch_started(launch.id)
-            on_line(f"      OK   {experiment.name}.dog.0  [word_guess] -> sqlite:///dog")
-            on_line(f"      OK   {experiment.name}.apple.0  [word_guess] -> sqlite:///apple")
-            control._finish_launch(launch.id, 0)
-
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = CompletingLauncher()
+    # A worker that exits zero having persisted nothing. Its exit code is not
+    # evidence, so every attempt lands UNREPORTED and the launch is FAILED --
+    # the gap stays visible instead of a success being inferred from a claim.
+    launcher = FakeLauncher(on_submit=lambda launch, ref: ExecutionStatus.SUCCEEDED)
+    control.launcher = launcher
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     detail = control.launch_detail(launch.id)
-    assert detail["launch"]["status"] == "COMPLETED"
-    # Runner output is retained for diagnostics, but it is not evidence that a
-    # trace committed. The terminal identity join correctly leaves these fake
-    # runner-only reports visible as gaps.
+    assert detail["launch"]["status"] == "FAILED"
     assert {attempt["status"] for attempt in detail["attempts"]} == {"UNREPORTED"}
-    assert {attempt["episode_uri"] for attempt in detail["attempts"]} == {"sqlite:///dog", "sqlite:///apple"}
+    assert all(attempt["episode_uri"] is None for attempt in detail["attempts"])
     assert all(attempt["episode_uid"] is None for attempt in detail["attempts"])
-    assert [event["payload"]["line"] for event in detail["runner_logs"]] == [
-        f"      OK   {experiment.name}.dog.0  [word_guess] -> sqlite:///dog",
-        f"      OK   {experiment.name}.apple.0  [word_guess] -> sqlite:///apple",
+    # The durable launch record is the control plane's own, not a transcript of
+    # the worker's stdout: what it did, and what it then observed.
+    assert [event["kind"] for event in detail["runner_logs"]] == [
+        "launch.queued", "launch.submitted",
+        "launch.unreported_episodes", "launch.settled", "launch.failed",
     ]
     assert all(attempt["redis_stream"].startswith(f"a2a:launch:{launch.id}:") for attempt in detail["attempts"])
 
@@ -383,20 +377,14 @@ def test_smoke_launch_plans_only_the_runs_the_runner_executes(tmp_path):
     """A smoke run covers one run per cell, so it must not queue cell.count."""
     control, experiment = _buyer_seller_control(tmp_path)
 
-    class RecordingLauncher:
-        def __init__(self):
-            self.command_smoke = None
-
-        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
-            self.command_smoke = smoke_test
-            control._mark_launch_started(launch.id)
-
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = RecordingLauncher()
+    launcher = FakeLauncher()
+    control.launcher = launcher
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     attempts = control.launch_detail(launch.id)["attempts"]
+
+    # The mode rides on the launch record rather than on a dispatch keyword,
+    # so a worker that never talked to this process still knows what to run.
+    assert launcher.submitted[0][0].mode == "smoke"
 
     # example.yaml declares 3 + 3 + 2 + 3 runs across four cells.
     assert len(attempts) == 4
@@ -409,88 +397,87 @@ def test_smoke_launch_plans_only_the_runs_the_runner_executes(tmp_path):
     assert len(control.launch_detail(live.id)["attempts"]) == 11
 
 
+def _persist_episode(control, episode_id: str, *, attempt: int = 1) -> str:
+    """Write an episode into the shared fact table the way a worker would."""
+    config = EpisodeConfigBase(
+        environment_id="buyer_seller", num_agents=2,
+        experiment_name=episode_id.split(".")[0], episode_id=episode_id,
+    )
+    trace = EpisodeTrace(episode_uid=f"uid-{episode_id}", config=config)
+    manifest = EpisodeManifest.from_run(
+        config=config.model_dump(), experiment_name=config.experiment_name or "",
+        cell_id=episode_id.split(".")[1], episode_idx=0, episode_uid=trace.episode_uid,
+    )
+    manifest.episode_id = episode_id
+    manifest.attempt = attempt
+    return SQLiteEpisodeStore(path=control.path).put_episode(trace, manifest)
+
+
 def test_launch_does_not_complete_episodes_without_persisted_trace(tmp_path):
-    """A stdout report is provenance, not proof that the trace committed."""
+    """A worker's exit status is provenance, not proof that a trace committed."""
     control, experiment = _buyer_seller_control(tmp_path)
 
-    class PartialLauncher:
-        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
-            control._mark_launch_started(launch.id)
-            on_line(
-                f"      OK   {experiment.name}.wide_surplus.0  [buyer_seller] -> sqlite:///wide"
-            )
-            control._finish_launch(launch.id, 0)
+    def worker(launch, _ref):
+        # One episode of four actually reached the fact table before the
+        # worker exited successfully.
+        _persist_episode(control, f"{experiment.name}.wide_surplus.0")
+        return ExecutionStatus.SUCCEEDED
 
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = PartialLauncher()
+    control.launcher = FakeLauncher(on_submit=worker)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     detail = control.launch_detail(launch.id)
 
     by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
-    reported = by_episode[f"{experiment.name}.wide_surplus.0"]
-    assert reported["status"] == "UNREPORTED"
-    assert reported["episode_uri"] == "sqlite:///wide"
+    persisted = by_episode[f"{experiment.name}.wide_surplus.0"]
+    assert persisted["status"] == "COMPLETED"
+    assert persisted["episode_uri"].endswith(f"#uid-{experiment.name}.wide_surplus.0")
 
     silent = by_episode[f"{experiment.name}.monotonic.0"]
     assert silent["status"] == "UNREPORTED"
     assert silent["episode_uri"] is None
+    # The launch is not COMPLETED just because its worker exited zero.
+    assert detail["launch"]["status"] == "FAILED"
 
 
-def test_failed_episodes_keep_their_own_runner_diagnostic(tmp_path):
-    """A launch-wide exit code cannot say which episode broke; the line can."""
+def test_a_failed_worker_settles_each_attempt_from_evidence(tmp_path):
+    """A launch-wide exit status cannot say which episode broke; the join can.
+
+    The four stdout regexes used to attribute a per-episode diagnostic, but no
+    test ever proved the real runner's output matched them, and the parse could
+    not have survived a worker on another machine. What survives is the part
+    that was always load-bearing: the episode a worker managed to persist is
+    COMPLETED and every other attempt is visibly not.
+    """
     control, experiment = _buyer_seller_control(tmp_path)
 
-    class FailingLauncher:
-        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
-            control._mark_launch_started(launch.id)
-            on_line(
-                f"      OK   {experiment.name}.wide_surplus.0  [buyer_seller] -> sqlite:///wide"
-            )
-            on_line(
-                f"      FAIL {experiment.name}.monotonic.0  [buyer_seller]: ValueError: bad price"
-            )
-            on_line(
-                f"2026-08-31 10:00:00,000 ERROR expt_runner: fail {experiment.name}.narrow_surplus.0: TimeoutError"
-            )
-            control._finish_launch(launch.id, 1)
+    def worker(launch, _ref):
+        _persist_episode(control, f"{experiment.name}.wide_surplus.0")
+        return ExecutionStatus.FAILED
 
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = FailingLauncher()
+    control.launcher = FakeLauncher(on_submit=worker)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
     detail = control.launch_detail(launch.id)
 
     assert detail["launch"]["status"] == "FAILED"
     by_episode = {attempt["episode_id"]: attempt for attempt in detail["attempts"]}
-    assert by_episode[f"{experiment.name}.monotonic.0"]["error"] == "ValueError: bad price"
-    assert by_episode[f"{experiment.name}.narrow_surplus.0"]["error"] == "TimeoutError"
-    assert by_episode[f"{experiment.name}.wide_surplus.0"]["status"] == "FAILED"
+    assert by_episode[f"{experiment.name}.wide_surplus.0"]["status"] == "COMPLETED"
+    assert by_episode[f"{experiment.name}.monotonic.0"]["status"] == "FAILED"
+    assert "the worker execution failed" in by_episode[f"{experiment.name}.monotonic.0"]["error"]
 
 
 def test_sse_frames_stay_unnamed_so_new_event_kinds_reach_existing_clients(tmp_path):
     """A named SSE frame only reaches a listener registered for that name."""
     control, experiment = _buyer_seller_control(tmp_path)
 
-    class NoisyLauncher:
-        def launch(self, launch, _experiment, on_line, *, smoke_test=False):
-            control._mark_launch_started(launch.id)
-            on_line(f"      FAIL {experiment.name}.monotonic.0  [buyer_seller]: boom")
-            control._finish_launch(launch.id, 0)
-
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = NoisyLauncher()
+    control.launcher = FakeLauncher(on_submit=lambda launch, ref: ExecutionStatus.SUCCEEDED)
     launch = control.launch_experiment(experiment.id, smoke_test=True)
+    control.launch_detail(launch.id)
 
     events = control.events(launch.id, after_id=0)
     kinds = {event["kind"] for event in events}
     # These kinds postdate the browser client, which is exactly the case a
     # name whitelist would have swallowed.
-    assert {"episode.failed", "launch.unreported_episodes"} <= kinds
+    assert {"launch.submitted", "launch.settled", "launch.unreported_episodes"} <= kinds
 
     for event in events:
         frame = sse_frame(event)
@@ -603,14 +590,7 @@ def test_live_and_smoke_launches_plan_different_episode_counts(tmp_path):
     """The UI's run-mode toggle has to reach the plan, not just the CLI flag."""
     control, experiment = _buyer_seller_control(tmp_path)
 
-    class NullLauncher:
-        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
-            control._mark_launch_started(launch.id)
-
-        def cancel(self, _launch_id):
-            return False
-
-    control.launcher = NullLauncher()
+    control.launcher = FakeLauncher()
     smoke = control.launch_experiment(experiment.id, smoke_test=True)
     live = control.launch_experiment(experiment.id, smoke_test=False)
 
@@ -1084,38 +1064,25 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
     has to be told where artifacts go."""
     control, experiment = _buyer_seller_control(tmp_path)
 
-    captured = {}
+    from local_stack.launchers.local_process import LocalProcessLauncher
 
-    class CapturingLauncher:
-        def launch(self, launch, _experiment, _on_line, *, smoke_test=False):
-            control._mark_launch_started(launch.id)
+    control.launcher = FakeLauncher()
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
 
-        def cancel(self, _launch_id):
-            return False
+    launcher = LocalProcessLauncher(control.workspace)
+    command = launcher._command(
+        control.launch(launch.id),
+        LaunchInputRef(uri="file:///plan.yaml", sha256="deadbeef"),
+    )
 
-    from local_stack.control_plane import LocalLauncher
-
-    launcher = LocalLauncher(control.workspace, control)
-    original = __import__("subprocess").Popen
-
-    def fake_popen(command, **kwargs):
-        captured["command"] = command
-        raise RuntimeError("stop before spawning")
-
-    import subprocess
-    subprocess.Popen = fake_popen
-    try:
-        control.launcher = CapturingLauncher()
-        launch = control.launch_experiment(experiment.id, smoke_test=True)
-        try:
-            launcher.launch(control.launch(launch.id), experiment, lambda line: None)
-        except RuntimeError:
-            pass
-    finally:
-        subprocess.Popen = original
-
-    command = captured["command"]
     assert "--results-dir" in command
     results = command[command.index("--results-dir") + 1]
     assert results.endswith("/results")
     assert not results.startswith(str(control.workspace)), "artifacts must not land in the repo"
+    # The plan crosses as an address and a digest, never as a workspace path.
+    assert command[command.index("--launch-input") + 1] == "file:///plan.yaml"
+    assert command[command.index("--launch-input-sha256") + 1] == "deadbeef"
+    # No argument names a path inside the workspace. argv[0] is exempt: which
+    # interpreter runs the worker is the launcher's own business, and a local
+    # checkout's virtualenv legitimately lives in the repo.
+    assert not any(str(control.workspace) in str(part) for part in command[1:])
