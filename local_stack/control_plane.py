@@ -29,7 +29,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import sqlite3
 import threading
@@ -690,6 +689,8 @@ class ControlPlane:
         if declaration.oracle_version is None:
             raise OracleUnavailable(f"environment {environment_id!r} does not ship an oracle")
         item = self._item_bank(environment_id).get(item_id)
+        if item.oracle_result is None:
+            raise OracleUnavailable(f"item {item_id!r} has no published oracle result")
         return {
             "item_id": item.item_id,
             "oracle_version": declaration.oracle_version,
@@ -731,6 +732,7 @@ class ControlPlane:
         from a2a_engine.agent_pool import load_agent_pool
 
         pool = load_agent_pool(self.workspace / "experiments")
+        presence = self.credential_presence(pool.required_credentials(sorted(pool.agents)))
         entries = []
         for name, entry in sorted(pool.agents.items()):
             entries.append({
@@ -741,11 +743,14 @@ class ControlPlane:
                 "api_format": entry.api_format,
                 "api_base": entry.api_base,
                 "credential": entry.credential,
-                "credential_present": (
-                    bool(os.environ.get(entry.credential)) if entry.credential else None
-                ),
+                "credential_present": presence.get(entry.credential, False) if entry.credential else None,
             })
-        return {"agents": entries, "sources": pool.sources}
+        return {"agents": entries, "sources": pool.sources,
+                "credential_presence": presence}
+
+    def credential_presence(self, names: list[str]) -> dict[str, bool]:
+        probe = getattr(self.launcher, "credential_presence", None)
+        return probe(names) if probe else {name: False for name in names}
 
     def read_experiment_config(self, yaml_path: str) -> dict[str, Any]:
         """Return the text of a checked-in experiment config, for review.
@@ -771,22 +776,18 @@ class ControlPlane:
         Reporting the line-up and its credential state before launch is what
         makes that failure avoidable rather than merely explainable.
         """
-        from a2a_engine.llm.factory import (
-            detect_provider, env_var_for_provider, get_api_key_for_provider,
-        )
+        from a2a_engine.llm.factory import detect_provider, env_var_for_provider
 
         path = self._workspace_path(yaml_path)
         spec = load_experiment(path)
-        environment_ids = spec.environment_ids()
-        resolve_hooks = {
-            name: get_environment_spec(name).resolve_config
-            for name in environment_ids if name
-        }
+        from a2a_engine.agent_pool import load_agent_pool
+        pool = load_agent_pool(path)
+        presence = self.credential_presence(pool.required_credentials(sorted(pool.agents)))
 
         agents: list[dict[str, Any]] = []
         seen: set[str] = set()
         declares_agents = False
-        for cell, resolved in expand_cells(spec, resolve_config=resolve_hooks):
+        for cell, resolved in expand_cells(spec):
             if resolved.get("agents"):
                 declares_agents = True
             for index, entry in enumerate(resolved.get("agents") or []):
@@ -809,7 +810,7 @@ class ControlPlane:
                     # A scripted agent needs no credential; an ADC provider
                     # needs one but not from the release.
                     "credential_env_var": env_var or None,
-                    "credential_present": bool(get_api_key_for_provider(provider)) if env_var else None,
+                    "credential_present": presence.get(env_var, False) if env_var else None,
                 })
 
         missing = sorted({
@@ -1113,6 +1114,17 @@ class ControlPlane:
         release = self._release_by_id(experiment.release_id)
         image_digest = release.image_digest if self.launcher.name == "local_container" else None
         grade = "verified" if image_digest else "unverified"
+        from a2a_engine.agent_pool import load_agent_pool
+        pool = load_agent_pool(self.workspace / "experiments")
+        bindings = [str(name) for config in design_configs or []
+                    for agent in config.get("agents", []) if isinstance(agent, dict)
+                    for name in (agent.get("binding"), agent.get("model"))
+                    if name in pool.agents]
+        credentials = pool.required_credentials(bindings)
+        if mode == "live":
+            missing = pool.missing_credentials(bindings, self.credential_presence(credentials))
+            if missing:
+                raise ValueError(f"missing worker credentials: {', '.join(missing)}")
         launch_id = str(uuid.uuid4())
         launch = Launch(
             id=launch_id, experiment_id=experiment.id, status="QUEUED",
@@ -1143,7 +1155,8 @@ class ControlPlane:
                 ]
 
         if design_configs is not None:
-            execution_path = self._write_execution_plan(launch.id, experiment, design_configs)
+            execution_path = self._write_execution_plan(launch.id, experiment, design_configs,
+                                                       credentials=credentials)
             input_ref = self._publish_launch_input(
                 launch.id, Path(execution_path).read_bytes()
             )
@@ -1360,7 +1373,8 @@ class ControlPlane:
         return [json.loads(_json(config)) for config in configs]
 
     def _write_execution_plan(
-        self, launch_id: str, experiment: Experiment, configs: list[dict[str, Any]]
+        self, launch_id: str, experiment: Experiment, configs: list[dict[str, Any]],
+        *, credentials: list[str] | None = None,
     ) -> str:
         """Write runner-native YAML from the fixed per-episode design plan."""
         path = self.results_dir / "plans" / experiment.id / f"{launch_id}.yaml"
@@ -1384,7 +1398,8 @@ class ControlPlane:
                 },
             })
         path.write_text(
-            yaml.safe_dump({"name": experiment.name, "cells": cells}, sort_keys=False),
+            yaml.safe_dump({"name": experiment.name, "cells": cells,
+                            "credentials": credentials or []}, sort_keys=False),
             encoding="utf-8",
         )
         return str(path)
@@ -1973,9 +1988,8 @@ class ControlPlane:
                           smoke_test: bool = False) -> list[tuple[str, str, int]]:
         path = self._workspace_path(experiment.yaml_path)
         spec = load_experiment(path)
-        resolved_hooks = {experiment.environment_id: get_environment_spec(experiment.environment_id).resolve_config}
         attempts: list[tuple[str, str, int]] = []
-        for cell, _ in expand_cells(spec, resolve_config=resolved_hooks):
+        for cell, _ in expand_cells(spec):
             count = SMOKE_EPISODES_PER_CELL if smoke_test else cell.count
             for episode_idx in range(count):
                 attempts.append((f"{spec.name}.{cell.label}.{episode_idx}", cell.label, episode_idx))

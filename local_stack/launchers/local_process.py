@@ -24,7 +24,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 from local_stack.launchers import (
     SMOKE_EPISODES_PER_CELL,
@@ -99,7 +99,7 @@ class LocalProcessLauncher:
         self,
         workspace: str | Path,
         *,
-        credentials: Mapping[str, str] | None = None,
+        credentials: list[str] | None = None,
         env_allowlist: tuple[str, ...] = DEFAULT_ENV_ALLOWLIST,
         python: str | None = None,
         artifact_root: str | Path | None = None,
@@ -114,7 +114,7 @@ class LocalProcessLauncher:
         # default: an always-on control plane that never read a provider key
         # cannot leak one, and the local inner loop gets its keys back through
         # the same named-credential path a hosted worker will use.
-        self.credentials = dict(credentials or {})
+        self.credentials = tuple(credentials or ())
         self.env_allowlist = tuple(env_allowlist)
         self.python = python or sys.executable
         self._processes: dict[str, list[subprocess.Popen[bytes]]] = {}
@@ -249,8 +249,12 @@ class LocalProcessLauncher:
         if env.get("A2A_REDIS_URL"):
             env["A2A_LAUNCH_ID"] = launch.id
             env["A2A_REDIS_STREAM_PREFIX"] = f"a2a:launch:{launch.id}"
-        env.update(self.credentials)
         return env
+
+    def credential_presence(self, names: list[str]) -> dict[str, bool]:
+        # A local process has no separate secret broker. Never probe the
+        # control plane's environment for provider values.
+        return {name: False for name in names}
 
 
 def _factory(**spec: Any) -> LocalProcessLauncher:

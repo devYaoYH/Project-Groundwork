@@ -222,52 +222,37 @@ def test_a_submitted_worker_receives_no_provider_credential(tmp_path, monkeypatc
     assert "A2A_SOMETHING_UNDECLARED" not in env
 
 
-def test_a_credential_reaches_a_worker_only_by_being_named(tmp_path, monkeypatch):
-    """The seam a symbolic credential reference replaces later: the worker's
-    credential environment is supplied explicitly, never inherited."""
+def test_a_named_credential_never_reaches_the_local_control_process(tmp_path, monkeypatch):
     control = _control(tmp_path)
     locked = _locked(control, BUYER_SELLER_DESIGN, release_id="buyer_seller", name="Named creds")
     control.launcher = FakeLauncher()
     launch = control.launch_experiment(locked.id, mode="smoke")
 
-    launcher = LocalProcessLauncher(
-        control.workspace, credentials={"OPENAI_API_KEY": "sk-scoped"},
-    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-scoped")
+    launcher = LocalProcessLauncher(control.workspace, credentials=["OPENAI_API_KEY"])
     env = launcher._environment(control.launch(launch.id))
-    assert env["OPENAI_API_KEY"] == "sk-scoped"
+    assert "OPENAI_API_KEY" not in env
     assert "ANTHROPIC_API_KEY" not in env
 
 
-def test_a_configured_launcher_forwards_exactly_the_declared_names(tmp_path, monkeypatch):
-    """The other half of the invariant: a launcher the control plane configured
-    forwards the pool's declared names and still drops everything else.
-
-    ``required_credentials`` is what decides, so widening the forwarded set is
-    an edit to the agent pool rather than an accident of what this process
-    happens to have exported."""
+def test_a_configured_launcher_names_exactly_the_declared_credentials(tmp_path, monkeypatch):
     _declared_pool(tmp_path, monkeypatch)
     for name in PROVIDER_CREDENTIAL_NAMES:
         monkeypatch.setenv(name, f"secret-{name}")
     monkeypatch.setenv("A2A_SOMETHING_UNDECLARED", "leaked")
 
     credentials = resolve_declared_credentials(WORKSPACE)
-    assert credentials == {
-        "OPENAI_API_KEY": "secret-OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY": "secret-ANTHROPIC_API_KEY",
-    }
+    assert credentials == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
 
     launcher = LocalProcessLauncher(WORKSPACE, credentials=credentials)
     env = launcher._environment(_bare_launch(tmp_path))
 
-    assert env["OPENAI_API_KEY"] == "secret-OPENAI_API_KEY"
-    assert env["ANTHROPIC_API_KEY"] == "secret-ANTHROPIC_API_KEY"
-    # Exported here, declared by nothing: the allowlist did not quietly become
-    # a passthrough just because it now forwards something.
-    assert PROVIDER_CREDENTIAL_NAMES & set(env) == set(credentials)
+    assert not PROVIDER_CREDENTIAL_NAMES & set(env)
+    assert launcher.credentials == tuple(credentials)
     assert "A2A_SOMETHING_UNDECLARED" not in env
 
 
-def test_an_unsatisfied_declared_credential_is_named_rather_than_forwarded_empty(
+def test_an_unsatisfied_declared_credential_is_named_from_worker_presence(
     tmp_path, monkeypatch,
 ):
     """Compose exports every provider variable with a ``${VAR:-}`` default, so
@@ -279,14 +264,16 @@ def test_an_unsatisfied_declared_credential_is_named_rather_than_forwarded_empty
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
 
     pool = load_agent_pool(WORKSPACE / "experiments")
-    assert pool.missing_credentials(sorted(pool.agents)) == ["ANTHROPIC_API_KEY"]
+    assert pool.missing_credentials(sorted(pool.agents), {
+        "OPENAI_API_KEY": True, "ANTHROPIC_API_KEY": False,
+    }) == ["ANTHROPIC_API_KEY"]
 
     credentials = resolve_declared_credentials(WORKSPACE)
-    assert credentials == {"OPENAI_API_KEY": "sk-present"}
+    assert credentials == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
 
     launcher = LocalProcessLauncher(WORKSPACE, credentials=credentials)
     env = launcher._environment(_bare_launch(tmp_path))
-    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env and "OPENAI_API_KEY" not in env
 
 
 def test_the_shipped_pool_declares_every_credential_the_control_plane_forwards(monkeypatch):
@@ -302,7 +289,7 @@ def test_the_shipped_pool_declares_every_credential_the_control_plane_forwards(m
     assert declared, "the shipped pool binds at least one credentialled agent"
 
     resolved = resolve_declared_credentials(WORKSPACE)
-    assert set(resolved) == {name for name in declared if os.environ.get(name)}
+    assert set(resolved) == declared
     assert PROVIDER_CREDENTIAL_NAMES - declared, (
         "a provider name no binding declares is what proves the set is the "
         "pool's rather than the environment's"

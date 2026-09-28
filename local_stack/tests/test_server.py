@@ -621,16 +621,17 @@ def test_worked_examples_are_offered_before_research_configs(tmp_path):
         assert "smoke" in first or "example" in first, f"{environment} leads with {first!r}"
 
 
-def test_compose_passes_provider_credentials_to_both_services(tmp_path):
-    """The viewer spawns the runner subprocess, so a live launch launched from
-    the browser needs the same credentials the runner service gets."""
+def test_compose_keeps_provider_credentials_out_of_the_viewer():
+    """Only the worker services resolve provider keys, never the control plane."""
     import yaml
 
     workspace = Path(__file__).resolve().parents[2]
     compose = yaml.safe_load((workspace / "docker-compose.yml").read_text())
 
     required = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"}
-    for service in ("runner", "viewer"):
+    assert not required & set(compose["services"]["viewer"]["environment"])
+    assert compose["services"]["viewer"]["environment"]["A2A_LAUNCHER_BACKEND"] == "worker_service"
+    for service in ("runner", "worker"):
         environment = compose["services"][service]["environment"]
         missing = required - set(environment)
         assert not missing, f"{service} does not receive {sorted(missing)}"
@@ -1046,14 +1047,18 @@ def test_index_label_comes_from_a_declared_sequence_measure(monkeypatch):
                           grain="sequence", index_label="round"),
         ]})()
 
-    monkeypatch.setattr("local_stack.server.discover_environments", lambda: None)
-    monkeypatch.setattr("local_stack.server.get_environment_spec", lambda name: FakeSpec())
+    class FakeControl:
+        def _release_for(self, environment_id, release_id):
+            if environment_id == "not_installed":
+                raise KeyError(environment_id)
+            return environment_id
+
+        def _design_declaration(self, release):
+            return FakeSpec.declaration
+
+    monkeypatch.setattr(LocalStackHandler, "_control", classmethod(lambda cls: FakeControl()))
     assert LocalStackHandler._index_label("negotiation") == "round"
 
-    monkeypatch.setattr(
-        "local_stack.server.get_environment_spec",
-        lambda name: (_ for _ in ()).throw(KeyError(name)),
-    )
     assert LocalStackHandler._index_label("not_installed") is None
     assert LocalStackHandler._index_label("") is None
 
@@ -1075,8 +1080,7 @@ def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeyp
     assert "gpt-4o-mini" in models
     assert {agent["provider"] for agent in report["agents"]} == {"openai", "anthropic"}
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    control.launcher.credential_presence = lambda names: {name: True for name in names}
     assert control.experiment_agents("games/word-guess/experiments/example.yaml")["ready_for_live"] is True
 
 
@@ -1103,18 +1107,31 @@ def test_agents_without_a_model_need_no_credential(tmp_path):
     assert all(agent["credential_env_var"] is None for agent in report["agents"])
 
 
-def test_compose_mounts_the_workspace_so_host_edits_are_live():
-    """Without this the workspace is only the copy baked into the image, and a
-    config edited on the host silently does not appear until a rebuild."""
+def test_compose_mounts_game_sources_only_into_workers():
+    """The viewer consumes baked release data, not an execution mount."""
     import yaml
 
     workspace = Path(__file__).resolve().parents[2]
     compose = yaml.safe_load((workspace / "docker-compose.yml").read_text())
 
-    for service in ("runner", "viewer"):
+    for service in ("runner", "worker"):
         volumes = compose["services"][service]["volumes"]
         assert "./:/workspace:ro" in volumes, f"{service} does not mount the workspace"
         assert "a2a-data:/data" in volumes
+    assert "./:/workspace:ro" not in compose["services"]["viewer"]["volumes"]
+    assert "a2a-data:/data" in compose["services"]["viewer"]["volumes"]
+
+
+def test_control_plane_sources_do_not_read_provider_values():
+    workspace = Path(__file__).resolve().parents[2]
+    sources = [workspace / "local_stack/control_plane.py", workspace / "local_stack/server.py",
+               workspace / "a2a-engine/a2a_engine/agent_pool.py"]
+    for source in sources:
+        text = source.read_text()
+        assert "os.environ[name]" not in text and "os.environ.get(name)" not in text
+        for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+                     "OPENROUTER_API_KEY", "OLLAMA_API_KEY"):
+            assert f'os.environ["{name}"]' not in text
 
 
 def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):

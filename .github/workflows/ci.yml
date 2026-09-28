@@ -67,8 +67,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Build isolated control-plane and runner images
+        run: docker compose build viewer worker runner
       - name: Build and start the cloud-free viewer
         run: docker compose up --build --detach --wait viewer
+      - name: Assert the viewer has no game entry points or provider keys
+        run: |
+          docker compose exec -T viewer python - <<'PY'
+          import importlib.metadata
+          import os
+          from pathlib import Path
+          names = {entry.name for entry in importlib.metadata.entry_points(group='a2a_engine.environments')}
+          assert not names, names
+          assert not list(Path('/workspace/games').rglob('*.py'))
+          assert not {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_API_KEY'} & os.environ.keys()
+          PY
       - name: Run all-environment SQLite smoke job
         run: docker compose run --rm runner
       - name: Run typed Calendar episode and materialize its post-episode metric

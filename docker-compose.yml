@@ -19,8 +19,8 @@ services:
   runner:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: a2a-comm-local:latest
+      dockerfile: Dockerfile.runner
+    image: a2a-comm-runner:latest
     environment:
       A2A_TRACE_DB: /data/a2a.db
       # Local research runs retain the full OTel projection alongside the
@@ -62,36 +62,48 @@ services:
       redis:
         condition: service_healthy
 
-  # A dependency-free local control plane for browsing the SQLite corpus and
-  # publishing the Calendar OpenSkill snapshot. It tolerates an empty database
-  # so it can start before the first runner job completes.
-  viewer:
-    image: a2a-comm-local:latest
+  # The browser dispatches digest-bound inputs through the artifact queue.
+  # This service alone holds provider keys and executes unverified local work.
+  worker:
+    image: a2a-comm-runner:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.runner
     environment:
-      A2A_TRACE_DB: /data/a2a.db
-      A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
       A2A_REDIS_URL: redis://redis:6379/0
-      A2A_CAPTURE_CONTENT: "true"
-      # Provider credentials are interpolated from the repo-root `.env` (or the
-      # shell) and default to empty, so the credential-free smoke path still
-      # starts with no `.env` present. Nothing is baked into the image.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
     volumes:
-      # The workspace is mounted read-only so an edit to a config or the agent
-      # pool is picked up on the next request, with no rebuild. Everything the
-      # stack writes goes to the data volume, never back into the repository.
       - ./:/workspace:ro
+      - a2a-data:/data
+    command: ["python", "-m", "expt_runner.worker_service"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; assert Path('/data/artifacts/dispatch/presence.json').is_file()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # A local control plane with only published release data and static assets.
+  # It tolerates an empty database before the first runner job completes.
+  viewer:
+    image: a2a-comm-control-plane:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.control-plane
+    environment:
+      A2A_TRACE_DB: /data/a2a.db
+      A2A_OTEL_TRACES_FILE: /data/otel-spans.jsonl
+      A2A_REDIS_URL: redis://redis:6379/0
+      A2A_CAPTURE_CONTENT: "true"
+      A2A_LAUNCHER_BACKEND: worker_service
+    volumes:
       - a2a-data:/data
     ports:
       - "8080:8080"
@@ -99,6 +111,8 @@ services:
       ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--artifact-root", "/data/artifacts", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       redis:
+        condition: service_healthy
+      worker:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/api/health').read()"]

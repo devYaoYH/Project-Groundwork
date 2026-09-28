@@ -69,7 +69,9 @@ def test_missing_credentials_are_reported_by_variable_name(monkeypatch):
         "heuristic": AgentPoolEntry(type="heuristic"),
     })
 
-    assert pool.missing_credentials(["gpt-mini", "haiku", "heuristic"]) == ["OPENAI_API_KEY"]
+    assert pool.missing_credentials(["gpt-mini", "haiku", "heuristic"], {
+        "OPENAI_API_KEY": False, "ANTHROPIC_API_KEY": True,
+    }) == ["OPENAI_API_KEY"]
 
 
 def test_required_credentials_names_a_binding_need_without_reading_a_value(monkeypatch):
@@ -112,7 +114,9 @@ def test_every_missing_credential_is_a_required_credential(monkeypatch):
     names = sorted(pool.agents)
 
     required = pool.required_credentials(names)
-    missing = pool.missing_credentials(names)
+    missing = pool.missing_credentials(names, {
+        "OPENAI_API_KEY": False, "ANTHROPIC_API_KEY": True, "OPENROUTER_API_KEY": False,
+    })
 
     assert set(missing) <= set(required)
     # Present-but-empty counts as missing: Compose exports every provider

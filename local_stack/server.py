@@ -25,7 +25,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from a2a_engine.registry import discover_environments, get_environment_spec
+from a2a_engine.ratings.calendar import CalendarRatingAdapter
 from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
@@ -41,23 +41,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by the Compose entry
 log = logging.getLogger(__name__)
 
 
-def resolve_declared_credentials(workspace: Path | str) -> dict[str, str]:
-    """The provider keys the agent pool declares, resolved for this host.
-
-    A name, a lookup, a value. Never ``dict(os.environ)``, never a prefix
-    match, never a pattern: adding a provider to the pool is what widens this
-    set, which is what keeps the forwarded set small enough to review. A name
-    the pool never declared cannot reach a worker no matter what is exported
-    here, and a declared name nothing satisfies is simply absent -- forwarding
-    an empty string would turn a gap ``missing_credentials`` reports by name
-    into a 401 the worker discovers mid-episode.
-
-    This is deliberately the temporary half. It leaves the always-on control
-    plane holding provider *values*, which is precisely what the credential
-    boundary exists to remove; what survives is the shape of the call, because
-    naming what a launch needs never required reading a value. The later move
-    replaces this mapping with a list of names the worker's platform resolves.
-    """
+def resolve_declared_credentials(workspace: Path | str) -> list[str]:
+    """Name the pool's credentials without inspecting their values."""
     from a2a_engine.agent_pool import load_agent_pool
 
     try:
@@ -66,15 +51,9 @@ def resolve_declared_credentials(workspace: Path | str) -> dict[str, str]:
         # stop the control plane serving everything that is not a live launch.
         # The gap still surfaces by name: the pool is read again per launch to
         # report which credentials are unsatisfied.
-        log.warning("agent pool unreadable, forwarding no credentials: %s", exc)
-        return {}
-
-    resolved: dict[str, str] = {}
-    for name in pool.required_credentials(sorted(pool.agents)):
-        value = os.environ.get(name)
-        if value:
-            resolved[name] = value
-    return resolved
+        log.warning("agent pool unreadable, naming no credentials: %s", exc)
+        return []
+    return pool.required_credentials(sorted(pool.agents))
 
 
 def sse_frame(event: dict) -> str:
@@ -327,15 +306,13 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     # RUNNING by a previous process, so a restart resolves
                     # stranded launches instead of leaving them there forever.
                     #
-                    # The launcher's credential set is declared, not inherited:
-                    # it is exactly the names the agent pool binds, so a worker
-                    # can reach a provider while the child's environment stays
-                    # an allowlist rather than a copy of this process's.
+                    # The worker alone resolves these symbolic names.
                     control = ControlPlane(
                         cls.database,
                         workspace=cls.workspace,
                         artifact_root=cls.artifact_root,
                         launcher_spec={
+                            "backend": os.environ.get("A2A_LAUNCHER_BACKEND", "local_process"),
                             "credentials": resolve_declared_credentials(cls.workspace),
                         },
                     )
@@ -484,8 +461,8 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             for lane in lanes
         ]
 
-    @staticmethod
-    def _index_label(environment_id: str) -> str | None:
+    @classmethod
+    def _index_label(cls, environment_id: str) -> str | None:
         """The environment's own word for position within an episode.
 
         A release says it has an inner index by declaring a sequence-grained
@@ -496,9 +473,9 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         if not environment_id:
             return None
         try:
-            discover_environments()
-            declaration = get_environment_spec(environment_id).declaration
-        except Exception:
+            control = cls._control()
+            declaration = control._design_declaration(control._release_for(environment_id, None))
+        except (KeyError, ValueError):
             return None
         for measure in getattr(declaration, "measures", None) or []:
             if measure.grain == "sequence" and measure.index_label:
@@ -550,11 +527,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     @classmethod
     def _calendar_leaderboard(cls) -> dict[str, object]:
         try:
-            discover_environments()
-            adapter = get_environment_spec("calendar").rating_adapter
-            if adapter is None:
-                raise RuntimeError("Calendar does not register a rating adapter")
-            materialization = rebuild_rating_snapshot(cls._store(), adapter)
+            materialization = rebuild_rating_snapshot(cls._store(), CalendarRatingAdapter())
         except Exception as exc:
             return {"environment_id": "calendar", "error": f"rating adapter unavailable: {exc}", "leaderboard": []}
         payload = materialization.snapshot.model_dump(mode="json")

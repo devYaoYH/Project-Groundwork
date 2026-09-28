@@ -167,6 +167,7 @@ def _register_builtin_launchers() -> None:
     """Import built-in launchers for their registration side effects."""
     from local_stack.launchers import local_process  # noqa: F401
     from local_stack.launchers import local_container  # noqa: F401
+    from local_stack.launchers import worker_service  # noqa: F401
 
 
 _register_builtin_launchers()

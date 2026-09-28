@@ -11,8 +11,9 @@ Firestore, S3, or model API credentials.
 docker compose up --build
 ```
 
-The `runner` service completes the deterministic four-environment smoke suite, while
-`viewer` remains at `http://localhost:8080`. The shared database is the
+The `runner` service completes the deterministic four-environment smoke suite,
+`worker` consumes browser-submitted launch inputs, and `viewer` remains at
+`http://localhost:8080`. The shared database is the
 `a2a-data` volume and survives restarts.
 
 ```bash
@@ -62,8 +63,12 @@ An environment's own replay page is served beside them at
 environment that registers it — driven by the same cursor as the lane view. See
 `docs/VIEWER_EXTENSIONS.md`.
 
-The browser never uploads Python, a Dockerfile, or an image: it only selects a
-release that is already installed and authors a design against its declaration.
+The browser never uploads Python, a Dockerfile, or an image: it selects an
+ingested release manifest and authors a design against its published surface.
+The viewer image contains only the engine's planning/read layer, `local_stack`,
+published manifests and item banks, experiment YAMLs, and static replay assets.
+It has no installed game entry points, game Python code, provider SDKs, provider
+keys, or Docker socket. Rebuild the viewer after changing published assets.
 
 ```bash
 curl -X POST http://localhost:8080/api/experiments \
@@ -95,41 +100,38 @@ with the highest `attempt` — rather than a stored flag.
 
 ## How a live launch from the browser gets its keys
 
-A worker's environment is an allowlist, not a copy of the control plane's: the
-allowlist names `PATH`, `TMPDIR`, the agent-pool path and the Redis URL, and
-nothing that authenticates to a provider. So a provider key reaches a worker
-only by being named.
+A browser launch publishes an immutable, digest-bound plan with symbolic
+credential names. The viewer never reads the values. The `worker` service has
+the provider variables from Compose, reports only boolean presence for the
+names the pool declares, and resolves the values immediately before executing.
+The worker verifies the launch-input digest before parsing it. Local worker
+service executions are **unverified**, even if the selected release manifest
+names a digest: only execution inside that exact digest-pinned image is verified.
 
 The names come from the agent pool. Every binding in `experiments/agents.yaml`
 already declares the variable it needs — that is what lets a missing key be
 reported by name before a run instead of as a 401 during one — and the control
-plane forwards exactly that set:
+plane requests exactly that set:
 
 ```text
 agents.yaml   gpt-mini: {credential: OPENAI_API_KEY}   declares the name
-control plane OPENAI_API_KEY present in its environment? forward name -> value
-launcher      allowlisted operational variables, then the declared credentials
+viewer       asks worker if OPENAI_API_KEY is satisfiable; sees only true/false
+launch plan  names OPENAI_API_KEY; worker resolves its own environment
 ```
 
 Three consequences worth stating, because each is a property a test pins:
 
-- **A name the pool never declares cannot be forwarded.** Adding a provider is
+- **A name the pool never declares cannot enter a plan.** Adding a provider is
   an edit to the pool, not an accident of what happens to be exported.
-- **A declared name nothing satisfies is omitted, not forwarded empty.**
-  Compose exports every provider variable with a `${VAR:-}` default, so an
-  unset key is present-and-empty; forwarding that would replace a gap named
-  before launch with a 401 discovered mid-episode.
-- **A launcher configured with no credentials forwards none.** That is the
-  default, and it is what `a2a-run` from a shell already looks like — it never
-  goes through the launcher at all and reads its own environment directly.
+- **An empty worker variable is missing.** Compose uses `${VAR:-}` defaults;
+  preflight names an unsatisfied credential before a live dispatch.
+- **A local-process launcher forwards no provider values.** A direct `a2a-run`
+  reads its own environment; the viewer does not inherit it.
 
-Put the values in `.env`; Compose passes them to the `viewer` service, which is
-how they reach this resolution. This is the temporary half of the credential
-boundary: the always-on service still *holds* provider values. The permanent
-shape names credentials symbolically in the launch input and lets the worker's
-platform resolve them, so the control plane learns only whether each name is
-satisfiable. The call shape does not change when that lands — only where the
-value comes from.
+Put values in a local `.env` for the `worker` and `runner` services only. For
+the credential-free browser smoke path, no `.env` is needed. The Calendar
+leaderboard uses a read-only rating projection in the shared engine, so it
+remains available without installing Calendar's execution package in the viewer.
 
 ## Progress, and what happens after a restart
 
@@ -197,7 +199,7 @@ keeps exactly the local-file behaviour it had.
 
 | Component | Local implementation | Later cloud replacement |
 |---|---|---|
-| experiment execution | `runner` container / `a2a-run` | Kubernetes Job or worker deployment |
+| experiment execution | `worker` consumes browser plans; `runner` runs standalone smoke jobs | Kubernetes Job or worker deployment |
 | trace egress | SQLite named volume | S3, Firestore, or a shared database adapter |
 | control plane and web UI | standard-library `local_stack/server.py` serving the Next.js static export, including local OTel span correlation | a hosted API serving the same contracts |
 | leaderboard | Calendar snapshot replayed from completed SQLite episodes | shared artifact/materialization store |

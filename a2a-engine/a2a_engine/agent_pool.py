@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -86,12 +86,12 @@ class AgentPool(BaseModel):
         }
         return sorted(declared)
 
-    def missing_credentials(self, names: list[str]) -> list[str]:
-        """Release variables these bindings need that are not set."""
+    def missing_credentials(self, names: list[str], presence: Mapping[str, bool]) -> list[str]:
+        """Release variables these bindings need but the worker cannot resolve."""
         return [
             credential
             for credential in self.required_credentials(names)
-            if not os.environ.get(credential)
+            if not presence.get(credential, False)
         ]
 
 

@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 from local_stack.launchers import ExecutionHandle, ExecutionStatus, LaunchInputRef, register_launcher
 from local_stack.launchers.local_process import SMOKE_EPISODES_PER_CELL, WORKER_RESULTS_DIRNAME
@@ -19,10 +19,10 @@ class LocalContainerLauncher:
     name = "local_container"
 
     def __init__(self, workspace: str | Path, *, artifact_root: str | Path,
-                 credentials: Mapping[str, str] | None = None) -> None:
+                 credentials: list[str] | None = None) -> None:
         self.workspace = Path(workspace)
         self.artifact_root = Path(artifact_root).resolve()
-        self.credentials = dict(credentials or {})
+        self.credentials = tuple(credentials or ())
 
     @staticmethod
     def _docker(*args: str) -> str:
@@ -49,9 +49,8 @@ class LocalContainerLauncher:
                            "-e", f"CLOUD_RUN_TASK_COUNT={launch.shard_count or 1}",
                            "-e", "CLOUD_RUN_TASK_ATTEMPT=0"]
                 # Only declared credentials travel, and their values never occur in argv.
-                for name, value in self.credentials.items():
-                    if value:
-                        command.extend(["-e", name])
+                for name in self.credentials:
+                    command.extend(["-e", name])
                 command.extend([digest, "-m", "expt_runner.run_experiment",
                                 "--launch-input", input_ref.uri, "--launch-input-sha256", input_ref.sha256,
                                 "--storage-path", str(Path(launch.trace_database).resolve()),
@@ -62,7 +61,7 @@ class LocalContainerLauncher:
                     command.extend(["--smoke-test", "--smoke-episodes-per-cell", str(SMOKE_EPISODES_PER_CELL)])
                 if launch.mode == "dry_run":
                     command.append("--dry-run")
-                ids.append(subprocess.check_output(command, text=True, env={**self.credentials, "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}).strip())
+                ids.append(subprocess.check_output(command, text=True).strip())
         except Exception:
             for container_id in ids:
                 self._docker("stop", container_id)
@@ -92,6 +91,9 @@ class LocalContainerLauncher:
         for container_id in handle.detail.get("containers", []):
             self._docker("stop", container_id)
         return True
+
+    def credential_presence(self, names: list[str]) -> dict[str, bool]:
+        return {name: False for name in names}
 
 
 def _factory(**spec: Any) -> LocalContainerLauncher:
