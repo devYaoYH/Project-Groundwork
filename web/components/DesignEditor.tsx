@@ -37,6 +37,8 @@ export function DesignEditor() {
   const [busy, setBusy] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [forking, setForking] = useState(false);
+  const [shardCount, setShardCount] = useState("1");
+  const [maxParallelism, setMaxParallelism] = useState("1");
   const savingRef = useRef(false);
 
   useEffect(() => {
@@ -81,6 +83,12 @@ export function DesignEditor() {
   const plan = serverResult?.plan;
   const canLock = Boolean(experiment && serverResult?.valid && clientErrors.length === 0 && !experiment.locked_at);
   const locked = Boolean(experiment?.locked_at);
+  const shards = Number(shardCount);
+  const parallelism = Number(maxParallelism);
+  const validConcurrency = Number.isSafeInteger(shards) && shards >= 1
+    && Number.isSafeInteger(parallelism) && parallelism >= 1;
+  const canLaunchMode = (mode: "live" | "smoke" | "dry_run") =>
+    validConcurrency && (!plan || shards <= (mode === "smoke" ? plan.cells.length : plan.episodes_planned));
 
   async function saveDraft() {
     if (!experiment || locked || !dirty || busy || savingRef.current) return;
@@ -153,11 +161,13 @@ export function DesignEditor() {
   }
 
   async function launch(mode: "live" | "smoke" | "dry_run") {
-    if (!experiment) return;
+    if (!experiment || !canLaunchMode(mode)) return;
     setBusy(true);
     setMessage(null);
     try {
-      const result = await launchExperiment(experiment.id, mode);
+      const result = await launchExperiment(experiment.id, mode, {
+        shardCount: shards, maxParallelism: parallelism,
+      });
       window.location.assign(`/launch/?id=${encodeURIComponent(result.id)}`);
       return;
     } catch (reason) {
@@ -198,7 +208,25 @@ export function DesignEditor() {
         </div>
         <div className="design-column">
           <section className="card section-card"><div className="section-heading"><h2>Compiles to</h2><p>One cell per combination of factored levels.</p></div><div className="metric-grid"><div className="metric"><span>cells</span><strong>{plan?.cells.length ?? "-"}</strong></div><div className="metric"><span>episodes</span><strong>{plan?.episodes_planned ?? "-"}</strong></div></div>{plan?.preview_episode_config ? <ConfigDisclosure value={JSON.stringify(plan.preview_episode_config, null, 2)} /> : null}</section>
-          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>Smoke and dry-run inspect a draft. Live execution requires its lock.</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
+          <section className="card launch-card">
+            <div className="section-heading"><h2>Launch</h2><p>Smoke and dry-run inspect a draft. Live execution requires its lock.</p></div>
+            <fieldset className="launch-concurrency" disabled={busy}>
+              <legend>Execution capacity <span>(per launch, not part of the locked design)</span></legend>
+              <div className="launch-concurrency-fields">
+                <label htmlFor="launch-shards">Shards
+                  <input id="launch-shards" type="number" min="1" step="1" value={shardCount} onChange={(event) => setShardCount(event.target.value)} />
+                  <span>Separate runner processes, each taking a slice of the episodes.</span>
+                </label>
+                <label htmlFor="launch-parallelism">Concurrent episodes per shard
+                  <input id="launch-parallelism" type="number" min="1" step="1" value={maxParallelism} onChange={(event) => setMaxParallelism(event.target.value)} />
+                  <span>Up to this many episodes run in threads inside each runner.</span>
+                </label>
+              </div>
+              <p>At most {validConcurrency ? shards * parallelism : "-"} episodes can run at once across all shards. A shard needs at least one planned episode{plan ? ` (smoke: ${plan.cells.length}; live/dry run: ${plan.episodes_planned})` : ""}.</p>
+              {!validConcurrency ? <p className="notice notice-error">Enter whole numbers of at least 1 for both controls.</p> : null}
+            </fieldset>
+            <div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid || !canLaunchMode("dry_run")}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid || !canLaunchMode("smoke")}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked || !canLaunchMode("live")}>Launch live</button></div>
+          </section>
         </div>
       </section>
     </>
