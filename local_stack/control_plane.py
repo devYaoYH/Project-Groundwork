@@ -54,6 +54,10 @@ from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.registry import get_environment_spec, installed_environments
 from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
+from a2a_engine.storage.results import (
+    latest_result_attempts, latest_result_traces,
+    summarize_cell_evidence,
+)
 from a2a_engine.storage.schema import apply_schema
 from a2a_engine.stream_projection import project_events_to_trace
 import yaml
@@ -872,10 +876,39 @@ class ControlPlane:
                  "episodes_planned": row["episodes_planned"]}
                 for row in cells
             ],
-            "cell_evidence": self._store().cell_evidence(experiment_id),
+            "cell_evidence": self.cell_evidence(experiment_id),
             "roster": [dict(row) for row in participants],
             "launches": [self.launch_detail(row["id"]) for row in launches],
         }
+
+    def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
+        if self.colocated_reads:
+            return self._store().cell_evidence(experiment_id)
+        return self._cell_evidence_two_step(experiment_id)
+
+    def _cell_evidence_two_step(self, experiment_id: str) -> list[dict[str, Any]]:
+        with self._session() as db:
+            cells = [dict(row) for row in db.execute(
+                "SELECT cell_id, levels, episodes_planned, episode_configs "
+                "FROM cells WHERE experiment_id = ? ORDER BY cell_id", (experiment_id,),
+            )]
+            attempts = [dict(row) for row in db.execute(
+                "SELECT a.id, a.cell_id, a.episode_id, a.attempt, a.status, "
+                "l.mode AS run_mode FROM attempts a JOIN launches l ON l.id = a.launch_id "
+                "JOIN cells c ON c.cell_id = a.cell_id WHERE c.experiment_id = ?",
+                (experiment_id,),
+            )]
+        latest = latest_result_attempts(attempts)
+        traces = latest_result_traces(self._store().execution_records(list(latest)))
+        executions = []
+        for episode_id, attempt in latest.items():
+            trace = traces.get((episode_id, int(attempt["attempt"])))
+            executions.append({
+                **attempt,
+                "trace_status": trace["status"] if trace else None,
+                "metrics": trace["metrics"] if trace else None,
+            })
+        return summarize_cell_evidence(cells, executions)
 
     def validate_design_text(self, *, release_id: str, design_text: str) -> dict[str, Any]:
         """Validate and preview a draft without writing an experiment record."""
@@ -1052,6 +1085,7 @@ class ControlPlane:
                     attempt = self._next_attempt(db, episode_id)
                     config["provenance"] = dict(config["provenance"])
                     config["provenance"]["attempt"] = attempt
+                    config["provenance"]["run_mode"] = mode
                     attempt_rows.append((episode_id, cell_id, episode_idx, attempt))
             else:
                 attempt_rows = [

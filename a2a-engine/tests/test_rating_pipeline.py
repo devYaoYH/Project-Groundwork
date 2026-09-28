@@ -33,11 +33,12 @@ class DemoRatingAdapter:
         )
 
 
-def _put(store: SQLiteEpisodeStore, episode_uid: str) -> EpisodeTrace:
+def _put(store: SQLiteEpisodeStore, episode_uid: str, *, mode: str = "live") -> EpisodeTrace:
     config = EpisodeConfigBase(
         environment_id="demo", num_agents=2,
         agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
         experiment_name="test", episode_id=f"test.cell.{episode_uid}",
+        provenance={"run_mode": mode},
     )
     trace = EpisodeTrace(episode_uid=episode_uid, config=config, metrics={"quality": 1.0})
     manifest = EpisodeManifest.from_run(
@@ -46,6 +47,18 @@ def _put(store: SQLiteEpisodeStore, episode_uid: str) -> EpisodeTrace:
     )
     store.put_episode(trace, manifest)
     return store.get_episode(episode_uid)  # use the exact persisted source record
+
+
+def test_rating_excludes_smoke_unless_analysis_opts_in(tmp_path):
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    _put(store, "live")
+    _put(store, "smoke", mode="smoke")
+    ordinary = rebuild_rating_snapshot(store, DemoRatingAdapter())
+    assert [event.episode_uid for event in ordinary.events] == ["live"]
+    assert ordinary.snapshot.metadata["results_only"] is True
+    inclusive = rebuild_rating_snapshot(store, DemoRatingAdapter(), include_non_results=True)
+    assert {event.episode_uid for event in inclusive.events} == {"live", "smoke"}
+    assert inclusive.snapshot.metadata["results_only"] is False
 
 
 def test_replay_persists_events_and_suppresses_unavailable_metrics(tmp_path):

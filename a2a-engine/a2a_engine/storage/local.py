@@ -23,6 +23,7 @@ from typing import Any
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
+from a2a_engine.storage.results import counts_as_result
 from a2a_engine.tracing import write_episode
 
 _manifest_lock = threading.Lock()
@@ -159,17 +160,22 @@ class LocalJSONStore:
                 trace = EpisodeTrace.model_validate_json(path.read_text())
             except Exception:
                 continue
-            if trace.config.episode_id:
+            if trace.config.episode_id and counts_as_result(trace) and not trace.stopped:
                 completed.add(str(trace.config.episode_id))
         return completed
 
 
 def _add_if_present(completed: set[str], record: dict) -> None:
-    """Count a run as complete only if its trace file still exists."""
+    """A sidecar is an index, not proof that its trace was a live result."""
     run_id = record.get("episode_id")
     trace_path = record.get("local_trace_path")
-    if run_id and (not trace_path or Path(trace_path).exists()):
-        completed.add(str(run_id))
+    if run_id and trace_path:
+        try:
+            trace = EpisodeTrace.model_validate_json(Path(trace_path).read_text())
+        except (OSError, ValueError):
+            return
+        if counts_as_result(trace) and not trace.stopped:
+            completed.add(str(run_id))
 
 
 register_store("local", LocalJSONStore)

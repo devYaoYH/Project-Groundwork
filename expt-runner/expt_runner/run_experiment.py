@@ -58,7 +58,7 @@ from a2a_engine.event_sink import (
 )
 from a2a_engine.experiment import resolve_storage
 from a2a_engine.manifest import EpisodeManifest, git_hash
-from a2a_engine.provenance import build_provenance
+from a2a_engine.provenance import build_provenance, executed_run_mode
 from a2a_engine.registry import discover_environments
 from a2a_engine.seeds import derive_seed
 from a2a_engine.storage import check_store, make_store
@@ -184,6 +184,10 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
             attempt=attempt,
             release=_release_facts(cfg.get("environment_id")),
         )
+    cfg["provenance"] = {
+        **cfg["provenance"],
+        "run_mode": executed_run_mode(dry_run=dry_run, persist=persist),
+    }
     return {"config": cfg, "dry_run": dry_run, "persist": persist,
             "experiment_name": experiment_name,
             "cell_id": logical_cell_id, "episode_idx": logical_episode_idx,

@@ -18,6 +18,7 @@ function episode(overrides: Partial<EpisodeSummary>): EpisodeSummary {
     attempt: 1,
     seed: 1,
     status: "COMPLETED",
+    run_mode: "live",
     started_at: null,
     ended_at: null,
     stopped: false,

@@ -27,6 +27,44 @@ STATUS_COMPLETED = "COMPLETED"
 STATUS_STOPPED = "STOPPED"
 STATUS_PARTIAL = "PARTIAL"
 
+#: What actually executed, as distinct from what was designed.  ``live`` means
+#: the planned agents played; ``smoke`` means the environment swapped in its
+#: scripted stand-ins and persisted the trace to prove the pipeline;
+#: ``dry_run`` means stand-ins played and nothing was meant to persist.  Only a
+#: live row is a measurement -- see :mod:`a2a_engine.storage.results`.
+#:
+#: This is identity about the *execution*, not the design: it enters no seed,
+#: no ``design_sha256``, and no digest beyond the plan bytes it travels in.
+RUN_MODE_LIVE = "live"
+RUN_MODE_SMOKE = "smoke"
+RUN_MODE_DRY_RUN = "dry_run"
+RUN_MODES = (RUN_MODE_LIVE, RUN_MODE_SMOKE, RUN_MODE_DRY_RUN)
+
+
+def executed_run_mode(*, dry_run: bool, persist: bool) -> str:
+    """Name the mode a runner process actually executed in.
+
+    The worker is the authority here rather than the plan: it is what knows it
+    swapped in scripted agents, so a plan stamped ``live`` run under
+    ``--smoke-test`` records ``smoke`` rather than the plan's claim.
+    """
+    if not dry_run:
+        return RUN_MODE_LIVE
+    return RUN_MODE_SMOKE if persist else RUN_MODE_DRY_RUN
+
+
+def run_mode_of(block: dict[str, Any]) -> str:
+    """The recorded run mode, defaulting an unrecorded one to ``live``.
+
+    ``live`` is the default because it is what every trace written before the
+    field existed claimed to be; the schema migration corrects the rows it can
+    attribute, and an unknown value is never silently promoted to a result.
+    """
+    value = block.get("run_mode")
+    if value is None:
+        return RUN_MODE_LIVE
+    return str(value)
+
 
 def build_provenance(
     *,
@@ -146,6 +184,7 @@ def promoted_columns(trace: EpisodeTrace) -> dict[str, Any]:
         "attempt": _as_int(block.get("attempt"), default=1),
         "seed": _as_int(trace.config.seed if trace.config.seed is not None else block.get("seed")),
         "status": episode_status(trace),
+        "run_mode": run_mode_of(block),
     }
 
 

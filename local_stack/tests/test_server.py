@@ -182,6 +182,34 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
         LocalStackHandler.database = previous
 
 
+def test_calendar_leaderboard_ignores_smoke_rows(tmp_path):
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    for uid, mode in (("scripted", "smoke"), ("measurement", "live")):
+        config = EpisodeConfigBase(
+            environment_id="calendar", num_agents=2,
+            agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
+            experiment_name="calendar-mode", episode_id=f"calendar-mode.cell.{uid}",
+            provenance={"run_mode": mode},
+        )
+        trace = EpisodeTrace(
+            episode_uid=uid, config=config,
+            metrics={"coordination_rate": 0.8, "per_agent_excess_burden": [1.0, 2.0]},
+        )
+        manifest = EpisodeManifest.from_run(
+            config=config.model_dump(), experiment_name="calendar-mode",
+            cell_id="cell", episode_idx=0, episode_uid=uid,
+        )
+        store.put_episode(trace, manifest)
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        board = LocalStackHandler._calendar_leaderboard()
+        assert board["metadata"]["rating_event_count"] == 1
+        assert board["metadata"]["results_only"] is True
+    finally:
+        LocalStackHandler.database = previous
+
+
 def test_episode_page_accepts_multi_facets_search_and_rejects_invalid_query_shapes(tmp_path):
     import pytest
 
@@ -965,6 +993,7 @@ def test_episode_detail_survives_a_trace_with_no_events_and_no_provenance(tmp_pa
         detail = LocalStackHandler._episode_detail(trace.episode_uid)
         assert detail == {
             "episode": detail["episode"],
+            "run_mode": "live",
             "lanes": [],
             "index_label": None,
             "cursor_max": 0,

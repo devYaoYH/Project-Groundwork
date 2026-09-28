@@ -38,9 +38,16 @@ test("serializes URL state and translates legacy deep links to the common query"
     raw: "experiment:experiment-123 cell:cell-abc",
     environments: ["word_guess"],
     statuses: ["COMPLETED", "PARTIAL"],
+    run_modes: [],
   });
   assert.equal(
     serializeEpisodeQuery(state),
     "q=experiment%3Aexperiment-123+cell%3Acell-abc&environment_id=word_guess&status=COMPLETED&status=PARTIAL",
   );
+});
+
+test("round-trips run mode facets in shareable episode URLs", () => {
+  const state = episodeQueryFromSearch(new URLSearchParams("run_mode=smoke&run_mode=live"));
+  assert.deepEqual(parseEpisodeQuery(state.raw, state).filters, { run_mode: ["smoke", "live"] });
+  assert.equal(serializeEpisodeQuery(state), "run_mode=smoke&run_mode=live");
 });

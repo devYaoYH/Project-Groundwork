@@ -41,12 +41,12 @@ export function EpisodeList() {
   const [queryState, setQueryState] = useState(() => episodeQueryFromSearch(search));
   const [episodes, setEpisodes] = useState<EpisodeSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [facets, setFacets] = useState({ environments: [] as EpisodeFacet[], statuses: [] as EpisodeFacet[] });
+  const [facets, setFacets] = useState({ environments: [] as EpisodeFacet[], statuses: [] as EpisodeFacet[], run_modes: [] as EpisodeFacet[] });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [plannedReplicationsByCell, setPlannedReplicationsByCell] = useState<Record<string, number>>({});
   const parsed = useMemo(
-    () => parseEpisodeQuery(queryState.raw, { environments: queryState.environments, statuses: queryState.statuses }),
+    () => parseEpisodeQuery(queryState.raw, { environments: queryState.environments, statuses: queryState.statuses, run_modes: queryState.run_modes }),
     [queryState],
   );
   const queryKey = JSON.stringify(parsed.filters);
@@ -68,7 +68,7 @@ export function EpisodeList() {
         if (!current) return;
         setEpisodes(page.episodes ?? []);
         setCursor(page.next_cursor ?? null);
-        setFacets(page.facets ?? { environments: [], statuses: [] });
+        setFacets(page.facets ?? { environments: [], statuses: [], run_modes: [] });
         setError(null);
       })
       .catch((reason: Error) => { if (current) setError(reason.message); })
@@ -98,7 +98,7 @@ export function EpisodeList() {
     router.replace(serialized ? `${pathname}?${serialized}` : pathname, { scroll: false });
   }
 
-  function toggleFacet(kind: "environments" | "statuses", value: string) {
+  function toggleFacet(kind: "environments" | "statuses" | "run_modes", value: string) {
     const values = queryState[kind];
     updateQuery({
       ...queryState,
@@ -128,6 +128,7 @@ export function EpisodeList() {
         <div className="facet-groups">
           <fieldset><legend>Environment</legend>{facetOptions(facets.environments, parsed.environments).map((facet) => <label key={facet.value}><input type="checkbox" checked={parsed.environments.includes(facet.value)} onChange={() => toggleFacet("environments", facet.value)} /> <code>{facet.value}</code> <span>({facet.count})</span></label>)}</fieldset>
           <fieldset><legend>Status</legend>{facetOptions(facets.statuses, parsed.statuses).map((facet) => <label key={facet.value}><input type="checkbox" checked={parsed.statuses.includes(facet.value)} onChange={() => toggleFacet("statuses", facet.value)} /> <code>{facet.value}</code> <span>({facet.count})</span></label>)}</fieldset>
+          <fieldset><legend>Run mode</legend>{facetOptions(facets.run_modes, parsed.run_modes).map((facet) => <label key={facet.value}><input type="checkbox" checked={parsed.run_modes.includes(facet.value)} onChange={() => toggleFacet("run_modes", facet.value)} /> <code>{facet.value}</code> <span>({facet.count})</span></label>)}</fieldset>
         </div>
       </section>
 
@@ -143,6 +144,7 @@ export function EpisodeList() {
           { label: "seed", className: "mono", render: (group) => group.latest.seed === null ? <span className="muted">-</span> : group.latest.seed },
           { label: "item", className: "mono", render: (group) => group.latest.item_id ?? <span className="muted">-</span> },
           { label: "latest status", render: (group) => <Chip tone={TONE[group.latest.status] ?? "plain"}>{group.latest.status}</Chip> },
+          { label: "mode", render: (group) => <Chip tone={group.latest.run_mode === "smoke" ? "warn" : "plain"}>{group.latest.run_mode ?? "live"}</Chip> },
           { label: "measures", render: (group) => headline(group.latest.metrics) },
         ]} /> : null}
       </section>

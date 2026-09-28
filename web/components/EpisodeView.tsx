@@ -123,6 +123,7 @@ export function EpisodeView() {
   // ``live`` first: an in-flight projection is also incomplete, and calling it
   // PARTIAL would say it was interrupted when it is simply not finished yet.
   const status = live ? "RUNNING" : episode.observability?.partial ? "PARTIAL" : episode.stopped ? "STOPPED" : "COMPLETED";
+  const runMode = detail?.run_mode ?? "live";
   const viewerUrl = specialisedViewerUrl(environmentId, episode.episode_uid);
   const metrics = Object.entries(record(episode.metrics));
 
@@ -146,7 +147,12 @@ export function EpisodeView() {
             seed {String(record(episode.config).seed ?? provenance.seed ?? "-")}
           </p>
         </div>
-        <Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
+        <div className="launch-actions">
+          <Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
+          {runMode === "smoke" || runMode === "dry_run" ? (
+            <Chip tone="warn">{runMode}</Chip>
+          ) : null}
+        </div>
       </header>
 
       {metrics.length > 0 ? (

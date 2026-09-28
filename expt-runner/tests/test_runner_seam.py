@@ -372,6 +372,21 @@ def test_resume_skips_completed_runs(tmp_path):
     assert FakeGame.seen_configs == [], "completed runs must not re-execute"
 
 
+@pytest.mark.parametrize("backend", ["local", "sqlite"])
+def test_resume_does_not_skip_a_smoke_only_slot(tmp_path, backend):
+    register_environment("fake", FakeGame)
+    results = tmp_path / "results"
+    args = [str(write_yaml(tmp_path, BASIC)), "--results-dir", str(results),
+            "--storage-backend", backend, "--max-parallelism", "1"]
+    if backend == "sqlite":
+        args.extend(["--storage-path", str(tmp_path / "a2a.db")])
+    assert main(args + ["--smoke-test"]) == 0
+    FakeGame.seen_configs = []
+    assert main(args + ["--resume"]) == 0
+    assert len(FakeGame.seen_configs) == 2
+    assert all(config["provenance"]["run_mode"] == "live" for config in FakeGame.seen_configs)
+
+
 def test_sharding_partitions_runs_without_overlap(tmp_path):
     register_environment("fake", FakeGame)
     body = BASIC.replace("count: 2", "count: 4")

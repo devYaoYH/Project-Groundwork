@@ -10,9 +10,10 @@ export type EpisodeQuery = {
   issues: EpisodeQueryIssue[];
   environments: string[];
   statuses: string[];
+  run_modes: string[];
 };
 
-type EpisodeQueryState = Pick<EpisodeQuery, "raw" | "environments" | "statuses">;
+type EpisodeQueryState = Pick<EpisodeQuery, "raw" | "environments" | "statuses" | "run_modes">;
 
 const PREFIXES = new Set(["cell", "experiment", "environment", "status"]);
 
@@ -22,13 +23,14 @@ function unique(values: string[]): string[] {
 
 export function parseEpisodeQuery(
   raw: string,
-  facets: { environments?: string[]; statuses?: string[] } = {},
+  facets: { environments?: string[]; statuses?: string[]; run_modes?: string[] } = {},
 ): EpisodeQuery {
   const tokens: EpisodeQuery["tokens"] = [];
   const terms: string[] = [];
   const issues: EpisodeQueryIssue[] = [];
   const environments = [...(facets.environments ?? [])];
   const statuses = [...(facets.statuses ?? [])];
+  const runModes = unique(facets.run_modes ?? []);
   let cellId: string | undefined;
   let experimentId: string | undefined;
 
@@ -70,7 +72,8 @@ export function parseEpisodeQuery(
   const selectedStatuses = unique(statuses);
   if (selectedEnvironments.length) filters.environment_id = selectedEnvironments;
   if (selectedStatuses.length) filters.status = selectedStatuses;
-  return { raw, filters, tokens, terms, issues, environments: selectedEnvironments, statuses: selectedStatuses };
+  if (runModes.length) filters.run_mode = runModes;
+  return { raw, filters, tokens, terms, issues, environments: selectedEnvironments, statuses: selectedStatuses, run_modes: runModes };
 }
 
 export function serializeEpisodeQuery(state: EpisodeQueryState): string {
@@ -78,6 +81,7 @@ export function serializeEpisodeQuery(state: EpisodeQueryState): string {
   if (state.raw.trim()) query.set("q", state.raw.trim());
   for (const environment of unique(state.environments)) query.append("environment_id", environment);
   for (const status of unique(state.statuses)) query.append("status", status);
+  for (const mode of unique(state.run_modes)) query.append("run_mode", mode);
   return query.toString();
 }
 
@@ -91,5 +95,6 @@ export function episodeQueryFromSearch(search: URLSearchParams): EpisodeQuerySta
     raw: [raw, ...legacy].filter(Boolean).join(" "),
     environments: search.getAll("environment_id"),
     statuses: search.getAll("status"),
+    run_modes: search.getAll("run_mode"),
   };
 }

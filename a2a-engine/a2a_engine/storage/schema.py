@@ -7,7 +7,7 @@ stdout.  They are now one database with a star schema, so a fact row reaches
 its dimensions in SQL.
 
     FACT   episodes        episode_uid PK - episode_id - attempt - experiment_id
-                           release_id - item_id - seed - status - timestamps
+                           release_id - item_id - seed - status - run_mode - timestamps
                            config/events/final_state/metrics/observability/manifest (JSON)
 
     DIM    releases        id PK - environment_id - version - declaration_sha256
@@ -139,6 +139,11 @@ CREATE TABLE IF NOT EXISTS episodes (
     -- COMPLETED | STOPPED | PARTIAL.  A PARTIAL row is a trace recovered from
     -- an interrupted episode's event log: evidence, not a result.
     status            TEXT NOT NULL DEFAULT 'COMPLETED',
+    -- live | smoke | dry_run: what actually executed, as the worker recorded
+    -- it in provenance.  Only a live row is a measurement; see
+    -- a2a_engine.storage.results for the one predicate every result reader
+    -- shares.  Indexed after the post-migration backfill, not here.
+    run_mode          TEXT NOT NULL DEFAULT 'live',
     config            TEXT NOT NULL,
     events            TEXT NOT NULL,
     final_state       TEXT NOT NULL,
@@ -328,6 +333,8 @@ def apply_schema(conn) -> None:
         if existing[table] and column not in existing[table]:
             conn.execute(statement)
             existing[table].add(column)
+    if existing.get("episodes"):
+        _migrate_run_mode(conn)
     # ``episode_tokens`` is only a read projection, so old traces retain every
     # durable byte while becoming searchable after an additive migration.
     if "episodes" in existing and "episode_tokens" in existing["episodes"]:
@@ -346,3 +353,82 @@ def apply_schema(conn) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_tokens ON episodes(episode_tokens)")
     conn.commit()
+
+
+# Assign each pre-existing row the mode it most plausibly ran in, most specific
+# evidence first. ``COALESCE`` stops at the first answer, so the order below is
+# the precedence:
+#
+#   1. the row's own provenance, where it records one -- the worker is the
+#      authority on what it executed;
+#   2. the attempt whose settled ``episode_uri`` names this exact episode_uid,
+#      which is unambiguous even for a legacy YAML launch whose runner never
+#      learned its attempt number;
+#   3. the attempt planned as ``(episode_id, attempt)``, the join a design
+#      launch's frozen provenance makes exact;
+#   4. a direct ``a2a-run`` of an experiment that is smoke by declaration --
+#      nothing in such a row records ``--smoke-test``, so its experiment is the
+#      only evidence there is;
+#   5. otherwise ``live``, which is what every such row claimed to be.
+_RUN_MODE_BACKFILL = """
+UPDATE episodes SET run_mode = COALESCE(
+    CASE WHEN json_valid(episodes.config) THEN
+        CASE WHEN json_extract(episodes.config, '$.provenance.run_mode') IN ({modes})
+             THEN json_extract(episodes.config, '$.provenance.run_mode') END
+    END,
+    (SELECT l.mode FROM attempts a JOIN launches l ON l.id = a.launch_id
+      WHERE a.episode_uri IS NOT NULL
+        AND substr(a.episode_uri, -length(episodes.episode_uid) - 1) = '#' || episodes.episode_uid
+      LIMIT 1),
+    (SELECT l.mode FROM attempts a JOIN launches l ON l.id = a.launch_id
+      WHERE a.episode_id = episodes.episode_id AND a.attempt = episodes.attempt
+      LIMIT 1),
+    CASE WHEN episodes.experiment_name IN ({legacy_smoke}) THEN 'smoke' END,
+    'live'
+)
+"""
+
+
+def _migrate_run_mode(conn) -> None:
+    """Add ``episodes.run_mode``, attribute every existing row, then index it.
+
+    The ``episode_tokens`` shape -- ALTER, backfill, index -- with one
+    difference that matters: a token backfill can find its unfinished rows
+    again (``episode_tokens = ''``), but a ``run_mode`` backfill cannot, because
+    the column's default ``'live'`` is also a real answer. So the ALTER and the
+    backfill commit together or not at all, under a write lock taken *before*
+    the column check, and a database that has the column is by construction a
+    database whose rows were attributed.
+    """
+    from a2a_engine.provenance import RUN_MODES
+    from a2a_engine.storage.results import LEGACY_SMOKE_EXPERIMENTS
+
+    # The common case -- the column exists -- takes no write lock: every store
+    # instance applies the schema, and a runner may be mid-write.
+    if "run_mode" in {row[1] for row in conn.execute("PRAGMA table_info(episodes)")}:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_run_mode ON episodes(run_mode)")
+        return
+    began = not conn.in_transaction
+    if began:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(episodes)")}
+        if "run_mode" not in columns:
+            conn.execute(
+                "ALTER TABLE episodes ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'live'"
+            )
+            legacy = sorted(LEGACY_SMOKE_EXPERIMENTS)
+            conn.execute(
+                _RUN_MODE_BACKFILL.format(
+                    modes=", ".join("?" for _ in RUN_MODES),
+                    legacy_smoke=", ".join("?" for _ in legacy) or "NULL",
+                ),
+                (*RUN_MODES, *legacy),
+            )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_run_mode ON episodes(run_mode)")
+        if began:
+            conn.commit()
+    except Exception:
+        if began:
+            conn.rollback()
+        raise

@@ -12,6 +12,7 @@ behavior the calendar benchmark already relied on.
 
 from __future__ import annotations
 
+import inspect
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol, Sequence, runtime_checkable
@@ -130,6 +131,16 @@ class ControlPlaneReader(EpisodeStore, Protocol):
         """
         ...
 
+    def execution_records(self, episode_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """Every row held for these episode ids, unfiltered, with its run mode.
+
+        The episode side of the two-step replication rollup. It deliberately
+        does not decide what counts as a result: the caller applies
+        ``counts_as_result``, so the in-memory reference and the single
+        statement share one definition rather than two.
+        """
+        ...
+
 
 def make_control_plane_reader(
     spec: dict[str, Any] | None, *, results_dir: str | Path
@@ -147,6 +158,7 @@ def make_control_plane_reader(
             name for name in (
                 "uri", "episode_summaries", "episode_facets", "count_episodes",
                 "cell_evidence", "get_derived_artifacts", "completed_executions",
+                "execution_records",
             )
             if not hasattr(store, name)
         ]
@@ -186,18 +198,30 @@ def check_store(store: Any) -> StoreCheck:
 
 
 def iter_episodes(store: Any, *, filters: dict[str, Any] | None = None,
-                limit: int | None = None) -> Iterator[EpisodeTrace]:
+                limit: int | None = None, results: bool = False) -> Iterator[EpisodeTrace]:
     """Yield episodes from any store by paging ``list_episodes`` and hydrating each.
 
     Backends may override with something more direct (``SQLiteEpisodeStore`` reads
     rows straight out of the table); this generic path exists so that
     ``EpisodeDataset.from_store`` works against every backend, including ones
     contributed later.
+
+    ``results=True`` yields only traces that count as results. A backend whose
+    own ``iter_episodes`` accepts ``results`` applies the SQL predicate; any
+    other is filtered here with ``counts_as_result``, its Python twin, so a
+    backend that has never heard of run modes still cannot leak a smoke trace
+    into a reader that asked for results.
     """
+    from a2a_engine.storage.results import counts_as_result
+
     direct = getattr(store, "iter_episodes", None)
     if direct is not None:
+        pushed_down = results and _accepts_keyword(direct, "results")
+        stream = direct(filters=filters, results=True) if pushed_down else direct(filters=filters)
         yielded = 0
-        for trace in direct(filters=filters):
+        for trace in stream:
+            if results and not pushed_down and not counts_as_result(trace):
+                continue
             yield trace
             yielded += 1
             if limit is not None and yielded >= limit:
@@ -215,12 +239,26 @@ def iter_episodes(store: Any, *, filters: dict[str, Any] | None = None,
             trace = store.get_episode(str(episode_uid))
             if trace is None:
                 continue
+            if results and not counts_as_result(trace):
+                continue
             yield trace
             seen += 1
             if limit is not None and seen >= limit:
                 return
         if not cursor:
             return
+
+
+def _accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    """Whether a backend's own method declares ``name``, without calling it.
+
+    Only an explicit parameter counts: a ``**kwargs`` that silently swallows
+    ``results`` would be trusted to filter and would not.
+    """
+    try:
+        return name in inspect.signature(function).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins, C extensions
+        return False
 
 
 # --- backend registry -------------------------------------------------------

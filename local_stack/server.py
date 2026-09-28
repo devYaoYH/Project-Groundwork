@@ -30,7 +30,7 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
-from a2a_engine.provenance import pinned_participants, provenance_of
+from a2a_engine.provenance import pinned_participants, provenance_of, run_mode_of
 from a2a_engine.design import DesignValidationError
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
     from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
@@ -357,9 +357,9 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     #: interpolated; this list is what the browser is told it may ask for.
     EPISODE_FILTERS = (
         "experiment_id", "experiment_name", "cell_id", "environment_id",
-        "episode_id", "release_id", "item_id", "status",
+        "episode_id", "release_id", "item_id", "status", "run_mode",
     )
-    EPISODE_MULTI_FILTERS = {"environment_id", "status"}
+    EPISODE_MULTI_FILTERS = {"environment_id", "status", "run_mode"}
 
     @classmethod
     def _episode_page(cls, query: dict[str, list[str]]) -> dict[str, object]:
@@ -429,8 +429,10 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         trace = cls._store().get_episode(episode_uid) or cls._control().live_trace(episode_uid)
         if trace is None:
             return None
+        summaries, _ = cls._store().episode_summaries({"episode_uid": episode_uid}, limit=1)
         return {
             "episode": trace.model_dump(mode="json"),
+            "run_mode": summaries[0]["run_mode"] if summaries else run_mode_of(provenance_of(trace)),
             "lanes": cls._lanes(trace),
             "index_label": cls._index_label(str(trace.config.environment_id or "")),
             # The scrubber's upper bound. An episode with no events is a real

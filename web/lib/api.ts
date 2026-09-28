@@ -100,6 +100,7 @@ export type EpisodeSummary = {
   // COMPLETED | STOPPED | PARTIAL. PARTIAL is a trace recovered from an
   // interrupted episode's event log: evidence, not a result.
   status: string;
+  run_mode: "live" | "smoke" | "dry_run";
   started_at: string | null;
   ended_at: string | null;
   stopped: boolean;
@@ -114,6 +115,7 @@ export type EpisodeFilters = {
   environment_id?: string[];
   cell_id?: string;
   status?: string[];
+  run_mode?: string[];
 };
 
 export type EpisodeFacet = { value: string; count: number };
@@ -153,6 +155,7 @@ export type Lane = {
 // ride alongside the record rather than inside it.
 export type EpisodeDetail = {
   episode: EpisodeTrace;
+  run_mode: "live" | "smoke" | "dry_run";
   lanes: Lane[] | null;
   index_label: string | null;
   cursor_max: number;
@@ -167,7 +170,7 @@ export type EpisodePage = {
   episodes: EpisodeSummary[];
   next_cursor: string | null;
   filters: Record<string, string | string[]>;
-  facets: { environments: EpisodeFacet[]; statuses: EpisodeFacet[] };
+  facets: { environments: EpisodeFacet[]; statuses: EpisodeFacet[]; run_modes: EpisodeFacet[] };
 };
 
 export type Experiment = {

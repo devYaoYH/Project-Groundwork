@@ -26,9 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import sqlite3
-import statistics
 import threading
 import time
 import uuid
@@ -43,6 +41,11 @@ from a2a_engine.ratings.schemas import RatingEvent, RatingSnapshot
 from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage.base import StoreCheck, register_store
 from a2a_engine.storage.local import LocalJSONStore
+from a2a_engine.storage.results import (
+    RESULT_PREDICATE,
+    result_predicate,
+    summarize_cell_evidence,
+)
 from a2a_engine.storage.schema import apply_schema
 
 log = logging.getLogger("a2a_engine.storage.sqlite")
@@ -56,9 +59,10 @@ _FILTERABLE = {
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "stopped",
     "experiment_id", "release_id", "item_id", "attempt", "seed", "status",
+    "run_mode",
 }
 
-_MULTI_FILTERABLE = {"environment_id", "status"}
+_MULTI_FILTERABLE = {"environment_id", "status", "run_mode"}
 
 
 def episode_name_tokens(value: object) -> list[str]:
@@ -71,7 +75,8 @@ def episode_name_tokens(value: object) -> list[str]:
 _SUMMARY_COLUMNS = (
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "experiment_id", "release_id", "item_id",
-    "attempt", "seed", "status", "started_at", "ended_at", "stopped", "created_at",
+    "attempt", "seed", "status", "run_mode", "started_at", "ended_at", "stopped",
+    "created_at",
 )
 
 
@@ -157,6 +162,7 @@ class SQLiteEpisodeStore:
             promoted["attempt"],
             promoted["seed"] if promoted["seed"] is not None else manifest.seed,
             promoted["status"],
+            promoted["run_mode"],
             json.dumps(payload.get("config", {})),
             json.dumps(events),
             json.dumps(payload.get("final_state", {})),
@@ -183,10 +189,10 @@ class SQLiteEpisodeStore:
                         "INSERT OR REPLACE INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
                         "  episode_tokens, cell_id, episode_idx, experiment_id, release_id, item_id,"
-                        "  attempt, seed, status,"
+                        "  attempt, seed, status, run_mode,"
                         "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
@@ -325,10 +331,12 @@ class SQLiteEpisodeStore:
             conn.close()
 
     def episode_facets(self, filters: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
-        """Stable environment and status option sets for the episode browser.
+        """Stable environment, status and run-mode option sets for the browser.
 
         Facets are global unless the caller narrows the corpus to an experiment.
         They deliberately do not disappear as other search controls change.
+        The browser answers "what happened", so it shows every mode by default;
+        the run-mode facet is how a researcher narrows it to results.
         """
         experiment_filters = {
             key: value for key, value in (filters or {}).items()
@@ -349,20 +357,33 @@ class SQLiteEpisodeStore:
                 f"WHERE status IS NOT NULL{suffix} GROUP BY status ORDER BY status",
                 params,
             ).fetchall()
+            run_modes = conn.execute(
+                "SELECT run_mode AS value, COUNT(*) AS count FROM episodes "
+                f"WHERE run_mode IS NOT NULL{suffix} GROUP BY run_mode ORDER BY run_mode",
+                params,
+            ).fetchall()
         finally:
             conn.close()
         return {
             "environments": [{"value": row["value"], "count": int(row["count"])} for row in environments],
             "statuses": [{"value": row["value"], "count": int(row["count"])} for row in statuses],
+            "run_modes": [{"value": row["value"], "count": int(row["count"])} for row in run_modes],
         }
 
     def cell_evidence(self, experiment_id: str) -> list[dict[str, Any]]:
-        """Summarize one latest execution for each locked logical replication.
+        """Summarize one latest *result* for each locked logical replication.
 
         Cells are the immutable plan, while attempts and episode rows describe
         physical executions. Selecting the highest attempt before decoding
         metrics means a retry replaces the prior execution as a logical
         observation without erasing the older trace from the fact table.
+
+        Only a result can replace a result. Attempts are ranked among those
+        whose launch could produce one, and traces among rows that are one, so
+        a later smoke launch can neither overwrite a live mean with its
+        scripted agents' score nor -- as a dry run with no trace at all would
+        -- hide it. The predicate is :data:`RESULT_PREDICATE`'s, qualified;
+        ``ControlPlane`` holds the two-step reference that must agree.
         """
         conn = self._connect()
         try:
@@ -373,16 +394,24 @@ class SQLiteEpisodeStore:
                 (experiment_id,),
             ).fetchall()
             executions = conn.execute(
-                """
-                WITH latest_attempts AS (
+                f"""
+                WITH attempt_modes AS (
+                    -- An attempt runs in its launch's mode: the control plane
+                    -- plans the mode per launch, so it is what says whether
+                    -- the attempt could have produced a result at all.
+                    SELECT a.cell_id, a.episode_id, a.attempt, a.status, a.id,
+                           l.mode AS run_mode
+                    FROM attempts a
+                    JOIN launches l ON l.id = a.launch_id
+                ), latest_attempts AS (
                     SELECT a.cell_id, a.episode_id, a.attempt, a.status,
                            ROW_NUMBER() OVER (
                                PARTITION BY a.episode_id
                                ORDER BY a.attempt DESC, a.id DESC
                            ) AS attempt_rank
-                    FROM attempts a
+                    FROM attempt_modes a
                     JOIN cells c ON c.cell_id = a.cell_id
-                    WHERE c.experiment_id = ?
+                    WHERE c.experiment_id = ? AND {result_predicate("a")}
                 ), latest_traces AS (
                     SELECT e.episode_id, e.attempt, e.status AS trace_status, e.metrics,
                            ROW_NUMBER() OVER (
@@ -390,6 +419,7 @@ class SQLiteEpisodeStore:
                                ORDER BY e.created_at DESC, e.episode_uid DESC
                            ) AS trace_rank
                     FROM episodes e
+                    WHERE {result_predicate("e")}
                 )
                 SELECT a.cell_id, a.episode_id, a.attempt, a.status,
                        e.trace_status, e.metrics
@@ -404,95 +434,21 @@ class SQLiteEpisodeStore:
             ).fetchall()
         finally:
             conn.close()
-
-        latest_by_episode = {
-            (row["cell_id"], row["episode_id"]): row for row in executions
-        }
-        evidence: list[dict[str, Any]] = []
-        for cell in cells:
-            try:
-                levels = json.loads(cell["levels"])
-            except json.JSONDecodeError:
-                levels = {}
-            try:
-                configs = json.loads(cell["episode_configs"])
-            except json.JSONDecodeError:
-                configs = []
-            planned_ids = {
-                str(config.get("episode_id"))
-                for config in configs
-                if isinstance(config, dict) and config.get("episode_id")
-            }
-            status_counts: dict[str, int] = {"NOT_STARTED": int(cell["episodes_planned"])}
-            completed_replicas = 0
-            metric_values: dict[str, dict[str, list[float] | list[bool]]] = {}
-
-            for episode_id in planned_ids:
-                execution = latest_by_episode.get((cell["cell_id"], episode_id))
-                if execution is None:
-                    continue
-                status_counts["NOT_STARTED"] -= 1
-                status = str(execution["status"])
-                status_counts[status] = status_counts.get(status, 0) + 1
-                if status != "COMPLETED" or execution["trace_status"] != "COMPLETED":
-                    continue
-                completed_replicas += 1
-                try:
-                    metrics = json.loads(execution["metrics"] or "{}")
-                except json.JSONDecodeError:
-                    metrics = {}
-                if not isinstance(metrics, dict):
-                    continue
-                for name, value in metrics.items():
-                    if isinstance(value, bool):
-                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["boolean"].append(value)
-                    elif isinstance(value, (int, float)) and math.isfinite(value):
-                        metric_values.setdefault(str(name), {"number": [], "boolean": []})["number"].append(float(value))
-
-            status_counts = {name: count for name, count in status_counts.items() if count}
-            metric_summaries: list[dict[str, Any]] = []
-            for name in sorted(metric_values):
-                values = metric_values[name]
-                numbers = values["number"]
-                booleans = values["boolean"]
-                # A metric whose native type changes between traces cannot be
-                # compared safely, so leave it out rather than coerce it.
-                if numbers and not booleans:
-                    summary: dict[str, Any] = {
-                        "name": name,
-                        "kind": "number",
-                        "n": len(numbers),
-                        "mean": statistics.fmean(numbers),
-                        "min": min(numbers),
-                        "max": max(numbers),
-                    }
-                    if len(numbers) > 1:
-                        summary["stddev"] = statistics.stdev(numbers)
-                    metric_summaries.append(summary)
-                elif booleans and not numbers:
-                    true_count = sum(booleans)
-                    metric_summaries.append({
-                        "name": name,
-                        "kind": "boolean",
-                        "n": len(booleans),
-                        "true_count": true_count,
-                        "false_count": len(booleans) - true_count,
-                    })
-            evidence.append({
-                "cell_id": cell["cell_id"],
-                "levels": levels if isinstance(levels, dict) else {},
-                "planned_replicas": int(cell["episodes_planned"]),
-                "completed_replicas": completed_replicas,
-                "status_counts": status_counts,
-                "metric_summaries": metric_summaries,
-            })
-        return evidence
+        return summarize_cell_evidence(cells, executions)
 
     def iter_episodes(
-        self, filters: dict[str, Any] | None = None
+        self, filters: dict[str, Any] | None = None, *, results: bool = False
     ) -> Iterator[EpisodeTrace]:
-        """Stream every matching trace. Used by ``EpisodeDataset.from_store``."""
+        """Stream every matching trace. Used by ``EpisodeDataset.from_store``.
+
+        ``results=True`` narrows the stream to rows that count as results --
+        what the rating pipeline and the leaderboard ask for. The default stays
+        every row, because a store asked what it holds (a release smoke check,
+        a dataset export) must not quietly answer a narrower question.
+        """
         where, params = self._where(filters)
+        if results:
+            where = f"{where} AND {RESULT_PREDICATE}" if where else f"WHERE {RESULT_PREDICATE}"
         conn = self._connect()
         try:
             self._ensure_schema(conn)
@@ -558,19 +514,48 @@ class SQLiteEpisodeStore:
 
         A ``PARTIAL`` row is a trace recovered from an interrupted episode's
         event log. It is evidence, not a result, so ``--resume`` must not treat
-        it as one and the progress join must not count it.
+        it as one and the progress join must not count it. A smoke row is not a
+        result either: scripted stand-ins played it, so a slot whose only row
+        is a smoke run has still not been measured and ``--resume`` runs it.
         """
         conn = self._connect()
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
                 "SELECT DISTINCT episode_id FROM episodes "
-                "WHERE experiment_name = ? AND status != 'PARTIAL'",
+                f"WHERE experiment_name = ? AND status != 'PARTIAL' AND {RESULT_PREDICATE}",
                 (experiment_name,),
             ).fetchall()
         finally:
             conn.close()
         return {r["episode_id"] for r in rows if r["episode_id"]}
+
+    def execution_records(self, episode_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """Every row held for these episode ids, unfiltered, with its run mode.
+
+        The episode-store half of the two-step replication rollup. The store
+        answers what it holds; the caller decides what counts as a result with
+        :func:`~a2a_engine.storage.results.counts_as_result`, which is what
+        keeps the in-memory reference honest against the single statement.
+        """
+        wanted = sorted({str(episode_id) for episode_id in episode_ids})
+        if not wanted:
+            return []
+        records: list[dict[str, Any]] = []
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            # SQLite bounds variables per statement; a large design can exceed it.
+            for start in range(0, len(wanted), 900):
+                batch = wanted[start:start + 900]
+                records.extend(dict(row) for row in conn.execute(
+                    "SELECT episode_uid, episode_id, attempt, status, run_mode, metrics, created_at "
+                    f"FROM episodes WHERE episode_id IN ({', '.join('?' for _ in batch)})",
+                    tuple(batch),
+                ).fetchall())
+        finally:
+            conn.close()
+        return records
 
     def completed_executions(
         self, episode_ids: Sequence[str] | None = None

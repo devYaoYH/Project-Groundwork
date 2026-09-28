@@ -15,6 +15,7 @@ from a2a_engine.derived import DerivedArtifact, trace_digest
 from a2a_engine.ratings.openskill import OpenSkillRater
 from a2a_engine.ratings.schemas import MetricSpec, RatingEvent, RatingSnapshot
 from a2a_engine.storage.base import iter_episodes
+from a2a_engine.storage.results import RESULT_PREDICATE
 
 
 @runtime_checkable
@@ -75,17 +76,28 @@ def _artifact_map(
     }
 
 
-def rebuild_rating_snapshot(store: object, adapter: RatingAdapter) -> RatingMaterialization:
+def rebuild_rating_snapshot(
+    store: object, adapter: RatingAdapter, *, include_non_results: bool = False,
+) -> RatingMaterialization:
     """Rebuild and persist a leaderboard snapshot from completed episodes only.
 
     A metric participates only when every eligible event contains scores for
     it. This prevents a metric such as privacy loss from appearing as a default
     OpenSkill value when its post-hoc artifact has not yet been produced.
+
+    Only traces that count as results are rated by default: a smoke episode's
+    scripted stand-ins would otherwise earn a rating under the roster the
+    design pinned. ``include_non_results=True`` is for an analysis that means
+    to look at them anyway, and the snapshot records that it did.
     """
     events: list[RatingEvent] = []
     skipped: list[str] = []
     writer = store if isinstance(store, RatingMaterializationStore) else None
-    for trace in iter_episodes(store, filters={"environment_id": adapter.environment_id}):
+    for trace in iter_episodes(
+        store,
+        filters={"environment_id": adapter.environment_id},
+        results=not include_non_results,
+    ):
         payload = trace.model_dump(mode="json")
         digest = trace_digest(payload)
         event = adapter.extract(payload, _artifact_map(store, trace.episode_uid, digest))
@@ -118,6 +130,10 @@ def rebuild_rating_snapshot(store: object, adapter: RatingAdapter) -> RatingMate
         "skipped_episode_count": len(skipped),
         "suppressed_metric_names": suppressed,
         "source": "completed_trace_replay",
+        # An analysis that rated non-results says so on the artifact itself,
+        # rather than leaving the reader to guess what the ratings describe.
+        "results_only": not include_non_results,
+        "result_predicate": None if include_non_results else RESULT_PREDICATE,
     })
     if writer is not None:
         writer.put_rating_snapshot(
