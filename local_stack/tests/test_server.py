@@ -1089,3 +1089,307 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
     # interpreter runs the worker is the launcher's own business, and a local
     # checkout's virtualenv legitimately lives in the repo.
     assert not any(str(control.workspace) in str(part) for part in command[1:])
+
+
+# --- the launch event stream, over a real socket ------------------------------
+
+
+class _SseReader(threading.Thread):
+    """Read an SSE response frame by frame, the way a browser would.
+
+    Runs on its own thread so the test can move a launch forward while the
+    subscriber is attached, which is the case that matters: progress arriving
+    without a reload. Stops early once it sees a frame whose kind is in
+    ``stop_on`` -- the server's bounded loop would otherwise hold it open.
+    """
+
+    def __init__(self, server, path, *, last_event_id=None, stop_on=frozenset()):
+        super().__init__(daemon=True)
+        self.port = server.server_address[1]
+        self.path = path
+        self.last_event_id = last_event_id
+        self.stop_on = frozenset(stop_on)
+        self.frames: list[list[str]] = []
+        self.status: int | None = None
+        self.headers: dict[str, str] = {}
+        self.stopped_early = False
+        self.reached_eof = False
+
+    def run(self) -> None:
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            headers = {}
+            if self.last_event_id is not None:
+                headers["Last-Event-ID"] = str(self.last_event_id)
+            connection.request("GET", self.path, headers=headers)
+            response = connection.getresponse()
+            self.status = response.status
+            self.headers = dict(response.getheaders())
+            lines: list[str] = []
+            while True:
+                raw = response.readline()
+                if not raw:
+                    self.reached_eof = True
+                    break
+                line = raw.decode("utf-8").rstrip("\n")
+                if line:
+                    lines.append(line)
+                    continue
+                if lines:
+                    self.frames.append(lines)
+                    lines = []
+                    kinds = [event["kind"] for event in self.events]
+                    if kinds and kinds[-1] in self.stop_on:
+                        self.stopped_early = True
+                        break
+        finally:
+            connection.close()
+
+    @property
+    def events(self) -> list[dict]:
+        out = []
+        for frame in self.frames:
+            data = [line for line in frame if line.startswith("data: ")]
+            if data:
+                out.append(json.loads(data[0].removeprefix("data: ")))
+        return out
+
+    @property
+    def keepalives(self) -> int:
+        return sum(1 for frame in self.frames if frame == [": keepalive"])
+
+
+def _serve_control(tmp_path, control, **cadence):
+    class StreamHandler(LocalStackHandler):
+        pass
+
+    StreamHandler.database = control.path
+    StreamHandler.workspace = control.workspace
+    StreamHandler.static_dir = tmp_path / "static"
+    # The handler's singleton is the control plane under test, so its fake
+    # launcher is the one the stream's reconciler asks about liveness.
+    StreamHandler._control_plane = control
+    StreamHandler.sse_interval = cadence.get("interval", 0.02)
+    StreamHandler.sse_iterations = cadence.get("iterations", 250)
+    StreamHandler.sse_reconcile_every = cadence.get("reconcile_every", 1)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StreamHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _stop(server, thread) -> None:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=10)
+
+
+def _publish_events(control, launch_id, *, experiment_name, episode_id, episode_uid, count):
+    """Publish durable events the way a dispatched worker would, then stop."""
+    from a2a_engine.event_sink import configure_event_artifacts, open_event_sink
+    from a2a_engine.tracing import EventLog
+
+    configure_event_artifacts(control.artifacts, launch_id=launch_id)
+    try:
+        sink = open_event_sink(
+            control.path.parent / "worker-results", experiment_name=experiment_name,
+            episode_uid=episode_uid, episode_id=episode_id, environment_id="buyer_seller",
+        )
+        log = EventLog(sink=sink)
+        log.append("game_start", {"num_agents": 2})
+        for index in range(count - 1):
+            log.append("offer", {"speaker": "seller", "price": 7 + index})
+        return sink
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+
+
+def _wait_for(predicate, *, timeout=10.0):
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if predicate():
+            return True
+        _time.sleep(0.02)
+    return False
+
+
+def test_a_real_sse_get_streams_unnamed_frames_keepalives_and_derived_progress(tmp_path):
+    """The first test to issue a real GET against the launch event stream."""
+    control, experiment = _buyer_seller_control(tmp_path)
+    launcher = FakeLauncher()  # dispatched, running, and never reports anything
+    control.launcher = launcher
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    episode_id = control.planned_episode_ids(launch.id)[0]
+    sink = _publish_events(
+        control, launch.id, experiment_name=experiment.name,
+        episode_id=episode_id, episode_uid="live-1", count=3,
+    )
+
+    server, thread = _serve_control(tmp_path, control, iterations=15)
+    try:
+        reader = _SseReader(server, f"/api/launches/{launch.id}/events")
+        reader.start()
+        reader.join(timeout=20)
+    finally:
+        _stop(server, thread)
+        sink.close()
+
+    # The bounded stream must actually *end*: a browser only reconnects (and
+    # resumes from Last-Event-ID) once it sees EOF. Keeping the socket open
+    # for a second request froze the live view after the first connection.
+    assert reader.reached_eof, "the stream never closed its connection"
+    assert reader.status == 200
+    assert reader.headers["Content-Type"].startswith("text/event-stream")
+    assert reader.headers["Cache-Control"] == "no-cache"
+    # Every data frame is unnamed and carries its id, which is what a browser
+    # sends back as Last-Event-ID when it reconnects.
+    data_frames = [frame for frame in reader.frames if frame != [": keepalive"]]
+    assert data_frames
+    for frame in data_frames:
+        assert not any(line.startswith("event:") for line in frame)
+        assert frame[0].startswith("id: ") and frame[1].startswith("data: ")
+        assert int(frame[0].removeprefix("id: ")) == json.loads(frame[1][6:])["id"]
+    # A quiet launch keeps the connection visibly alive rather than silent.
+    assert reader.keepalives > 0
+
+    kinds = [event["kind"] for event in reader.events]
+    assert kinds[:2] == ["launch.queued", "launch.submitted"]
+    # Progress is derived by the stream's own reconciler pass from what reached
+    # the artifact store -- the worker pushed nothing.
+    progress = [event["payload"] for event in reader.events if event["kind"] == "attempt.progress"]
+    assert progress == [{
+        "episode_id": episode_id, "attempt": 1, "status": "RUNNING",
+        "durable_through": 3, "episode_uid": "live-1",
+    }]
+    # A pass that observes nothing new writes nothing new.
+    assert kinds.count("attempt.progress") == 1
+    ids = [event["id"] for event in reader.events]
+    assert ids == sorted(ids) and len(set(ids)) == len(ids)
+
+
+def test_a_reconnecting_subscriber_resumes_from_last_event_id(tmp_path):
+    control, experiment = _buyer_seller_control(tmp_path)
+    control.launcher = FakeLauncher()
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    everything = control.events(launch.id)
+    assert len(everything) >= 2
+    resume_after = everything[0]["id"]
+
+    server, thread = _serve_control(tmp_path, control, iterations=5)
+    try:
+        resumed = _SseReader(
+            server, f"/api/launches/{launch.id}/events", last_event_id=resume_after,
+        )
+        resumed.start()
+        resumed.join(timeout=20)
+        garbage = _SseReader(
+            server, f"/api/launches/{launch.id}/events", last_event_id="not-a-number",
+        )
+        garbage.start()
+        garbage.join(timeout=20)
+    finally:
+        _stop(server, thread)
+
+    # Nothing at or before the id the browser already holds is sent again.
+    assert [event["id"] for event in resumed.events] == [
+        event["id"] for event in everything if event["id"] > resume_after
+    ]
+    assert all(event["id"] > resume_after for event in resumed.events)
+    # An unparseable header replays the log rather than refusing the stream.
+    assert garbage.status == 200
+    assert [event["id"] for event in garbage.events][: len(everything)] == [
+        event["id"] for event in everything
+    ]
+
+
+def test_a_launch_that_completes_under_a_subscriber_delivers_a_terminal_frame(tmp_path):
+    """No reload: the subscriber attached while RUNNING sees the launch settle."""
+    control, experiment = _buyer_seller_control(tmp_path)
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    planned = control.planned_episode_ids(launch.id)
+
+    server, thread = _serve_control(tmp_path, control)
+    try:
+        reader = _SseReader(
+            server, f"/api/launches/{launch.id}/events",
+            stop_on={"launch.completed", "launch.failed", "launch.cancelled"},
+        )
+        reader.start()
+        assert _wait_for(lambda: len(reader.events) >= 2), "the stream never started"
+
+        # The worker persists every planned episode and exits -- all of it
+        # after the subscriber attached.
+        for episode_id in planned:
+            _persist_episode(control, episode_id)
+        launcher.finish(launch.id)
+        reader.join(timeout=20)
+    finally:
+        _stop(server, thread)
+
+    assert reader.stopped_early, "no terminal frame arrived on the open connection"
+    kinds = [event["kind"] for event in reader.events]
+    assert kinds[-1] == "launch.completed"
+    settled = next(event for event in reader.events if event["kind"] == "launch.settled")
+    assert settled["payload"]["status"] == "COMPLETED"
+    # Each episode's completion was published before the launch settled, so a
+    # counter driven by frames never stops short of the terminal state.
+    completed = {
+        event["payload"]["episode_id"] for event in reader.events
+        if event["kind"] == "attempt.progress" and event["payload"]["status"] == "COMPLETED"
+    }
+    assert completed == set(planned)
+    assert max(
+        index for index, kind in enumerate(kinds) if kind == "attempt.progress"
+    ) < kinds.index("launch.settled")
+    assert control.launch(launch.id).status == "COMPLETED"
+
+
+def test_a_running_episode_is_viewable_before_its_worker_persists_it(tmp_path):
+    """The launch page links a running attempt to its in-flight uid.
+
+    The episode store holds nothing for that uid until the worker finishes, so
+    the link used to 404 with "trace not found". The endpoint now projects the
+    durable events published so far, marked live, and the stored trace takes
+    over the moment it exists.
+    """
+    control, experiment = _buyer_seller_control(tmp_path)
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    launch = control.launch_experiment(experiment.id, smoke_test=True)
+    episode_id = control.planned_episode_ids(launch.id)[0]
+    sink = _publish_events(
+        control, launch.id, experiment_name=experiment.name,
+        episode_id=episode_id, episode_uid="in-flight-1", count=3,
+    )
+
+    server, thread = _serve_control(tmp_path, control, iterations=1)
+    try:
+        status, _headers, body = _request(server, "GET", "/api/episodes/in-flight-1")
+        assert status == 200
+        live = json.loads(body)
+        assert live["episode"]["observability"]["live"] is True
+        assert live["episode"]["observability"]["durable_through"] == 3
+        assert live["cursor_max"] == 3
+        # A read, not a write: nothing reached the episode store.
+        assert control._store().get_episode("in-flight-1") is None
+
+        # An unknown uid is still a 404, not an empty live trace.
+        status, _headers, _body = _request(server, "GET", "/api/episodes/nobody")
+        assert status == 404
+
+        # The worker dies; settlement recovers what was durable, and the
+        # stored trace replaces the projection.
+        sink.close()
+        launcher.finish(launch.id, ExecutionStatus.FAILED)
+        control.reconcile()
+        status, _headers, body = _request(server, "GET", "/api/episodes/in-flight-1")
+        assert status == 200
+        stored = json.loads(body)
+        assert "live" not in stored["episode"]["observability"]
+        assert stored["episode"]["observability"]["partial"] is True
+    finally:
+        _stop(server, thread)

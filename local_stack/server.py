@@ -104,6 +104,19 @@ class LocalStackHandler(BaseHTTPRequestHandler):
     # control plane and a worker still share. ``None`` keeps the default beside
     # the control plane's own results tree.
     artifact_root: Path | None = None
+    # SSE cadence. A bounded connection plus browser auto-reconnect is still
+    # the model -- it is what lets a live view need no server-side registry of
+    # subscribers -- but the bound is now a number rather than a literal, so a
+    # test can watch a whole launch without waiting twenty seconds for one.
+    sse_interval = 0.25
+    sse_iterations = 80
+    # How many polls apart the reconciler runs. Reading the database is cheap;
+    # measuring durable evidence is a read per episode artifact, so it happens
+    # on a slower beat than the frames it produces. This connection is often
+    # the only thing looking at a launch nobody is polling, which is why the
+    # stream drives the reconciler rather than reporting what some other
+    # request happened to leave behind.
+    sse_reconcile_every = 4
     _control_plane: ControlPlane | None = None
     _control_lock = threading.Lock()
 
@@ -407,8 +420,13 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         inside it, for the same reason the item-level projection rides
         alongside a release declaration: what is durable and what is derived
         must not be confusable in the payload.
+
+        An episode still running has no stored trace yet, so the control plane
+        projects one from the durable events published so far and marks it
+        ``observability.live``. That fallback is a read: nothing is persisted,
+        and the stored trace wins the moment it exists.
         """
-        trace = cls._store().get_episode(episode_uid)
+        trace = cls._store().get_episode(episode_uid) or cls._control().live_trace(episode_uid)
         if trace is None:
             return None
         return {
@@ -577,12 +595,31 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+        # ``send_header("Connection", "keep-alive")`` quietly sets
+        # ``close_connection = False``, so when the bounded loop below ended the
+        # server waited for a *next request* on this socket while the client --
+        # holding a response with no length -- waited for EOF. Neither moved:
+        # the browser never saw the stream end, never reconnected, and the live
+        # view froze after the first twenty seconds. The stream is over when
+        # the loop is, so the connection is too; the reconnect is what resumes.
+        self.close_connection = True
         if self.command == "HEAD":
             return
-        cursor = 0
-        # Browsers reconnect automatically after this short bounded request;
-        # SSE therefore needs no server-side client registry for local runs.
-        for _ in range(80):
+        # Browsers reconnect automatically after this short bounded request, so
+        # SSE needs no server-side client registry -- but a reconnect that
+        # restarted at zero re-sent the whole launch every twenty seconds, and
+        # ``id:`` was already on every frame. Honouring the resume header is
+        # what makes a long launch cost one delivery per event rather than one
+        # per event per reconnect.
+        cursor = self._last_event_id()
+        for iteration in range(self.sse_iterations):
+            if self.sse_reconcile_every and iteration % self.sse_reconcile_every == 0:
+                try:
+                    self._control().reconcile()
+                except Exception:  # pragma: no cover - defensive
+                    # A stalled reconciler degrades the view to whatever is
+                    # already durable; it must not break the connection.
+                    log.warning("reconcile during a launch stream failed", exc_info=True)
             events = self._control().events(launch_id, after_id=cursor)
             try:
                 for event in events:
@@ -593,7 +630,20 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
-            time.sleep(0.25)
+            time.sleep(self.sse_interval)
+
+    def _last_event_id(self) -> int:
+        """Where a reconnecting subscriber left off, or the start of the log.
+
+        An unparseable header replays from zero rather than failing the
+        request: the frames are idempotent and carry their own ids, so a replay
+        costs bandwidth while a refusal costs the researcher their live view.
+        """
+        raw = (self.headers.get("Last-Event-ID") or "").strip()
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 0
 
     def _request_json(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length") or 0)

@@ -570,3 +570,56 @@ def test_a_read_during_dispatch_does_not_strand_the_launch_it_races(tmp_path):
         )
     restarted = ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
     assert restarted.launch(stranded.id).status == "FAILED"
+
+
+def test_a_recovered_fragment_carries_the_identity_its_launch_input_planned(tmp_path):
+    """Recovery re-attaches the provenance the worker was told to run.
+
+    A trace projected from the event log carries events and no identity, so a
+    recovered PARTIAL used to land with no experiment, release, seed or roster
+    -- and at attempt 1 whatever attempt produced it. The launch input is the
+    digest-bound plan the worker verified, so it is the authority.
+    """
+    import sqlite3
+
+    from a2a_engine.event_sink import configure_event_artifacts, open_event_sink
+    from a2a_engine.tracing import EventLog
+
+    control = _control(tmp_path)
+    locked = _locked(control, BUYER_SELLER_DESIGN, release_id="buyer_seller", name="Recovered identity")
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    control.launch_experiment(locked.id, mode="smoke")  # attempt 1, never persisted
+    control.reconcile()
+    launch = control.launch_experiment(locked.id, mode="smoke")  # attempt 2
+    episode_id = control.planned_episode_ids(launch.id)[0]
+
+    configure_event_artifacts(control.artifacts, launch_id=launch.id)
+    try:
+        sink = open_event_sink(
+            tmp_path / "worker-results", experiment_name=locked.name,
+            episode_uid="killed-design", episode_id=episode_id, environment_id="buyer_seller",
+        )
+        EventLog(sink=sink).append("game_start", {"num_agents": 2})
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+    launcher.finish(launch.id, ExecutionStatus.FAILED)
+    control.reconcile()
+
+    with sqlite3.connect(control.path) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            "SELECT status, attempt, experiment_id, release_id, seed, config "
+            "FROM episodes WHERE episode_uid = 'killed-design'"
+        ).fetchone()
+    planned = next(
+        config for config in control._design_episode_configs(locked, mode="smoke")
+        if config["episode_id"] == episode_id
+    )
+    assert row["status"] == "PARTIAL"
+    assert row["attempt"] == 2
+    assert row["experiment_id"] == locked.id
+    assert row["release_id"] == "buyer_seller"
+    assert row["seed"] == planned["seed"]
+    provenance = json.loads(row["config"])["provenance"]
+    assert provenance["participants"] == planned["provenance"]["participants"]

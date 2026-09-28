@@ -136,7 +136,10 @@ value comes from.
 Progress is an identity join, not a log parse. The whole planned episode set is
 written at launch time and `episode_id` is deterministic, so
 `GET /api/launches/<id>` answers `progress.by_cell` from
-`attempts LEFT JOIN episodes` — the same question `--resume` asks the store.
+`attempts LEFT JOIN episodes` on `(episode_id, attempt)` — the same join that
+settles the launch. A re-launch plans a new attempt for every episode and the
+worker re-runs all of them, so an earlier launch's results for the same ids do
+not count as this launch's progress.
 The worker's stdout belongs to its own platform and is never read by the
 control plane; `launch_events` records what the control plane did (queued,
 submitted, settled) and what it then observed.

@@ -297,6 +297,51 @@ def test_reconcile_recovers_a_partial_trace_from_the_event_log(tmp_path):
     assert restarted.progress(launch.id)["completed"] == 0
 
 
+def test_a_relaunchs_recovered_partial_keeps_its_own_attempt_number(tmp_path):
+    """Recovery must file a fragment under the attempt that produced it.
+
+    It used to take the manifest's default of 1. On a re-launch that put the
+    recovered PARTIAL in the first launch's (episode_id, attempt) slot: the
+    first launch's COMPLETED row then linked to the fragment, and the second
+    launch's FAILED row linked to nothing.
+    """
+    control = _control(tmp_path)
+    experiment = _experiment(control)
+    launcher = _silent(control)
+
+    first = control.launch_experiment(experiment.id, smoke_test=True)
+    episode_id = control.planned_episode_ids(first.id)[0]
+    _record_episode(control, episode_id)
+    launcher.finish(first.id)
+    control.reconcile()
+
+    second = control.launch_experiment(experiment.id, smoke_test=True)
+    configure_event_artifacts(control.artifacts, launch_id=second.id)
+    try:
+        sink = open_event_sink(
+            tmp_path / "worker-results", experiment_name=experiment.name,
+            episode_uid="killed-2", episode_id=episode_id, environment_id="buyer_seller",
+        )
+        EventLog(sink=sink).append("game_start", {"num_agents": 2})
+    finally:
+        configure_event_artifacts(None, launch_id=None)
+    launcher.finish(second.id, ExecutionStatus.FAILED)
+    control.reconcile()
+
+    with sqlite3.connect(control.path) as db:
+        attempt = db.execute(
+            "SELECT attempt FROM episodes WHERE episode_uid = 'killed-2'"
+        ).fetchone()[0]
+    assert attempt == 2
+
+    def linked(launch_id):
+        rows = control.launch_detail(launch_id)["attempts"]
+        return next(row["episode_uid"] for row in rows if row["episode_id"] == episode_id)
+
+    assert linked(first.id) == f"uid-{episode_id}"
+    assert linked(second.id) == "killed-2"
+
+
 def test_attempt_numbers_are_monotonic_per_episode_across_launches(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)

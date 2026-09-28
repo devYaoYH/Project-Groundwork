@@ -236,6 +236,28 @@ class EventSinkArtifact:
     def read_bytes(self) -> bytes:
         return self.store.get(self.uri)
 
+    def observed_through(self) -> int:
+        """How far durability has reached *right now*, closed or not.
+
+        ``watermark`` only exists once the sink closed, so a live episode has
+        none -- and a live episode is precisely the one a researcher is
+        watching.  Counting the newlines in the published object answers the
+        same question while the run is in flight: the store appends a whole
+        line per event, so a terminated line is an event that is durable, and a
+        partially written last line is correctly not counted yet.
+
+        Fails open to ``0``.  This feeds a progress counter, and a progress
+        counter that raises would take down the reconciler that also settles
+        launches.
+        """
+        if self.watermark is not None:
+            return self.watermark
+        try:
+            return self.read_bytes().count(b"\n")
+        except Exception:
+            log.warning("could not measure durable progress for %s", self.uri, exc_info=True)
+            return 0
+
     def __str__(self) -> str:
         # ``project_events_to_trace`` records ``str(source)`` as the origin, so
         # a recovered trace names the artifact it came from rather than a path

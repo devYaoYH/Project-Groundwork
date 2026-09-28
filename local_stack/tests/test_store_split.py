@@ -137,14 +137,14 @@ def test_both_implementations_agree_when_an_attempt_number_moves(tmp_path):
     assert list(completed) == [(planned[0], 2)]
 
 
-def test_the_two_joins_ask_different_questions_and_both_stay_consistent(tmp_path):
-    """Settlement is attempt-level; progress is episode-level. On purpose.
+def test_a_relaunch_is_not_credited_with_an_earlier_launchs_results(tmp_path):
+    """Settlement and progress are both attempt-level.
 
-    A re-launch of a design that already has results plans a *new* attempt, so
-    settlement must not call it done -- nothing ran for it -- while progress
-    must, because "do we hold a completed run for this episode" is the same
-    question ``--resume`` asks. The two implementations of each have to agree
-    even here, where the two joins deliberately disagree with each other.
+    A re-launch of a design that already has results plans a *new* attempt for
+    every episode, and the dispatched worker never runs with ``--resume``, so it
+    re-executes all of them. An earlier launch's completed episode for the same
+    id is not work this launch has done: counting it made a live re-launch read
+    ``2/2`` in the browser while both of its attempts were still running.
     """
     control, first = _fixture(tmp_path)
     experiment = control.experiments()[0]
@@ -156,8 +156,9 @@ def test_the_two_joins_ask_different_questions_and_both_stay_consistent(tmp_path
         control._completed_executions_two_step(second.id) == {}
     progress_sql = control._progress_rows_sql(second.id)
     assert progress_sql == control._progress_rows_two_step(second.id)
-    # The first launch's completed episode still counts as progress for its id.
-    assert progress_sql["completed"] == 1
+    assert progress_sql["completed"] == 0
+    # The first launch still reads as done: the fix narrows, it does not drop.
+    assert control._progress_rows_sql(first)["completed"] == 1
     # ...and it counts for the episode it is, not for whichever one ran first.
     assert {attempt["attempt"] for attempt in control.launch_detail(second.id)["attempts"]} == {2}
     assert set(planned) == set(control.planned_episode_ids(first))

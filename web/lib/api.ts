@@ -374,6 +374,58 @@ export function getLaunch(id: string): Promise<LaunchDetail> {
   return request<LaunchDetail>(`/api/launches/${encodeURIComponent(id)}`);
 }
 
+// The payload an ``attempt.progress`` event carries. Progress is derived by
+// the control plane from durable evidence, so `durable_through` is a count of
+// events that reached shared storage -- not a claim a worker made about
+// itself.
+export type AttemptProgress = {
+  episode_id: string;
+  attempt: number;
+  status: string;
+  durable_through: number;
+  episode_uid: string | null;
+};
+
+// Every terminal launch event kind. A subscriber stops here and re-reads the
+// launch rather than trying to assemble the final state from frames: the
+// settled record is one fetch away and cannot disagree with itself.
+export const TERMINAL_LAUNCH_EVENTS = new Set([
+  "launch.settled", "launch.completed", "launch.failed", "launch.cancelled",
+]);
+
+/**
+ * Subscribe to a launch's durable event log.
+ *
+ * Frames are deliberately unnamed server-side so a newly added event kind
+ * reaches existing clients instead of being dropped by a name whitelist; the
+ * kind travels in the payload, which is why this listens on `message` and
+ * dispatches on `entry.kind`. The connection is short and bounded by design --
+ * the browser reconnects on its own and resumes from the last id it saw -- so
+ * there is nothing to keep alive here beyond closing on unmount.
+ *
+ * Returns a function that closes the stream. A browser without `EventSource`
+ * gets a no-op, which leaves the caller's one-shot fetch as the whole view.
+ */
+export function subscribeLaunchEvents(
+  id: string,
+  onEvent: (entry: LaunchLog) => void,
+): () => void {
+  if (typeof EventSource === "undefined") return () => {};
+  const source = new EventSource(`${baseUrl}/api/launches/${encodeURIComponent(id)}/events`);
+  source.onmessage = (frame: MessageEvent) => {
+    let entry: LaunchLog;
+    try {
+      entry = JSON.parse(frame.data as string) as LaunchLog;
+    } catch {
+      // A frame that will not parse is a frame nothing can be done about. The
+      // live view degrades; the durable log it came from is still there.
+      return;
+    }
+    if (entry && typeof entry.kind === "string") onEvent(entry);
+  };
+  return () => source.close();
+}
+
 export function validateDesign(releaseId: string, designText: string): Promise<DesignValidation> {
   return request<DesignValidation>("/api/designs/validate", {
     method: "POST",

@@ -34,22 +34,23 @@ has `A2A_REDIS_URL` and `A2A_LAUNCH_ID`, each episode writes normalized
 a2a:launch:<launch_id>:episode:<experiment>.<cell>.<episode_idx>
 ```
 
-Redis is the durable operational/recovery log while that volume is retained:
-after a worker crash, its persisted events remain available to inspect or replay
-even if a final trace was not written. It does not replace the final framework
-trace and manifest, which remain the canonical reproducible research record.
+Redis is a live projection for replay pages, not the recovery source. Every
+episode writes the same events to a durable JSONL sink as they happen, and a
+dispatched worker also publishes each line to the shared artifact store under
+`launches/<launch_id>/episodes/<episode_id>/<episode_uid>/`. That artifact is
+what the control plane reads after a worker crash, which is why recovery works
+without the reader mounting the worker's filesystem.
 
-To preserve a crashed episode as an explicit partial trace artifact, run:
+Recovering a crashed episode is not a manual step. The control plane's
+reconciler settles every open launch from that evidence and persists whatever
+the interrupted episode's event log held as a trace with `stopped: true` and
+`observability.durable_through` recording how far durability actually reached.
+It is evidence for inspection and retry, not a successful experimental result.
 
-```bash
-python scripts/recover_redis_stream.py \
-  --redis-url redis://localhost:6379/0 \
-  --stream 'a2a:launch:<id>:episode:<id>' \
-  --output results/recovered-episode.json
-```
-
-The recovered trace is marked `stopped: true`; it is evidence for inspection
-and retry, not a successful experimental result.
+The standalone `scripts/recover_redis_stream.py` that used to be documented
+here is gone: it referenced an argument it never registered, so every
+invocation raised `AttributeError`, and the durable path above replaced the
+need for it.
 
 The local control plane proxies a stream at:
 

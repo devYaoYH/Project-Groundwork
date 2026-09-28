@@ -12,6 +12,7 @@ import { specialisedViewerUrl } from "../lib/environments";
 import { laneHue, projectLanes, projectTranscript } from "../lib/lanes";
 
 const STATUS_TONE: Record<string, "plain" | "good" | "warn"> = {
+  RUNNING: "plain",
   COMPLETED: "good",
   PARTIAL: "warn",
   STOPPED: "warn",
@@ -49,6 +50,26 @@ export function EpisodeView() {
       })
       .catch((reason: Error) => setError(reason.message));
   }, [uid]);
+
+  // A running episode is projected from its durable events so far, so it
+  // grows. Re-read it until the stored trace replaces the projection, and
+  // follow the newest event only if the reader was already on the last one.
+  const live = detail?.episode.observability?.live === true;
+  const seen = detail?.cursor_max ?? 0;
+  useEffect(() => {
+    if (!uid || !live) return;
+    const timer = setInterval(() => {
+      getEpisode(uid)
+        .then((next) => {
+          setDetail(next);
+          setCursor((current) =>
+            current >= seen - 1 ? Math.max(0, (next.cursor_max ?? 0) - 1) : current,
+          );
+        })
+        .catch(() => undefined);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [uid, live, seen]);
 
   const episode = detail?.episode ?? null;
   const provenance = record(record(episode?.config).provenance);
@@ -99,7 +120,9 @@ export function EpisodeView() {
   const experimentName = text(provenance.experiment_name) ?? text(record(episode.config).experiment_name);
   const experimentId = text(provenance.experiment_id);
   const cellId = text(provenance.cell_id);
-  const status = episode.observability?.partial ? "PARTIAL" : episode.stopped ? "STOPPED" : "COMPLETED";
+  // ``live`` first: an in-flight projection is also incomplete, and calling it
+  // PARTIAL would say it was interrupted when it is simply not finished yet.
+  const status = live ? "RUNNING" : episode.observability?.partial ? "PARTIAL" : episode.stopped ? "STOPPED" : "COMPLETED";
   const viewerUrl = specialisedViewerUrl(environmentId, episode.episode_uid);
   const metrics = Object.entries(record(episode.metrics));
 

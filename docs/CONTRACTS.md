@@ -192,7 +192,8 @@ class EpisodeStore(Protocol):
 ```
 
 Optional, used when present: `completed_episode_ids(experiment_name)` powers
-`--resume` and the launch-progress join; `iter_episodes(filters)` gives
+`--resume`; `completed_executions(episode_ids)` answers the launch-progress and
+settlement joins by `(episode_id, attempt)`; `iter_episodes(filters)` gives
 `EpisodeDataset` a streaming read; `episode_summaries(filters, limit, cursor)`
 serves a list view from promoted columns without rehydrating whole traces.
 

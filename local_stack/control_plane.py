@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -39,7 +40,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from a2a_engine.artifacts import ArtifactRef, make_artifact_store, plan_key, sha256_bytes
+from a2a_engine.artifacts import (
+    ArtifactRef, fetch_verified, make_artifact_store, plan_key, sha256_bytes,
+)
 from a2a_engine.compiler import ExecutionPlan as CompiledExecutionPlan
 from a2a_engine.compiler import compile as compile_design
 from a2a_engine.compiler import validate as validate_design
@@ -49,6 +52,7 @@ from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.items import ItemBank, derive_item_domain
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.registry import get_environment_spec, installed_environments
+from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.storage.schema import apply_schema
 from a2a_engine.stream_projection import project_events_to_trace
@@ -63,6 +67,8 @@ from local_stack.launchers import (
     make_launcher,
 )
 from local_stack.reconciler import Reconciler
+
+log = logging.getLogger("local_stack.control_plane")
 
 
 def _now() -> str:
@@ -1327,13 +1333,14 @@ class ControlPlane:
         return [row["episode_id"] for row in rows]
 
     def progress(self, launch_id: str) -> dict[str, Any]:
-        """Progress as an identity join over deterministic episode ids.
+        """Progress as an identity join over this launch's planned attempts.
 
         The whole fan-out is materialised before any episode runs, and the
-        episode store answers "which of these ids do you hold" -- the same
-        question ``--resume`` asks. Because both tables now live in one
-        database that is one query, and because it reads persisted state rather
-        than a process's stdout it survives a server restart unchanged.
+        episode store answers "which of these ``(episode_id, attempt)`` pairs
+        do you hold completed" -- the same question settlement asks. When both
+        tables live in one database that is one query, and because it reads
+        persisted state rather than a process's stdout it survives a server
+        restart unchanged.
 
         A ``PARTIAL`` episode is a recovered fragment, not a completed run, so
         it is deliberately not counted.
@@ -1349,25 +1356,21 @@ class ControlPlane:
     def _progress_rows_two_step(self, launch_id: str) -> dict[str, Any]:
         """The reference: plan from here, evidence from the store, join in memory.
 
-        Deliberately id-level rather than ``(episode_id, attempt)``-level, which
-        is the one place progress and settlement ask different questions.
-        Settlement asks "did *this* attempt produce an episode", because that is
-        what an attempt row is a claim about. Progress asks "do we hold a
-        completed run for this episode id" -- the same question ``--resume``
-        asks -- so a re-launch of a design that already has results reads as
-        already done rather than as no progress at all.
+        Attempt-level, exactly like settlement. A launch's progress is a claim
+        about the attempts *it* planned: the dispatched worker never runs with
+        ``--resume``, so it re-executes every one of them, and an earlier
+        launch's completed episode for the same id is not work this launch has
+        done. Crediting it made a re-launch read ``2/2`` while both of its
+        attempts were still running.
         """
         with self._session() as db:
             rows = db.execute(
-                "SELECT cell_id, episode_id, status FROM attempts WHERE launch_id = ? "
-                "ORDER BY cell_id",
+                "SELECT cell_id, episode_id, attempt, status FROM attempts "
+                "WHERE launch_id = ? ORDER BY cell_id",
                 (launch_id,),
             ).fetchall()
         planned = sorted({row["episode_id"] for row in rows})
-        done = {
-            episode_id
-            for episode_id, _ in self._store().completed_executions(planned)
-        }
+        done = set(self._store().completed_executions(planned))
         by_cell: dict[str, dict[str, Any]] = {}
         for row in rows:
             cell = by_cell.setdefault(
@@ -1377,7 +1380,7 @@ class ControlPlane:
             cell["planned"] += 1
             # ``DISTINCT`` in the SQL form: a cell counts an episode once
             # however many rows the store holds for it.
-            cell["completed"] += 1 if row["episode_id"] in done else 0
+            cell["completed"] += 1 if (row["episode_id"], row["attempt"]) in done else 0
             cell["failed"] += 1 if row["status"] == "FAILED" else 0
         return self._progress_totals([by_cell[key] for key in sorted(by_cell)])
 
@@ -1391,8 +1394,8 @@ class ControlPlane:
                        SUM(CASE WHEN a.status = 'FAILED' THEN 1 ELSE 0 END) AS failed
                 FROM attempts a
                 LEFT JOIN (
-                    SELECT DISTINCT episode_id FROM episodes WHERE status = 'COMPLETED'
-                ) done ON done.episode_id = a.episode_id
+                    SELECT DISTINCT episode_id, attempt FROM episodes WHERE status = 'COMPLETED'
+                ) done ON done.episode_id = a.episode_id AND done.attempt = a.attempt
                 WHERE a.launch_id = ?
                 GROUP BY a.cell_id
                 ORDER BY a.cell_id
@@ -1498,6 +1501,74 @@ class ControlPlane:
     def reconcile(self) -> list[str]:
         """Advance every open launch once. Kept as the public spelling of a tick."""
         return self.reconciler.tick()
+
+    def durable_progress(self, launch: Launch) -> list[dict[str, Any]]:
+        """What the durable record says about each unsettled attempt, right now.
+
+        Progress is *derived*, never reported. The worker pushes nothing here
+        and holds no control-plane credential; what moves a counter is an event
+        that reached the shared artifact store, plus the episodes fact table
+        for the one transition a stream cannot announce about itself -- that it
+        persisted a complete episode.
+
+        An attempt with no evidence at all is omitted rather than reported at
+        zero. "Nothing has happened yet" is what the planned attempt row
+        already says, and emitting it as progress would make a queue look like
+        a queue that is moving.
+        """
+        with self._session() as db:
+            attempts = [
+                self._attempt(row) for row in db.execute(
+                    "SELECT * FROM attempts WHERE launch_id = ? "
+                    "AND status IN ('QUEUED', 'RUNNING')",
+                    (launch.id,),
+                ).fetchall()
+            ]
+        if not attempts:
+            return []
+        completed = self.completed_executions(launch.id)
+        marks: dict[str, tuple[int, str]] = {}
+        try:
+            for ref in self.artifacts.iter_event_sinks(launch.id):
+                through = ref.observed_through()
+                previous = marks.get(ref.episode_id)
+                # A retried episode publishes under a second uid, so the
+                # furthest-along stream is the one that describes this attempt.
+                if previous is None or through > previous[0]:
+                    marks[ref.episode_id] = (through, ref.episode_uid)
+        except Exception:  # pragma: no cover - defensive
+            # Enumeration is an observability read: it degrades to "no news"
+            # rather than stopping the pass that also settles launches.
+            log.warning("could not enumerate durable evidence for %s", launch.id, exc_info=True)
+        rows: list[dict[str, Any]] = []
+        for attempt in attempts:
+            through, uid = marks.get(attempt.episode_id, (0, ""))
+            episode_uid = completed.get((attempt.episode_id, attempt.attempt))
+            if episode_uid is None and not through:
+                continue
+            rows.append({
+                "episode_id": attempt.episode_id,
+                "attempt": attempt.attempt,
+                "status": "COMPLETED" if episode_uid is not None else "RUNNING",
+                "durable_through": through,
+                "episode_uid": episode_uid or uid or None,
+            })
+        return rows
+
+    def record_attempt_progress(self, launch_id: str, rows: list[dict[str, Any]]) -> None:
+        """Append derived progress to the one durable log the SSE stream reads.
+
+        ``launch_events`` is already the single source the browser sees, so a
+        progress frame is the same kind of row as ``launch.settled`` and
+        survives a reload for free. Nothing here resolves an attempt: settling
+        stays the reconciler's terminal step, and a live ``COMPLETED`` frame is
+        a statement about evidence, not a status transition.
+        """
+        if not rows:
+            return
+        with self._session() as db:
+            for row in rows:
+                self._event(db, launch_id, "attempt.progress", row)
 
     def _settle_from_evidence(self, launch: Launch, *,
                               execution: ExecutionStatus = ExecutionStatus.UNKNOWN) -> None:
@@ -1618,6 +1689,14 @@ class ControlPlane:
                 ref.watermark if ref.watermark is not None else len(entries)
             )
             trace.observability["durable_closed"] = ref.closed
+            # The event log carries events, not identity: a projected trace has
+            # no provenance, so it was stored as attempt 1 with no experiment,
+            # release, seed or roster. Re-attach what the worker was told to
+            # run, so the fragment files under the attempt that produced it.
+            trace.config = type(trace.config).model_validate({
+                **trace.config.model_dump(),
+                **self._planned_identity(attempt),
+            })
             manifest = EpisodeManifest.from_run(
                 config=trace.config.model_dump(),
                 experiment_name=experiment_name,
@@ -1626,8 +1705,71 @@ class ControlPlane:
                 episode_uid=trace.episode_uid,
             )
             manifest.episode_id = attempt.episode_id
+            manifest.attempt = attempt.attempt
             manifest.environment_id = str(trace.config.environment_id or "")
             return self._store().put_episode(trace, manifest)
+        return None
+
+    def _planned_identity(self, attempt: Attempt) -> dict[str, Any]:
+        """The identity a worker stamps on an episode, read from its launch input.
+
+        The launch input is the digest-bound plan the worker verified and ran,
+        so it is the authority on what this attempt *was* -- the same
+        provenance and seed the runner copies onto a completed episode. A
+        legacy launch has no compiled plan to read; it still gets the one fact
+        the control plane owns, its attempt number.
+        """
+        fallback = {"provenance": {
+            "attempt": attempt.attempt, "cell_id": attempt.cell_id,
+            "episode_idx": attempt.episode_idx,
+        }}
+        with self._session() as db:
+            row = db.execute(
+                "SELECT launch_input_uri, launch_input_sha256 FROM launches WHERE id = ?",
+                (attempt.launch_id,),
+            ).fetchone()
+        if row is None or not row["launch_input_uri"]:
+            return fallback
+        try:
+            plan = yaml.safe_load(fetch_verified(ArtifactRef(
+                uri=row["launch_input_uri"], sha256=row["launch_input_sha256"],
+            ))) or {}
+        except Exception as exc:  # the fragment is still worth keeping
+            log.warning("launch input unreadable for %s: %s", attempt.launch_id, exc)
+            return fallback
+        for cell in plan.get("cells") or []:
+            planned = (cell.get("config") or {}).get("_design_episode")
+            if isinstance(planned, dict) and planned.get("episode_id") == attempt.episode_id:
+                return {
+                    "episode_id": attempt.episode_id,
+                    "seed": int(planned["seed"]),
+                    "provenance": dict(planned["provenance"]),
+                }
+        return fallback
+
+    def live_trace(self, episode_uid: str) -> EpisodeTrace | None:
+        """An in-flight episode, projected from its durable event stream.
+
+        The episode store holds nothing for an episode until its worker
+        persists it, but every event it has emitted so far is already in the
+        artifact store -- the same evidence ``_recover_partial`` reads. This
+        projects it on demand and persists nothing: a live view is a read, and
+        whatever the episode becomes is still settled from evidence by the
+        reconciler. Only open launches are searched, because once a launch
+        settles the store holds the episode, completed or recovered.
+        """
+        for launch in self._open_launches():
+            for ref in self.artifacts.iter_event_sinks(launch.id):
+                if ref.episode_uid != episode_uid:
+                    continue
+                try:
+                    trace = project_events_to_trace(ref)
+                except ValueError:
+                    # Not even a first event yet: known, but nothing to show.
+                    return None
+                trace.observability["durable_through"] = ref.observed_through()
+                trace.observability["live"] = True
+                return trace
         return None
 
     @staticmethod
