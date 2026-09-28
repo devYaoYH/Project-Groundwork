@@ -26,6 +26,7 @@ from pydantic import Field
 
 from a2a_engine import EpisodeConfigBase, Event, EpisodeTrace, register_environment
 from a2a_engine.tracing import EventLog
+from a2a_engine.turns import identity
 
 from negotiation_game.backend.agents import make_agent
 from negotiation_game.backend.engine import GameConfig, GameEngine, GameMode
@@ -180,6 +181,10 @@ class NegotiationGame:
         agent_a, agent_b = self._make_agents()
 
         engine = GameEngine(engine_config, agent_a, agent_b)
+        engine.turn_roles = {
+            "agent_a": identity(self.config, self.config.first_speaker, "agent_a"),
+            "agent_b": identity(self.config, 1 - self.config.first_speaker, "agent_b"),
+        }
         engine.on_event(self._on_engine_event)
 
         result = asyncio.run(engine.run_game())

@@ -115,6 +115,9 @@ class JsonlEventSink:
             except Exception:  # pragma: no cover - defensive
                 log.warning("could not close %s", self.path, exc_info=True)
 
+    def write_local(self, event: Event) -> None:
+        self.write(event)
+
 
 @dataclass(frozen=True)
 class EventArtifactTarget:
@@ -205,6 +208,9 @@ class DurableEventSink(JsonlEventSink):
                 log.warning("could not publish an event to %s", self._key, exc_info=True)
                 return
             self._durable_through += 1
+
+    def write_local(self, event: Event) -> None:
+        JsonlEventSink.write(self, event)
 
     def close(self) -> None:
         self._publish_watermark()

@@ -258,6 +258,17 @@ def _should_stop(exc: BaseException, attempt: int, policy: RetryPolicy) -> bool:
     return not is_retryable(exc) or attempt >= policy.max_attempts - 1
 
 
+def _record_attempt(attempt: int, exc: BaseException | None = None, delay: float | None = None) -> None:
+    from a2a_engine.turns import current_call, emit
+
+    call = current_call.get()
+    if call is not None:
+        emit("llm.attempt", {**call, "attempt": attempt + 1,
+                             "status_code": status_code_of(exc) if exc else None,
+                             "retryable": is_retryable(exc) if exc else False,
+                             "delay_s": delay, "outcome": "error" if exc else "success"})
+
+
 def _give_up(
     exc: BaseException,
     attempts: int,
@@ -290,12 +301,16 @@ def call_with_retry(
         if limiter is not None:
             limiter.acquire()
         try:
-            return fn()
+            result = fn()
+            _record_attempt(attempt)
+            return result
         except Exception as exc:
             if _should_stop(exc, attempt, policy):
+                _record_attempt(attempt, exc)
                 _give_up(exc, attempt + 1, policy, on_failure)
                 return None
             delay = compute_delay(attempt, exc, policy, rng)
+            _record_attempt(attempt, exc, delay)
             log.warning(
                 "Retryable LLM error (attempt %d/%d), backing off %.1fs: %s",
                 attempt + 1, policy.max_attempts, delay, exc,
@@ -321,12 +336,16 @@ async def acall_with_retry(
         if limiter is not None:
             await limiter.aacquire()
         try:
-            return await fn()
+            result = await fn()
+            _record_attempt(attempt)
+            return result
         except Exception as exc:
             if _should_stop(exc, attempt, policy):
+                _record_attempt(attempt, exc)
                 _give_up(exc, attempt + 1, policy, on_failure)
                 return None
             delay = compute_delay(attempt, exc, policy, rng)
+            _record_attempt(attempt, exc, delay)
             log.warning(
                 "Retryable LLM error (attempt %d/%d), backing off %.1fs: %s",
                 attempt + 1, policy.max_attempts, delay, exc,

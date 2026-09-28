@@ -82,6 +82,18 @@ export function EpisodeView() {
     () => projectTranscript(episode?.events, detail?.lanes),
     [episode?.events, detail?.lanes],
   );
+  const callsByTurn = useMemo(() => {
+    const calls = new Map<number, Record<string, unknown>[]>();
+    for (const line of transcript) {
+      if (!line.type.startsWith("llm.")) continue;
+      const index = line.data.turn_index;
+      if (typeof index !== "number") continue;
+      const records = calls.get(index) ?? [];
+      records.push({ type: line.type, ...line.data });
+      calls.set(index, records);
+    }
+    return calls;
+  }, [transcript]);
   const cursorMax = projection.cursorMax;
   const bounded = Math.min(cursor, Math.max(0, cursorMax - 1));
 
@@ -270,6 +282,12 @@ export function EpisodeView() {
                   label="Show recorded payload"
                   value={JSON.stringify(line.data, null, 2)}
                 />
+                {line.type === "turn.started" && typeof line.data.turn_index === "number" && callsByTurn.has(line.data.turn_index) ? (
+                  <ConfigDisclosure
+                    label="Show LLM calls (requests, responses, retries)"
+                    value={JSON.stringify(callsByTurn.get(line.data.turn_index), null, 2)}
+                  />
+                ) : null}
               </li>
             ))}
             {transcript.length === 0 ? <p className="empty-state">Nothing was said in this attempt.</p> : null}

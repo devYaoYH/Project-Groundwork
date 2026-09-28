@@ -40,6 +40,7 @@ from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_envir
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
+from a2a_engine.turns import finish_turn, identity, turn
 
 from buyer_seller.agents import BuyerAgent, SellerAgent
 from buyer_seller.declaration import DECLARATION
@@ -284,9 +285,10 @@ class BuyerSellerGame:
             })
 
             # --- seller offers ---
-            action = await self.seller.act(
-                self._seller_observation(t, units_sold, history, last_price), tools={}
-            )
+            seller_observation = self._seller_observation(t, units_sold, history, last_price)
+            with turn(*identity(cfg, 0, "seller"), seller_observation):
+                action = await self.seller.act(seller_observation, tools={})
+                finish_turn(action)
             price = float(action["price"])
             violation = False
             if cfg.enforce_monotonic_offers and last_price is not None and price > last_price:
@@ -303,9 +305,10 @@ class BuyerSellerGame:
             })
 
             # --- buyer responds ---
-            response = await self.buyer.act(
-                self._buyer_observation(t, units_sold, history, price), tools={}
-            )
+            buyer_observation = self._buyer_observation(t, units_sold, history, price)
+            with turn(*identity(cfg, 1, "buyer"), buyer_observation):
+                response = await self.buyer.act(buyer_observation, tools={})
+                finish_turn(response)
             accepted = bool(response["accept"])
             self.events.append("response", data={
                 "round": t,

@@ -17,6 +17,7 @@ from a2a_engine import (
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.tracing_otel import get_tracer
+from a2a_engine.turns import finish_turn, identity, turn as record_turn
 
 from word_guess.agents import GuesserAgent, HostAgent
 from word_guess.declaration import DECLARATION
@@ -152,13 +153,17 @@ class WordGuessGame:
         for turn in range(1, self.config.max_turns + 1):
             turns_used = turn
             obs_g = {"history": list(history), "turns_remaining": self.config.max_turns - turn + 1}
-            g_action = await self.guesser.act(obs_g, tools={})
+            with record_turn(*identity(self.config, 0, "guesser"), obs_g):
+                g_action = await self.guesser.act(obs_g, tools={})
+                finish_turn(g_action)
             g_text = g_action["text"]
             history.append({"speaker": "guesser", "text": g_text})
             self.events.append("message", data={"speaker": "guesser", "text": g_text})
 
             obs_h = {"history": list(history[:-1]), "last_guesser": g_text}
-            h_action = await self.host.act(obs_h, tools={})
+            with record_turn(*identity(self.config, 1, "host"), obs_h):
+                h_action = await self.host.act(obs_h, tools={})
+                finish_turn(h_action)
             h_text = h_action["text"]
             history.append({"speaker": "host", "text": h_text})
             self.events.append("message", data={"speaker": "host", "text": h_text})

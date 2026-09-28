@@ -238,6 +238,13 @@ def test_agent_events_use_pinned_participant_ids_and_chat_aliases():
         elif agent_id is None:
             assert "participant_id" not in data
 
+    turns = [event for event in events if event["type"] in {"turn.started", "turn.finished"}]
+    assert turns
+    for event in turns:
+        data = event["data"]
+        assert data["agent_id"] in range(trace.config.num_agents)
+        assert data["role"] == "agent"
+
     chat_events = [event for event in events if event["type"].endswith("_sent")]
     assert chat_events
     for event in chat_events:

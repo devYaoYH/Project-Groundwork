@@ -27,6 +27,7 @@ class EventLog:
     ) -> None:
         self._events: list[Event] = []
         self._lock = threading.Lock()
+        self._turn_index = 0
         self._on_event = on_event
         self._publisher = None
         # The runner owns the sink for the episode it is running; a environment built
@@ -45,7 +46,15 @@ class EventLog:
         publisher = publisher_from_config(config)
         log = cls(publisher.publish if publisher else None)
         log._publisher = publisher
+        from a2a_engine.turns import current_log
+        current_log.set(log)
         return log
+
+    def next_turn_index(self) -> int:
+        with self._lock:
+            index = self._turn_index
+            self._turn_index += 1
+            return index
 
     def append(self, type: str, data: dict[str, Any] | None = None, **extra) -> Event:
         ev = Event(type=type, data=data or {}, **extra)
@@ -56,6 +65,14 @@ class EventLog:
         if self._on_event is not None:
             self._on_event(ev)
         return ev
+
+    def append_local(self, type: str, data: dict[str, Any]) -> None:
+        """Display-only chunks never enter the canonical trace or durable artifact."""
+        ev = Event(type=type, data=data)
+        if self._sink is not None:
+            self._sink.write_local(ev)
+        if self._on_event is not None:
+            self._on_event(ev)
 
     def snapshot(self) -> list[Event]:
         """The events recorded so far, without ending the episode's log.

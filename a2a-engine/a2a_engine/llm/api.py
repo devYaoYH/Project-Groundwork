@@ -34,6 +34,7 @@ from a2a_engine.llm.retry import (
     retry_after_seconds,
 )
 from a2a_engine.tracing_otel import get_tracer, should_capture_content
+from a2a_engine import turns as _turns
 
 try:
     import certifi
@@ -193,20 +194,21 @@ class LLMClient(BaseModel):
 
     def oneshot(self, messages: list[dict], **kw) -> str:
         """One-shot completion, retried on transient failures."""
-        result = call_with_retry(
-            lambda: call_llm_oneshot(
-                api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
-                model=self.model, messages=messages,
-                max_tokens=kw.get("max_tokens", self.max_tokens),
-                temperature=kw.get("temperature", self.temperature),
-                vertex_adc_file=kw.get("vertex_adc_file", self.vertex_adc_file),
-                gcp_project=kw.get("gcp_project", self.gcp_project),
-                gcp_location=kw.get("gcp_location", self.gcp_location),
-                **{k: v for k, v in kw.items() if k not in _CLIENT_OVERRIDES},
-            ),
-            self.retry,
-            limiter=self._rate_limiter(),
-        )
+        with _turns.llm_call():
+            result = call_with_retry(
+                lambda: call_llm_oneshot(
+                    api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
+                    model=self.model, messages=messages,
+                    max_tokens=kw.get("max_tokens", self.max_tokens),
+                    temperature=kw.get("temperature", self.temperature),
+                    vertex_adc_file=kw.get("vertex_adc_file", self.vertex_adc_file),
+                    gcp_project=kw.get("gcp_project", self.gcp_project),
+                    gcp_location=kw.get("gcp_location", self.gcp_location),
+                    **{k: v for k, v in kw.items() if k not in _CLIENT_OVERRIDES},
+                ),
+                self.retry,
+                limiter=self._rate_limiter(),
+            )
         # Only reachable as None under on_exhausted="return_none"; callers of
         # oneshot() expect a string, so normalize rather than leak None.
         return result if result is not None else ""
@@ -250,18 +252,19 @@ class LLMClient(BaseModel):
                 overrides["backoff_max"] = backoff_max
             if overrides:
                 policy = replace(policy, **overrides)
-        return call_llm_streaming_with_retry(
-            api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
-            model=self.model, messages=messages,
-            max_tokens=kw.pop("max_tokens", self.max_tokens) or 4096,
-            temperature=kw.pop("temperature", self.temperature),
-            vertex_adc_file=kw.pop("vertex_adc_file", self.vertex_adc_file),
-            gcp_project=kw.pop("gcp_project", self.gcp_project),
-            gcp_location=kw.pop("gcp_location", self.gcp_location),
-            policy=policy,
-            limiter=self._rate_limiter(),
-            **kw,
-        )
+        with _turns.llm_call():
+            return call_llm_streaming_with_retry(
+                api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
+                model=self.model, messages=messages,
+                max_tokens=kw.pop("max_tokens", self.max_tokens) or 4096,
+                temperature=kw.pop("temperature", self.temperature),
+                vertex_adc_file=kw.pop("vertex_adc_file", self.vertex_adc_file),
+                gcp_project=kw.pop("gcp_project", self.gcp_project),
+                gcp_location=kw.pop("gcp_location", self.gcp_location),
+                policy=policy,
+                limiter=self._rate_limiter(),
+                **kw,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +291,30 @@ def call_llm_streaming(
     timeout: int = 120,
 ) -> dict:
     """Streaming LLM call. Returns dict with text, model, duration_s, token usage."""
+    owns_call = _turns.current_call.get() is None
+    with _turns.ensure_call():
+        try:
+            result = _call_llm_streaming_recorded(
+                api_format, api_base, api_key, model, messages, max_tokens, temperature,
+                on_first_chunk, loop, thinking_config, logprobs, top_logprobs,
+                response_mime_type, vertex_adc_file, gcp_project, gcp_location, timeout,
+            )
+        except Exception as exc:
+            if owns_call:
+                from a2a_engine.llm.retry import _record_attempt
+                _record_attempt(0, exc)
+            raise
+        if owns_call:
+            from a2a_engine.llm.retry import _record_attempt
+            _record_attempt(0)
+        return result
+
+
+def _call_llm_streaming_recorded(
+    api_format, api_base, api_key, model, messages, max_tokens, temperature,
+    on_first_chunk, loop, thinking_config, logprobs, top_logprobs,
+    response_mime_type, vertex_adc_file, gcp_project, gcp_location, timeout,
+) -> dict:
     span = _start_chat_span(model, api_base, messages, temperature, max_tokens, stream=True)
     try:
         with _otel_trace.use_span(span, end_on_exit=False):
@@ -334,6 +361,7 @@ def call_llm_streaming(
             finish_reason=result.get("finish_reason"),
             output_text=result.get("text"),
         )
+        _turns.response(result, model=model)
         return result
     except BaseException as exc:
         _record_chat_error(span, exc)
@@ -380,12 +408,13 @@ def call_llm_streaming_with_retry(
             backoff_base=backoff_base,
             backoff_max=backoff_max,
         )
-    return call_with_retry(
-        lambda: call_llm_streaming(*args, **kwargs),
-        policy,
-        limiter=limiter,
-        on_failure=on_failure,
-    )
+    with _turns.ensure_call():
+        return call_with_retry(
+            lambda: call_llm_streaming(*args, **kwargs),
+            policy,
+            limiter=limiter,
+            on_failure=on_failure,
+        )
 
 
 def call_llm_oneshot(
@@ -403,6 +432,28 @@ def call_llm_oneshot(
     gcp_location: str | None = None,
 ) -> str:
     """Non-streaming LLM call returning text."""
+    owns_call = _turns.current_call.get() is None
+    with _turns.ensure_call():
+        try:
+            result = _call_llm_oneshot_recorded(
+                api_format, api_base, api_key, model, messages, max_tokens, temperature,
+                timeout, thinking_budget, vertex_adc_file, gcp_project, gcp_location,
+            )
+        except Exception as exc:
+            if owns_call:
+                from a2a_engine.llm.retry import _record_attempt
+                _record_attempt(0, exc)
+            raise
+        if owns_call:
+            from a2a_engine.llm.retry import _record_attempt
+            _record_attempt(0)
+        return result
+
+
+def _call_llm_oneshot_recorded(
+    api_format, api_base, api_key, model, messages, max_tokens, temperature,
+    timeout, thinking_budget, vertex_adc_file, gcp_project, gcp_location,
+) -> str:
     model_cfg = get_model_config(model)
     effective_max = max_tokens or model_cfg.default_max_tokens
 
@@ -436,6 +487,7 @@ def call_llm_oneshot(
                 text = _oneshot_openai(api_base, api_key, model, messages, effective_max,
                                        temperature, timeout, model_cfg)
         _finish_chat_span(span, response_model=model, output_text=text)
+        _turns.response(text, model=model)
         return text
     except BaseException as exc:
         _record_chat_error(span, exc)
@@ -591,6 +643,7 @@ def _oneshot_vertexai_anthropic(
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
     url = _anthropic_vertexai_url(project, location, model)
+    _turns.request(model, "vertexai_anthropic", body)
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
         "Content-Type": "application/json",
         "Authorization": f"Bearer {_get_vertexai_access_token(adc_file)}",
@@ -705,6 +758,9 @@ def _oneshot_vertexai(
     gen_config = _google_genai.types.GenerateContentConfig(**cfg) if cfg else None
 
     t0 = time.monotonic()
+    _turns.request(model, "vertexai", {"contents": _turns.sdk_value(contents),
+                                        "config": _turns.sdk_value({k: v for k, v in cfg.items() if k != "system_instruction"}),
+                                        **({"system_instruction": system_instruction} if system_instruction else {})})
     response = client.models.generate_content(model=model, contents=contents, config=gen_config)
     duration_s = round(time.monotonic() - t0, 3)
     parts = response.candidates[0].content.parts if response.candidates else []
@@ -746,6 +802,9 @@ def _stream_vertexai(
     gen_config = _google_genai.types.GenerateContentConfig(**cfg) if cfg else None
 
     t0 = time.monotonic()
+    _turns.request(model, "vertexai", {"contents": _turns.sdk_value(contents),
+                                        "config": _turns.sdk_value({k: v for k, v in cfg.items() if k != "system_instruction"}),
+                                        **({"system_instruction": system_instruction} if system_instruction else {})})
     chunks = []
     logprob_chunks = []
     first = True
@@ -758,6 +817,7 @@ def _stream_vertexai(
                 if on_first_chunk and loop:
                     asyncio.run_coroutine_threadsafe(on_first_chunk(), loop).result(timeout=5)
             chunks.append(chunk.text)
+            _turns.chunk(chunk.text)
         usage_metadata = _get_obj_value(chunk, "usage_metadata", "usageMetadata") or usage_metadata
         candidates = _get_obj_value(chunk, "candidates") or []
         if candidates:
@@ -842,6 +902,7 @@ def _stream_openai(api_base, api_key, model, messages, max_tokens,
     if top_logprobs is not None:
         payload["top_logprobs"] = int(top_logprobs)
 
+    _turns.request(model, "openai", payload)
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": f"Bearer {api_key}",
@@ -885,6 +946,7 @@ def _stream_openai(api_base, api_key, model, messages, max_tokens,
                 content = delta.get("content")
                 if content:
                     chunks.append(content)
+                    _turns.chunk(content)
                 rc = delta.get("reasoning_content")
                 if rc:
                     reasoning_chunks.append(rc)
@@ -950,6 +1012,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
     if system_text:
         body["system"] = [{"type": "text", "text": system_text,
                            "cache_control": {"type": "ephemeral"}}]
+    _turns.request(model, "anthropic", body)
     payload = json.dumps(body).encode()
     if cached_idx is not None:
         api_messages[cached_idx]["content"] = original_content
@@ -1004,6 +1067,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
                         thinking_chunks.append(t)
                     else:
                         chunks.append(t)
+                        _turns.chunk(t)
             elif et == "content_block_stop":
                 current_block_type = None
             elif et == "message_delta":
@@ -1059,6 +1123,7 @@ def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
         body["system"] = system_text
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
+    _turns.request(model, "anthropic", body)
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
         "Content-Type": "application/json",
         "x-api-key": api_key,
@@ -1075,6 +1140,7 @@ def _oneshot_openai(api_base, api_key, model, messages, max_tokens,
     body: dict = {"model": model, model_cfg.max_tokens_param: max_tokens, "messages": messages}
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
+    _turns.request(model, "openai", body)
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",

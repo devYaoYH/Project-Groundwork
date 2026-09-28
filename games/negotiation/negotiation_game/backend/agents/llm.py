@@ -7,6 +7,7 @@ Agents respond with structured JSON: {"thinking", "speech", "action"}.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import random
@@ -263,12 +264,14 @@ class LLMAgentBase:
         def record_failure(failure: FailureInfo) -> None:
             self.last_api_meta = failure.as_dict()
 
-        result = await acall_with_retry(
-            attempt,
-            self._retry_policy,
-            limiter=self._limiter,
-            on_failure=record_failure,
-        )
+        from a2a_engine.turns import llm_call
+        with llm_call():
+            result = await acall_with_retry(
+                attempt,
+                self._retry_policy,
+                limiter=self._limiter,
+                on_failure=record_failure,
+            )
         return result["text"] if result else None
 
     async def cheap_talk(self, agent_id, round_number, turn_number,
@@ -566,16 +569,17 @@ class LLMAgentStdlib(LLMAgentBase):
 
         loop = asyncio.get_event_loop()
         try:
+            context = contextvars.copy_context()
             if self.api_format == "anthropic":
-                return await loop.run_in_executor(None, self._request_anthropic, loop)
+                return await loop.run_in_executor(None, context.run, self._request_anthropic, loop)
             if self.api_format == "vertexai":
-                return await loop.run_in_executor(None, self._request_vertexai, loop)
+                return await loop.run_in_executor(None, context.run, self._request_vertexai, loop)
             if self.api_format == "vertexai_anthropic":
-                return await loop.run_in_executor(None, self._request_vertexai_anthropic, loop)
+                return await loop.run_in_executor(None, context.run, self._request_vertexai_anthropic, loop)
             if self.api_format == "vertexai_openai":
-                return await loop.run_in_executor(None, self._request_vertexai_openai, loop)
+                return await loop.run_in_executor(None, context.run, self._request_vertexai_openai, loop)
             else:
-                return await loop.run_in_executor(None, self._request_openai, loop)
+                return await loop.run_in_executor(None, context.run, self._request_openai, loop)
         except Exception as e:
             log.error("_call_api executor failed: %s: %s (model=%s, api_base=%s)",
                      type(e).__name__, str(e), self.model, self.api_base)

@@ -28,6 +28,7 @@ from a2a_engine.schemas import EpisodeConfigBase, Event, EpisodeTrace
 # Games name their last event differently; each is the point after which no
 # further events are expected.
 TERMINAL_EVENT_TYPES = frozenset({"game_end", "game_complete", "game_stopped"})
+FRAMEWORK_EVENT_TYPES = frozenset({"turn.started", "turn.finished", "llm.request", "llm.attempt", "llm.response", "llm.chunk"})
 
 _START_EVENT_TYPES = frozenset({"game_start"})
 
@@ -91,7 +92,8 @@ def _project(
     episode_uid = _first_value(entries, "episode_uid")
     start_payload = _start_payload(events)
 
-    last = events[-1]
+    game_events = [event for event in events if event.type not in FRAMEWORK_EVENT_TYPES]
+    last = game_events[-1] if game_events else events[-1]
     complete = last.type in TERMINAL_EVENT_TYPES
     # A environment's terminal event carries its own summary; mid-flight there is
     # simply nothing to summarise yet, and inventing zeros would read as a
@@ -115,7 +117,7 @@ def _project(
             "partial": not complete,
             "event_count": len(events),
         },
-        started_at=events[0].timestamp,
+        started_at=(game_events[0] if game_events else events[0]).timestamp,
         ended_at=last.timestamp if complete else None,
         stopped=not complete,
     )

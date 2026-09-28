@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Callable
 from enum import Enum
+from a2a_engine.turns import finish_turn, turn as record_turn
 
 log = logging.getLogger("negotiation")
 
@@ -684,9 +685,12 @@ class GameEngine:
         Returns (resource_allocation, project_runs).
         """
         for attempt in range(MAX_DECISION_RETRIES):
-            alloc = await agent_impl.decide_allocation(
-                agent_id, round_number, pub_config, transcript, memory,
-            )
+            with record_turn(*getattr(self, "turn_roles", {}).get(agent_id, (agent_id, agent_id)),
+                             {"round": round_number, "transcript": transcript, "memory": memory}):
+                alloc = await agent_impl.decide_allocation(
+                    agent_id, round_number, pub_config, transcript, memory,
+                )
+                finish_turn(alloc)
             # For project mode, parse project_runs from the allocation if embedded
             project_runs = None
             if isinstance(alloc, dict) and "projects" in alloc:
@@ -800,11 +804,14 @@ class GameEngine:
                         })
 
                     self._set_stream_callback(self.agent_a_impl, "agent_a", round_number, "cheap_talk", turn)
-                    msg_a = await self.agent_a_impl.cheap_talk(
-                        "agent_a", round_num_a, turn, pub_config_a,
-                        transcript, self.agent_a_state.memory,
-                        project_update=project_update_a if turn == 0 else None,
-                    )
+                    with record_turn(*getattr(self, "turn_roles", {}).get("agent_a", ("agent_a", "agent_a")),
+                                     {"round": round_number, "turn": turn, "transcript": transcript}):
+                        msg_a = await self.agent_a_impl.cheap_talk(
+                            "agent_a", round_num_a, turn, pub_config_a,
+                            transcript, self.agent_a_state.memory,
+                            project_update=project_update_a if turn == 0 else None,
+                        )
+                        finish_turn(msg_a)
 
                     api_meta = self._get_api_meta(self.agent_a_impl)
                     if api_meta and "error_type" in api_meta:
@@ -876,11 +883,14 @@ class GameEngine:
                         })
 
                     self._set_stream_callback(self.agent_b_impl, "agent_b", round_number, "cheap_talk", turn)
-                    msg_b = await self.agent_b_impl.cheap_talk(
-                        "agent_b", round_num_b, turn, pub_config_b,
-                        transcript, self.agent_b_state.memory,
-                        project_update=project_update_b if turn == 0 else None,
-                    )
+                    with record_turn(*getattr(self, "turn_roles", {}).get("agent_b", ("agent_b", "agent_b")),
+                                     {"round": round_number, "turn": turn, "transcript": transcript}):
+                        msg_b = await self.agent_b_impl.cheap_talk(
+                            "agent_b", round_num_b, turn, pub_config_b,
+                            transcript, self.agent_b_state.memory,
+                            project_update=project_update_b if turn == 0 else None,
+                        )
+                        finish_turn(msg_b)
 
                     api_meta = self._get_api_meta(self.agent_b_impl)
                     if api_meta and "error_type" in api_meta:
@@ -1247,12 +1257,15 @@ class GameEngine:
                     # Use final round oracle for shifted agents, sum for stable agents
                     theoretical_joint_max = theoretical_joint_max_final if is_shifted else theoretical_joint_max_sum
 
-                    reflection_text = await impl.reflect(
-                        label, len(self.results) if not is_shifted else 1,
-                        own_reward, opp_reward,
-                        self.config.visible_opponent_reward,
-                        theoretical_joint_max,
-                    )
+                    with record_turn(*getattr(self, "turn_roles", {}).get(label, (label, label)),
+                                     {"own_reward": own_reward, "opponent_reward": opp_reward}):
+                        reflection_text = await impl.reflect(
+                            label, len(self.results) if not is_shifted else 1,
+                            own_reward, opp_reward,
+                            self.config.visible_opponent_reward,
+                            theoretical_joint_max,
+                        )
+                        finish_turn(reflection_text)
 
                     if reflection_text:
                         reflections[label] = reflection_text

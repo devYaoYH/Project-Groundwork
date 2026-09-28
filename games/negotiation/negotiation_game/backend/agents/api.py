@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
+from a2a_engine import turns as _turns
+
 try:
     import certifi
 except ImportError:
@@ -71,6 +73,30 @@ def call_llm_streaming(
     dict with keys: text, model, duration_s, prompt_tokens, completion_tokens,
     total_tokens (plus Anthropic cache fields when applicable).
     """
+    owns_call = _turns.current_call.get() is None
+    with _turns.ensure_call():
+        try:
+            result = _call_llm_streaming_recorded(
+                api_format, api_base, api_key, model, messages, max_tokens, temperature,
+                on_first_chunk, loop, thinking_config, vertex_adc_file, gcp_project,
+                gcp_location, timeout,
+            )
+        except Exception as exc:
+            if owns_call:
+                from a2a_engine.llm.retry import _record_attempt
+                _record_attempt(0, exc)
+            raise
+        _turns.response(result, model=model)
+        if owns_call:
+            from a2a_engine.llm.retry import _record_attempt
+            _record_attempt(0)
+        return result
+
+
+def _call_llm_streaming_recorded(api_format, api_base, api_key, model, messages,
+                                 max_tokens, temperature, on_first_chunk, loop,
+                                 thinking_config, vertex_adc_file, gcp_project,
+                                 gcp_location, timeout):
     if api_format == "anthropic":
         return _stream_anthropic(
             api_base, api_key, model, messages, max_tokens, temperature,
@@ -139,6 +165,28 @@ def call_llm_oneshot(
 
     Raises ``urllib.error.HTTPError`` on HTTP failures.
     """
+    owns_call = _turns.current_call.get() is None
+    with _turns.ensure_call():
+        try:
+            text = _call_llm_oneshot_recorded(
+                api_format, api_base, api_key, model, messages, max_tokens, temperature,
+                timeout, thinking_budget, vertex_adc_file, gcp_project, gcp_location,
+            )
+        except Exception as exc:
+            if owns_call:
+                from a2a_engine.llm.retry import _record_attempt
+                _record_attempt(0, exc)
+            raise
+        _turns.response(text, model=model)
+        if owns_call:
+            from a2a_engine.llm.retry import _record_attempt
+            _record_attempt(0)
+        return text
+
+
+def _call_llm_oneshot_recorded(api_format, api_base, api_key, model, messages,
+                                max_tokens, temperature, timeout, thinking_budget,
+                                vertex_adc_file, gcp_project, gcp_location):
     model_cfg = get_model_config(model)
     effective_max = max_tokens or model_cfg.default_max_tokens
 
@@ -405,6 +453,7 @@ def _oneshot_vertexai_anthropic(
         body["temperature"] = temperature
 
     url = _anthropic_vertexai_url(project, location, model)
+    _turns.request(model, "vertexai_anthropic", body)
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
@@ -504,6 +553,9 @@ def _oneshot_vertexai(model: str, messages: list[dict], max_tokens: int | None, 
     gen_config = _google_genai.types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
     t0 = time.monotonic()
+    _turns.request(model, "vertexai", {"contents": _turns.sdk_value(contents),
+                                        "config": _turns.sdk_value({k: v for k, v in config_kwargs.items() if k != "system_instruction"}),
+                                        **({"system_instruction": system_instruction} if system_instruction else {})})
     response = client.models.generate_content(model=model, contents=contents, config=gen_config)
     duration_s = round(time.monotonic() - t0, 3)
     parts = response.candidates[0].content.parts if response.candidates and response.candidates[0].content else []
@@ -530,6 +582,9 @@ def _stream_vertexai(model: str, messages: list[dict], max_tokens: int | None, t
     gen_config = _google_genai.types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
     t0 = time.monotonic()
+    _turns.request(model, "vertexai", {"contents": _turns.sdk_value(contents),
+                                        "config": _turns.sdk_value({k: v for k, v in config_kwargs.items() if k != "system_instruction"}),
+                                        **({"system_instruction": system_instruction} if system_instruction else {})})
     chunks = []
     first = True
     for chunk in client.models.generate_content_stream(model=model, contents=contents, config=gen_config):
@@ -539,6 +594,7 @@ def _stream_vertexai(model: str, messages: list[dict], max_tokens: int | None, t
                 if on_first_chunk and loop:
                     asyncio.run_coroutine_threadsafe(on_first_chunk(), loop).result(timeout=5)
             chunks.append(chunk.text)
+            _turns.chunk(chunk.text)
 
     duration_s = round(time.monotonic() - t0, 3)
     text = "".join(chunks).strip()
@@ -578,6 +634,7 @@ def _stream_openai(api_base, api_key, model, messages, max_tokens,
     if thinking_config:
         payload_dict["thinking_config"] = thinking_config
 
+    _turns.request(model, "openai", payload_dict)
     req = urllib.request.Request(
         url,
         data=json.dumps(payload_dict).encode(),
@@ -628,6 +685,7 @@ def _stream_openai(api_base, api_key, model, messages, max_tokens,
                 content = delta.get("content")
                 if content:
                     chunks.append(content)
+                    _turns.chunk(content)
                 # Extract reasoning content for o-series models (o1, o3, o4)
                 reasoning_content = delta.get("reasoning_content")
                 if reasoning_content:
@@ -702,6 +760,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
         body["system"] = [{"type": "text", "text": system_text,
                            "cache_control": {"type": "ephemeral"}}]
 
+    _turns.request(model, "anthropic", body)
     payload = json.dumps(body).encode()
 
     # Restore original message content to keep caller's list clean
@@ -771,6 +830,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
                         thinking_chunks.append(text_chunk)
                     else:
                         chunks.append(text_chunk)
+                        _turns.chunk(text_chunk)
             elif event_type == "content_block_stop":
                 current_block_type = None  # Reset block type
             elif event_type == "message_delta":
@@ -839,6 +899,7 @@ def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
         body["system"] = system_text
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
+    _turns.request(model, "anthropic", body)
     payload = json.dumps(body).encode()
     headers = {
         "Content-Type": "application/json",
@@ -863,6 +924,7 @@ def _oneshot_openai(api_base, api_key, model, messages, max_tokens,
     }
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
+    _turns.request(model, "openai", body)
     payload = json.dumps(body).encode()
     headers = {
         "Content-Type": "application/json",

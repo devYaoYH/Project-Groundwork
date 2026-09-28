@@ -298,9 +298,12 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
         environment_id=environment_id,
     ) if persist else None
     sink_token = current_event_sink.set(sink)
+    from a2a_engine.turns import current_log
+    log_token = current_log.set(None)
     try:
         return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
     finally:
+        current_log.reset(log_token)
         if sink is not None:
             sink.close()
         current_event_sink.reset(sink_token)

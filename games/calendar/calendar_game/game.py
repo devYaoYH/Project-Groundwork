@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
+from a2a_engine.turns import finish_turn, identity, turn
 from pydantic import Field
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
@@ -368,6 +369,11 @@ class CalendarGame:
             spec = entry.model_dump() if hasattr(entry, "model_dump") else dict(entry)
             return str(spec.get("name") or spec.get("id") or f"participant_{agent_id}")
         return f"participant_{agent_id}"
+
+    def _agent_turn(self, agent_id: int, observation: object):
+        participant_id = self._participant_id_for_agent(agent_id)
+        role = identity(self.config, agent_id, "agent")[1]
+        return turn(participant_id, role, observation, agent_id=agent_id)
 
     def _append_event(self, event_type: str, *, data: dict) -> None:
         """Emit Calendar data with stable participant and chat aliases."""
@@ -913,10 +919,14 @@ class CalendarGame:
                     round_num=round_num,
                 )
 
-            if semaphore is None:
-                return await asyncio.to_thread(run_sync)
-            async with semaphore:
-                return await asyncio.to_thread(run_sync)
+            with self._agent_turn(agent_id, {"round": round_num, "target_agent_id": target_agent_id}):
+                if semaphore is None:
+                    result = await asyncio.to_thread(run_sync)
+                else:
+                    async with semaphore:
+                        result = await asyncio.to_thread(run_sync)
+                finish_turn(result)
+                return result
 
         reporter_ids = all_agent_ids if reporter_agent_ids is None else reporter_agent_ids
 
@@ -1364,7 +1374,9 @@ class CalendarGame:
                         "calendar_render": prompt_calendar_render,
                         "prompt_sent": turn_prompt,
                     })
-                    result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
+                    with self._agent_turn(agent_id, turn_prompt):
+                        result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
+                        finish_turn(result.__dict__)
                     round_turn_agent_ids.add(agent_id)
                     total_client_calls[agent_id] += 1
                     self._append_event("turn_end", data={
@@ -1422,7 +1434,9 @@ class CalendarGame:
                         "calendar_render": prompt_calendar_render,
                         "prompt_sent": turn_prompt,
                     })
-                    result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
+                    with self._agent_turn(agent_id, turn_prompt):
+                        result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
+                        finish_turn(result.__dict__)
                     round_turn_agent_ids.add(agent_id)
                     total_client_calls[agent_id] += 1
                     self._append_event("turn_end", data={
@@ -1458,13 +1472,16 @@ class CalendarGame:
                 calendar_render = agents[agent_id].calendar.render()
                 prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
+                voluntary_prompt = build_voluntary_reschedule_message(prompt_meeting, prompt_calendar_render)
                 self._append_event("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                     "agent_id": agent_id,
                     "calendar_render": prompt_calendar_render,
-                    "prompt_sent": build_voluntary_reschedule_message(prompt_meeting, prompt_calendar_render),
+                    "prompt_sent": voluntary_prompt,
                 })
-                result = agents[agent_id].voluntary_decide(meeting)
+                with self._agent_turn(agent_id, voluntary_prompt):
+                    result = agents[agent_id].voluntary_decide(meeting)
+                    finish_turn(result.__dict__)
                 total_client_calls[agent_id] += 1
                 self._append_event("decide_end", data={
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
@@ -1508,7 +1525,9 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            with self._agent_turn(agent_id, conflict):
+                                retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                                finish_turn(retry_result.__dict__)
                             total_client_calls[agent_id] += 1
                             actions = [
                                 a for a in retry_result.tool_calls
@@ -1532,7 +1551,9 @@ class CalendarGame:
                     "calendar_snapshot_render": prompt_snapshot_render,
                     "prompt_sent": decision_prompt,
                 })
-                result = agents[agent_id].decide(meeting)
+                with self._agent_turn(agent_id, decision_prompt):
+                    result = agents[agent_id].decide(meeting)
+                    finish_turn(result.__dict__)
                 total_client_calls[agent_id] += 1
                 self._append_event("decide_end", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
@@ -1583,7 +1604,9 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            with self._agent_turn(agent_id, conflict):
+                                retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                                finish_turn(retry_result.__dict__)
                             total_client_calls[agent_id] += 1
                             actions = self._decision_actions(
                                 retry_result.tool_calls, meeting,
