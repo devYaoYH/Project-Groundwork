@@ -358,7 +358,7 @@ def test_dry_run_writes_nothing(tmp_path):
     assert not results.exists() or not list(results.rglob("*.json"))
 
 
-def test_resume_skips_completed_runs(tmp_path):
+def test_resume_reexecutes_unverified_completed_runs(tmp_path):
     register_environment("fake", FakeGame)
     results = tmp_path / "results"
     args = [str(write_yaml(tmp_path, BASIC)), "--results-dir", str(results),
@@ -369,7 +369,7 @@ def test_resume_skips_completed_runs(tmp_path):
 
     FakeGame.seen_configs = []
     main(args + ["--resume"])
-    assert FakeGame.seen_configs == [], "completed runs must not re-execute"
+    assert len(FakeGame.seen_configs) == 2, "unverified runs cannot fill measured slots"
 
 
 @pytest.mark.parametrize("backend", ["local", "sqlite"])

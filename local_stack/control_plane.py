@@ -51,6 +51,7 @@ from a2a_engine.event_sink import read_event_sink
 from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.items import ItemBank, derive_item_domain
 from a2a_engine.manifest import EpisodeManifest
+from a2a_engine.release_surface import PublishedRelease
 from a2a_engine.registry import get_environment_spec, installed_environments
 from a2a_engine.schemas import EpisodeTrace
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
@@ -146,6 +147,8 @@ class Release:
     source_ref: str
     metadata: dict[str, Any]
     created_at: str
+    image_digest: str | None = None
+    manifest: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,8 @@ class Launch:
     trace_database: str
     created_at: str
     mode: str = "live"
+    provenance_grade: str = "unverified"
+    image_digest: str | None = None
     execution_path: str | None = None
     # The launch input as the worker sees it: an address and the digest it must
     # hash to. Nothing else crosses -- no workspace path, no experiment id.
@@ -484,12 +489,18 @@ class ControlPlane:
         provenance, so the fact table's ``release_id`` resolves here rather
         than into a second namespace nothing can join.
         """
+        published = set()
+        for path in sorted(self.workspace.glob("games/*/runtime/release.manifest.json")):
+            release = self.ingest_release(json.loads(path.read_text(encoding="utf-8")))
+            published.add(release.environment_id)
         created: list[Release] = []
         with self._session() as db:
             # Only entry-point games are releases. A environment registered directly at
             # runtime has no package behind it, so offering it as a launchable
             # release would present a release with nothing to run.
             for environment_id in installed_environments():
+                if environment_id in published:
+                    continue
                 spec = get_environment_spec(environment_id)
                 declaration = spec.declaration
                 if declaration is None:
@@ -515,9 +526,11 @@ class ControlPlane:
                     created_at=_now(),
                 )
                 row = db.execute(
-                    "SELECT id FROM releases WHERE id = ?", (release.id,)
+                    "SELECT id, manifest FROM releases WHERE id = ?", (release.id,)
                 ).fetchone()
                 if row:
+                    if row["manifest"]:
+                        continue
                     # An episode may have projected this row out of its own
                     # provenance before the control plane ever saw the release;
                     # fill in what only the installed package knows.
@@ -542,6 +555,43 @@ class ControlPlane:
                 created.append(release)
         return created
 
+    def ingest_release(self, payload: dict[str, Any]) -> Release:
+        """Validate a published design surface before making it selectable."""
+        manifest = PublishedRelease.model_validate(payload)
+        release = Release(
+            id=manifest.release_id, environment_id=manifest.environment_id,
+            version=manifest.release, declaration_sha256=manifest.declaration_sha256,
+            item_bank_sha256=(manifest.surface.item_policy.item_bank_sha256
+                              if manifest.surface.item_policy else None),
+            oracle_version=manifest.surface.oracle_version, package=manifest.package,
+            source_ref="published-manifest",
+            metadata={"entrypoint": manifest.environment_id,
+                      "source_url": manifest.surface.source_url,
+                      "blurb": manifest.surface.blurb},
+            created_at=_now(), image_digest=manifest.image_digest,
+            manifest=manifest.model_dump(mode="json"),
+        )
+        with self._session() as db:
+            db.execute(
+                "INSERT INTO releases (id, environment_id, version, declaration_sha256, "
+                "item_bank_sha256, oracle_version, package, source_ref, metadata, created_at, "
+                "image_digest, manifest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET environment_id=excluded.environment_id, "
+                "version=excluded.version, declaration_sha256=excluded.declaration_sha256, "
+                "item_bank_sha256=excluded.item_bank_sha256, oracle_version=excluded.oracle_version, "
+                "package=excluded.package, source_ref=excluded.source_ref, metadata=excluded.metadata, "
+                "image_digest=excluded.image_digest, manifest=excluded.manifest",
+                (release.id, release.environment_id, release.version, release.declaration_sha256,
+                 release.item_bank_sha256, release.oracle_version, release.package, release.source_ref,
+                 _json(release.metadata), release.created_at, release.image_digest, _json(release.manifest)),
+            )
+        return release
+
+    def _design_declaration(self, release: Release):
+        if release.manifest:
+            return PublishedRelease.model_validate(release.manifest).design_declaration()
+        return self._declaration(release.environment_id)
+
     def releases(self) -> list[Release]:
         self.seed_installed_releases()
         with self._session() as db:
@@ -560,11 +610,8 @@ class ControlPlane:
                 ).fetchall()
             }
         environments: list[dict[str, Any]] = []
-        for environment_id in installed_environments():
-            declaration = self._declaration(environment_id)
-            release = releases.get(environment_id)
-            if release is None:
-                continue
+        for environment_id, release in sorted(releases.items()):
+            declaration = self._design_declaration(release)
             environments.append({
                 "environment_id": environment_id,
                 "blurb": declaration.blurb,
@@ -576,8 +623,8 @@ class ControlPlane:
         return environments
 
     def environment_detail(self, environment_id: str) -> dict[str, Any]:
-        declaration = self._declaration(environment_id)
         release = self._release_for(environment_id, None)
+        declaration = self._design_declaration(release)
         if declaration.item_policy is None:
             raise ValueError(f"environment {environment_id!r} has no item policy")
         bank = self._item_bank(environment_id)
@@ -639,7 +686,7 @@ class ControlPlane:
         }
 
     def run_oracle(self, environment_id: str, item_id: str) -> dict[str, Any]:
-        declaration = self._declaration(environment_id)
+        declaration = self._design_declaration(self._release_for(environment_id, None))
         if declaration.oracle_version is None:
             raise OracleUnavailable(f"environment {environment_id!r} does not ship an oracle")
         item = self._item_bank(environment_id).get(item_id)
@@ -801,7 +848,7 @@ class ControlPlane:
                 raise ValueError("a design experiment needs a release_id")
             design = parse_design_text(design_text)
             release = self._release_by_id(release_id)
-            declaration = self._declaration(release.environment_id)
+            declaration = self._design_declaration(release)
             bank = self._item_bank(release.environment_id)
             errors = validate_design(design, declaration, bank, release_id=release.id)
             if errors:
@@ -894,7 +941,7 @@ class ControlPlane:
             )]
             attempts = [dict(row) for row in db.execute(
                 "SELECT a.id, a.cell_id, a.episode_id, a.attempt, a.status, "
-                "l.mode AS run_mode FROM attempts a JOIN launches l ON l.id = a.launch_id "
+                "l.mode AS run_mode, l.provenance_grade FROM attempts a JOIN launches l ON l.id = a.launch_id "
                 "JOIN cells c ON c.cell_id = a.cell_id WHERE c.experiment_id = ?",
                 (experiment_id,),
             )]
@@ -915,7 +962,7 @@ class ControlPlane:
         try:
             design = parse_design_text(design_text)
             release = self._release_by_id(release_id)
-            declaration = self._declaration(release.environment_id)
+            declaration = self._design_declaration(release)
             bank = self._item_bank(release.environment_id)
             errors = validate_design(design, declaration, bank, release_id=release.id)
             if errors:
@@ -965,7 +1012,7 @@ class ControlPlane:
         design = parse_design_text(design_text)
         release = self._release_by_id(experiment.release_id)
         errors = validate_design(
-            design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
+            design, self._design_declaration(release), self._item_bank(release.environment_id),
             release_id=release.id,
         )
         if errors:
@@ -990,7 +1037,7 @@ class ControlPlane:
         if design_sha256 != actual_digest or experiment.design_sha256 != actual_digest:
             raise DesignDigestMismatch("the design text no longer matches its recorded digest; fork it instead")
         release = self._release_by_id(experiment.release_id)
-        declaration = self._declaration(release.environment_id)
+        declaration = self._design_declaration(release)
         bank = self._item_bank(release.environment_id)
         plan = compile_design(
             design, declaration, bank, experiment_id=experiment.id,
@@ -1063,11 +1110,15 @@ class ControlPlane:
         if effective_shard_count > len(planned):
             raise ValueError("shard_count cannot exceed planned episodes")
 
+        release = self._release_by_id(experiment.release_id)
+        image_digest = release.image_digest if self.launcher.name == "local_container" else None
+        grade = "verified" if image_digest else "unverified"
         launch_id = str(uuid.uuid4())
         launch = Launch(
             id=launch_id, experiment_id=experiment.id, status="QUEUED",
             max_parallelism=max_parallelism, trace_database=str(self.trace_database),
             created_at=_now(), mode=mode, shard_index=None,
+            provenance_grade=grade, image_digest=image_digest,
             shard_count=effective_shard_count,
         )
         attempt_rows: list[tuple[str, str, int, int]]
@@ -1082,6 +1133,8 @@ class ControlPlane:
                     config["provenance"] = dict(config["provenance"])
                     config["provenance"]["attempt"] = attempt
                     config["provenance"]["run_mode"] = mode
+                    config["provenance"]["provenance_grade"] = grade
+                    config["provenance"]["image_digest"] = image_digest
                     attempt_rows.append((episode_id, cell_id, episode_idx, attempt))
             else:
                 attempt_rows = [
@@ -1117,11 +1170,11 @@ class ControlPlane:
                 )
             db.execute(
                 "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
-                "mode, execution_path, launch_input_uri, launch_input_sha256, "
+                "mode, provenance_grade, image_digest, execution_path, launch_input_uri, launch_input_sha256, "
                 "shard_index, shard_count, created_at, started_at, ended_at, error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (launch.id, launch.experiment_id, launch.status, launch.max_parallelism,
-                 launch.trace_database, launch.mode, launch.execution_path,
+                 launch.trace_database, launch.mode, launch.provenance_grade, launch.image_digest, launch.execution_path,
                  launch.launch_input_uri, launch.launch_input_sha256, launch.shard_index,
                  launch.shard_count, launch.created_at, launch.started_at, launch.ended_at, launch.error),
             )
@@ -1161,7 +1214,8 @@ class ControlPlane:
                 # QUEUED waiting for a worker that does not exist.
                 with self._session() as db:
                     db.execute(
-                        "UPDATE launches SET status = ?, ended_at = ?, error = ? WHERE id = ?",
+                        "UPDATE launches SET status = ?, ended_at = ?, error = ?, "
+                        "provenance_grade = 'unverified', image_digest = NULL WHERE id = ?",
                         ("FAILED", now, f"dispatch failed: {exc}", launch.id),
                     )
                     db.execute(
@@ -1228,7 +1282,11 @@ class ControlPlane:
         config = configs[0]
         with self._session() as db:
             next_attempt = self._next_attempt(db, episode_id)
-        config["provenance"] = {**config["provenance"], "attempt": next_attempt, "run_mode": "live"}
+        image_digest = source.image_digest if self.launcher.name == "local_container" else None
+        grade = "verified" if image_digest else "unverified"
+        config["provenance"] = {**config["provenance"], "attempt": next_attempt,
+                                "run_mode": "live", "provenance_grade": grade,
+                                "image_digest": image_digest}
         config["_resume_from"] = {
             "uri": ref.uri, "sha256": sha256_bytes(ref.read_bytes()),
             "durable_through": len(entries), "episode_id": episode_id,
@@ -1240,15 +1298,16 @@ class ControlPlane:
             id=new_id, experiment_id=experiment.id, status="QUEUED",
             max_parallelism=1, trace_database=str(self.trace_database), created_at=_now(),
             mode="live", shard_count=1, execution_path=path,
+            provenance_grade=grade, image_digest=image_digest,
             launch_input_uri=input_ref.uri, launch_input_sha256=input_ref.sha256,
         )
         with self._session() as db:
             db.execute(
                 "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
-                "mode, execution_path, launch_input_uri, launch_input_sha256, shard_count, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "mode, provenance_grade, image_digest, execution_path, launch_input_uri, launch_input_sha256, shard_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (launch.id, launch.experiment_id, launch.status, launch.max_parallelism,
-                 launch.trace_database, launch.mode, launch.execution_path,
+                 launch.trace_database, launch.mode, launch.provenance_grade, launch.image_digest, launch.execution_path,
                  launch.launch_input_uri, launch.launch_input_sha256, launch.shard_count, launch.created_at),
             )
             db.execute(
@@ -1286,7 +1345,7 @@ class ControlPlane:
         else:
             release = self._release_by_id(experiment.release_id)
             plan = compile_design(
-                design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
+                design, self._design_declaration(release), self._item_bank(release.environment_id),
                 experiment_id=experiment.id, experiment_name=experiment.name, release_id=release.id,
             )
             configs = [episode.config for cell in plan.cells for episode in cell.episodes]
@@ -1941,7 +2000,7 @@ class ControlPlane:
         return declaration
 
     def _item_bank(self, environment_id: str) -> ItemBank:
-        declaration = self._declaration(environment_id)
+        declaration = self._design_declaration(self._release_for(environment_id, None))
         if declaration.item_policy is None:
             raise ValueError(f"environment {environment_id!r} has no item policy")
         return ItemBank.load(
@@ -2054,6 +2113,7 @@ class ControlPlane:
             row["id"], row["environment_id"], row["version"], row["declaration_sha256"],
             row["item_bank_sha256"], row["oracle_version"], row["package"],
             row["source_ref"], json.loads(row["metadata"] or "{}"), row["created_at"],
+            row["image_digest"], json.loads(row["manifest"]) if row["manifest"] else None,
         )
 
     @staticmethod

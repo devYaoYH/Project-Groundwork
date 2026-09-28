@@ -33,12 +33,13 @@ class DemoRatingAdapter:
         )
 
 
-def _put(store: SQLiteEpisodeStore, episode_uid: str, *, mode: str = "live") -> EpisodeTrace:
+def _put(store: SQLiteEpisodeStore, episode_uid: str, *, mode: str = "live", verified: bool = True) -> EpisodeTrace:
     config = EpisodeConfigBase(
         environment_id="demo", num_agents=2,
         agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
         experiment_name="test", episode_id=f"test.cell.{episode_uid}",
-        provenance={"run_mode": mode},
+        provenance={"run_mode": mode, "provenance_grade": "verified" if verified else "unverified",
+                    "image_digest": "sha256:" + "a" * 64 if verified else None},
     )
     trace = EpisodeTrace(episode_uid=episode_uid, config=config, metrics={"quality": 1.0})
     manifest = EpisodeManifest.from_run(
@@ -59,6 +60,14 @@ def test_rating_excludes_smoke_unless_analysis_opts_in(tmp_path):
     inclusive = rebuild_rating_snapshot(store, DemoRatingAdapter(), include_non_results=True)
     assert {event.episode_uid for event in inclusive.events} == {"live", "smoke"}
     assert inclusive.snapshot.metadata["results_only"] is False
+
+
+def test_rating_excludes_unverified_live_but_analysis_can_include_it(tmp_path):
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    _put(store, "unverified", verified=False)
+    assert rebuild_rating_snapshot(store, DemoRatingAdapter()).events == ()
+    inclusive = rebuild_rating_snapshot(store, DemoRatingAdapter(), include_non_results=True)
+    assert [event.episode_uid for event in inclusive.events] == ["unverified"]
 
 
 def test_replay_persists_events_and_suppresses_unavailable_metrics(tmp_path):

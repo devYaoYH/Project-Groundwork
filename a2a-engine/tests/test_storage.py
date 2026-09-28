@@ -86,6 +86,13 @@ def test_local_store_round_trips_trace(tmp_path):
 def test_completed_episode_ids_supports_resume(tmp_path):
     store = LocalJSONStore(results_dir=tmp_path)
     store.put_episode(make_trace(), make_manifest())
+    assert store.completed_episode_ids("exp1") == set()
+    verified = make_trace("verified")
+    verified.config.episode_id = "exp1.b.0"
+    verified.config.provenance = {
+        "run_mode": "live", "provenance_grade": "verified", "image_digest": "sha256:" + "a" * 64,
+    }
+    store.put_episode(verified, make_manifest("verified"))
     assert store.completed_episode_ids("exp1") == {"exp1.b.0"}
 
 

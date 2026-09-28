@@ -69,8 +69,10 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
 .chip { border: 1px solid var(--rule-strong); border-radius: 3px; color: var(--muted); display: inline-block; font-family: var(--font-data); font-size: 10px; padding: 1px 6px; white-space: nowrap; }
 .chip-good { border-color: var(--good); color: var(--good); }
 .chip-warn { border-color: var(--warn); color: var(--warn); }
+.chip-bad { border-color: var(--bad); color: var(--bad); }
 .empty-state { color: var(--muted); margin: 0; padding: 18px; }
 .notice { border-left: 3px solid var(--bad); color: var(--bad); margin: 0 0 14px; padding: 8px 11px; }
+.notice-error { border-left-color: var(--bad); color: var(--bad); }
 .button-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .button-primary:hover { filter: brightness(1.08); background: var(--accent); }
 .oracle-card { padding-bottom: 16px; }

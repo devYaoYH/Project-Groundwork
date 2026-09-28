@@ -90,6 +90,7 @@ export function ExperimentDetailView() {
         {launches.length === 0 ? <p className="empty-state">No launches yet.</p> : <DataTable rows={launches} rowKey={(entry) => entry.launch.id} columns={[
           { label: "launch", render: (entry) => <Link className="table-link" href={`/launch/?id=${encodeURIComponent(entry.launch.id)}`}><strong className="mono">{entry.launch.id}</strong><span>Open diagnostics</span></Link> },
           { label: "mode", render: (entry) => <Chip>{entry.launch.mode}</Chip> },
+          { label: "provenance", render: (entry) => <Chip tone={entry.launch.provenance_grade === "verified" ? "good" : "bad"}>{entry.launch.provenance_grade ?? "unverified"}</Chip> },
           { label: "status", render: (entry) => <Chip tone={entry.launch.status === "COMPLETED" ? "good" : "warn"}>{entry.launch.status}</Chip> },
           { label: "replications", className: "mono", render: (entry) => `${entry.progress.completed}/${entry.progress.planned}` },
         ]} />}
@@ -106,6 +107,7 @@ export function ExperimentDetailView() {
           { label: "prior runs", render: (group) => <ReplicationHistory executions={group.priorExecutions} /> },
           { label: "item", className: "mono", render: (group) => group.latest.item_id ?? <span className="muted">-</span> },
           { label: "latest status", render: (group) => <Chip tone={EPISODE_TONE[group.latest.status] ?? "plain"}>{group.latest.status}</Chip> },
+          { label: "provenance", render: (group) => <Chip tone={group.latest.provenance_grade === "verified" ? "good" : "bad"}>{group.latest.provenance_grade ?? "unverified"}</Chip> },
         ]} />}
       </section>
     </>

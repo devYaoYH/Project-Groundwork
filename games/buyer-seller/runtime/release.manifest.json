@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "environment_id": "buyer_seller",
+  "release": "v1",
+  "release_id": "buyer_seller",
+  "package": "buyer-seller",
+  "surface": {
+    "roles": [
+      {
+        "id": "seller",
+        "count": 1,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [],
+        "description": ""
+      },
+      {
+        "id": "buyer",
+        "count": 1,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [],
+        "description": ""
+      }
+    ],
+    "parameters": [
+      {
+        "name": "seller_cost",
+        "type": "continuous",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "buyer_value",
+        "type": "continuous",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "num_items",
+        "type": "integer",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "discount_factor",
+        "type": "continuous",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "enforce_monotonic_offers",
+        "type": "boolean",
+        "domain": [
+          true,
+          false
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      },
+      {
+        "name": "max_rounds",
+        "type": "integer",
+        "domain": [
+          1.0,
+          50.0
+        ],
+        "fixed": true,
+        "source": "design",
+        "item_key": null
+      }
+    ],
+    "item_policy": {
+      "mode": "enumerate",
+      "bank_path": "games/buyer-seller/buyer_seller/items/parameters_v1.jsonl",
+      "item_bank_sha256": "ccf6762f22c4ad91b188dd37b28d8cd092e0c4819a9670a2fd6a147ede71bd28"
+    },
+    "engine_defaults": {
+      "num_agents": 2
+    },
+    "inputs": [],
+    "measures": [
+      {
+        "name": "efficiency",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      },
+      {
+        "name": "joint_utility",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      }
+    ],
+    "oracle_version": "closed-form-v3",
+    "blurb": "Sequential bargaining over multiple units with asymmetric private values.",
+    "source_url": "https://github.com/devYaoYH/Project-Groundwork/tree/main/games/buyer-seller"
+  },
+  "surface_sha256": "a4dca75eb7e4cc0f1b097ede91b13e5f6332738c6fb83453416f38cca00c445f",
+  "declaration_sha256": "1785447998881eb95083bd048a48e479a03d332d93810f3fd87ddb0b56c7efdb",
+  "image_digest": "sha256:85658d5e5494c962d49bc990db145a0c887f799297464fbb3ca0b9dec6e47264"
+}

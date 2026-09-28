@@ -661,8 +661,8 @@ def test_a_physical_retry_keeps_both_rows_and_highest_execution_wins(tmp_path):
     assert control._progress_rows_sql(launch.id) == control._progress_rows_two_step(launch.id)
     assert control.cell_evidence(locked.id) == control._cell_evidence_two_step(locked.id)
     evidence = next(row for row in control.cell_evidence(locked.id) if row["cell_id"] == config["provenance"]["cell_id"])
-    assert evidence["completed_replicas"] == 1
-    assert next(metric for metric in evidence["metric_summaries"] if metric["name"] == "score")["mean"] == 2.0
+    assert evidence["completed_replicas"] == 0
+    assert evidence["metric_summaries"] == []
     records = store.episode_summaries({"episode_id": config["episode_id"]})[0]
     assert {(row["episode_uid"], row["execution"]) for row in records} == {("retry-0", 0), ("retry-1", 1)}
     manifests = store.list_episodes({"episode_id": config["episode_id"]})[0]

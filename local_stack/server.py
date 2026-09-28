@@ -30,7 +30,7 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage import ControlPlaneReader, make_control_plane_reader
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
-from a2a_engine.provenance import pinned_participants, provenance_of, run_mode_of
+from a2a_engine.provenance import execution_grade, pinned_participants, provenance_of, run_mode_of
 from a2a_engine.design import DesignValidationError
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
     from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
@@ -438,6 +438,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         return {
             "episode": trace.model_dump(mode="json"),
             "run_mode": summaries[0]["run_mode"] if summaries else run_mode_of(provenance_of(trace)),
+            "provenance_grade": summaries[0]["provenance_grade"] if summaries else execution_grade(provenance_of(trace)),
             "lanes": cls._lanes(trace),
             "index_label": cls._index_label(str(trace.config.environment_id or "")),
             # The scrubber's upper bound. An episode with no events is a real

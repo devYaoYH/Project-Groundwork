@@ -59,7 +59,7 @@ _FILTERABLE = {
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "stopped",
     "experiment_id", "release_id", "item_id", "attempt", "seed", "status",
-    "run_mode",
+    "run_mode", "provenance_grade",
 }
 
 _MULTI_FILTERABLE = {"environment_id", "status", "run_mode"}
@@ -75,7 +75,7 @@ def episode_name_tokens(value: object) -> list[str]:
 _SUMMARY_COLUMNS = (
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "experiment_id", "release_id", "item_id",
-    "attempt", "seed", "status", "run_mode", "started_at", "ended_at", "stopped",
+    "attempt", "seed", "status", "run_mode", "provenance_grade", "image_digest", "started_at", "ended_at", "stopped",
     "execution", "shard_index",
     "created_at",
 )
@@ -166,6 +166,8 @@ class SQLiteEpisodeStore:
             promoted["seed"] if promoted["seed"] is not None else manifest.seed,
             promoted["status"],
             promoted["run_mode"],
+            promoted["provenance_grade"],
+            promoted["image_digest"],
             json.dumps(payload.get("config", {})),
             json.dumps(events),
             json.dumps(payload.get("final_state", {})),
@@ -192,10 +194,10 @@ class SQLiteEpisodeStore:
                         "INSERT INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
                         "  episode_tokens, cell_id, episode_idx, experiment_id, release_id, item_id,"
-                        "  attempt, execution, shard_index, seed, status, run_mode,"
+                        "  attempt, execution, shard_index, seed, status, run_mode, provenance_grade, image_digest,"
                         "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                         "ON CONFLICT(episode_uid) DO UPDATE SET "
                         "environment_id=excluded.environment_id, experiment_name=excluded.experiment_name, "
                         "episode_id=excluded.episode_id, episode_tokens=excluded.episode_tokens, "
@@ -204,6 +206,7 @@ class SQLiteEpisodeStore:
                         "item_id=excluded.item_id, attempt=excluded.attempt, "
                         "execution=excluded.execution, shard_index=excluded.shard_index, "
                         "seed=excluded.seed, status=excluded.status, run_mode=excluded.run_mode, "
+                        "provenance_grade=excluded.provenance_grade, image_digest=excluded.image_digest, "
                         "config=excluded.config, events=excluded.events, final_state=excluded.final_state, "
                         "metrics=excluded.metrics, release=excluded.release, episode=excluded.episode, "
                         "observability=excluded.observability, started_at=excluded.started_at, "
@@ -415,7 +418,7 @@ class SQLiteEpisodeStore:
                     -- plans the mode per launch, so it is what says whether
                     -- the attempt could have produced a result at all.
                     SELECT a.cell_id, a.episode_id, a.attempt, a.status, a.id,
-                           l.mode AS run_mode
+                           l.mode AS run_mode, l.provenance_grade
                     FROM attempts a
                     JOIN launches l ON l.id = a.launch_id
                 ), latest_attempts AS (
@@ -577,7 +580,7 @@ class SQLiteEpisodeStore:
             for start in range(0, len(wanted), 900):
                 batch = wanted[start:start + 900]
                 records.extend(dict(row) for row in conn.execute(
-                    "SELECT episode_uid, episode_id, attempt, execution, status, run_mode, metrics, created_at "
+                    "SELECT episode_uid, episode_id, attempt, execution, status, run_mode, provenance_grade, metrics, created_at "
                     f"FROM episodes WHERE episode_id IN ({', '.join('?' for _ in batch)})",
                     tuple(batch),
                 ).fetchall())

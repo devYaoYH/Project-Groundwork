@@ -35,12 +35,12 @@ from a2a_engine.provenance import RUN_MODE_LIVE, promoted_columns
 from a2a_engine.schemas import EpisodeTrace
 
 #: Column -> the value a row must hold to count as a result.
-RESULT_CONDITIONS: Mapping[str, str] = MappingProxyType({"run_mode": RUN_MODE_LIVE})
+RESULT_CONDITIONS: Mapping[str, str] = MappingProxyType({"run_mode": RUN_MODE_LIVE, "provenance_grade": "verified"})
 
 #: What an absent column means, mirroring each column's schema default. A row
 #: or manifest written before a column existed claims the default, which is
 #: exactly what the column itself would say after its additive migration.
-_COLUMN_DEFAULTS: Mapping[str, str] = MappingProxyType({"run_mode": RUN_MODE_LIVE})
+_COLUMN_DEFAULTS: Mapping[str, str] = MappingProxyType({"run_mode": RUN_MODE_LIVE, "provenance_grade": "unverified"})
 
 
 def result_predicate(alias: str | None = None) -> str:

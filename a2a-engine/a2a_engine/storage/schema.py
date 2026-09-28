@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS releases (
     package           TEXT,
     source_ref        TEXT NOT NULL DEFAULT '',
     metadata          TEXT NOT NULL DEFAULT '{}',
+    image_digest      TEXT,
+    manifest          TEXT,
     created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_releases_environment ON releases(environment_id);
@@ -146,6 +148,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     -- a2a_engine.storage.results for the one predicate every result reader
     -- shares.  Indexed after the post-migration backfill, not here.
     run_mode          TEXT NOT NULL DEFAULT 'live',
+    provenance_grade  TEXT NOT NULL DEFAULT 'unverified',
+    image_digest      TEXT,
     config            TEXT NOT NULL,
     events            TEXT NOT NULL,
     final_state       TEXT NOT NULL,
@@ -179,6 +183,8 @@ CREATE TABLE IF NOT EXISTS launches (
     max_parallelism   INTEGER NOT NULL,
     trace_database    TEXT NOT NULL,
     mode              TEXT NOT NULL DEFAULT 'live',
+    provenance_grade  TEXT NOT NULL DEFAULT 'unverified',
+    image_digest      TEXT,
     execution_path    TEXT,
     -- The addressable launch input and the digest a worker verifies before it
     -- parses anything. ``execution_path`` keeps meaning what it meant: an
@@ -270,6 +276,12 @@ CREATE TABLE IF NOT EXISTS rating_snapshots (
 # Additive column migrations keep an older database readable rather than
 # demanding it be thrown away; each entry is (table, column, ALTER statement).
 MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("releases", "image_digest", "ALTER TABLE releases ADD COLUMN image_digest TEXT"),
+    ("releases", "manifest", "ALTER TABLE releases ADD COLUMN manifest TEXT"),
+    ("launches", "provenance_grade", "ALTER TABLE launches ADD COLUMN provenance_grade TEXT NOT NULL DEFAULT 'unverified'"),
+    ("launches", "image_digest", "ALTER TABLE launches ADD COLUMN image_digest TEXT"),
+    ("episodes", "provenance_grade", "ALTER TABLE episodes ADD COLUMN provenance_grade TEXT NOT NULL DEFAULT 'unverified'"),
+    ("episodes", "image_digest", "ALTER TABLE episodes ADD COLUMN image_digest TEXT"),
     ("episodes", "observability",
      "ALTER TABLE episodes ADD COLUMN observability TEXT NOT NULL DEFAULT '{}'"),
     ("episodes", "release",

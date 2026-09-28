@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "environment_id": "negotiation",
+  "release": "v1",
+  "release_id": "negotiation",
+  "package": "negotiation-environment",
+  "surface": {
+    "roles": [
+      {
+        "id": "negotiator",
+        "count": 2,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [],
+        "description": ""
+      }
+    ],
+    "parameters": [
+      {
+        "name": "mc_ratio",
+        "type": "continuous",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": "mc_bucket"
+      },
+      {
+        "name": "mode",
+        "type": "categorical",
+        "domain": [
+          "stable",
+          "rotating"
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      },
+      {
+        "name": "num_rounds",
+        "type": "integer",
+        "domain": [
+          1.0,
+          20.0
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      },
+      {
+        "name": "cheap_talk_turns",
+        "type": "integer",
+        "domain": [
+          0.0,
+          20.0
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      },
+      {
+        "name": "enable_cheap_talk",
+        "type": "boolean",
+        "domain": [
+          true,
+          false
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      }
+    ],
+    "item_policy": {
+      "mode": "sample",
+      "bank_path": "games/negotiation/data/scenario_pools/run_009/filtered.json",
+      "item_bank_sha256": "be04fdd22ef3f94ae3cd98ed9c51ed1596047d68f4d95310a0d6c0d7a78fcf9d"
+    },
+    "engine_defaults": {
+      "num_agents": 2
+    },
+    "inputs": [],
+    "measures": [
+      {
+        "name": "num_rounds",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "neutral",
+        "extractor": null
+      },
+      {
+        "name": "joint_reward",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      }
+    ],
+    "oracle_version": "scenario-pool-run-009",
+    "blurb": "Two agents negotiate a resource allocation against a stored oracle optimum.",
+    "source_url": "https://github.com/devYaoYH/Project-Groundwork/tree/main/games/negotiation"
+  },
+  "surface_sha256": "cd4661dc4189d2912fb077b19acff9a37a276b72d5fd825f1c4df87910ba9a29",
+  "declaration_sha256": "118e4517a9eab08e463b346039b67a6361f95c6c34e50ba7d8f2c46bdcaf19b3",
+  "image_digest": "sha256:09cd4984a4fe148967bde66aa8d0065f63d7c9db9f28def10d347dc872c3129e"
+}

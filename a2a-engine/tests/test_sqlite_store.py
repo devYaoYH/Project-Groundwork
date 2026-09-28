@@ -131,7 +131,14 @@ def test_list_episodes_paginates(store):
 def test_completed_episode_ids_supports_resume(store):
     store.put_episode(*make_trace("g1", run_id="e.b.0"))
     store.put_episode(*make_trace("g2", run_id="e.b.1"))
-    assert store.completed_episode_ids("e") == {"e.b.0", "e.b.1"}
+    # Legacy traces without a pinned executing image are inspectable, not results.
+    assert store.completed_episode_ids("e") == set()
+    verified, manifest = make_trace("verified", run_id="e.b.2")
+    verified.config.provenance = {
+        "run_mode": "live", "provenance_grade": "verified", "image_digest": "sha256:" + "a" * 64,
+    }
+    store.put_episode(verified, manifest)
+    assert store.completed_episode_ids("e") == {"e.b.2"}
     assert store.completed_episode_ids("other") == set()
 
 

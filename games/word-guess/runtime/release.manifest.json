@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "environment_id": "word_guess",
+  "release": "v1",
+  "release_id": "word_guess",
+  "package": "word-guess",
+  "surface": {
+    "roles": [
+      {
+        "id": "guesser",
+        "count": 1,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [],
+        "description": ""
+      },
+      {
+        "id": "host",
+        "count": 1,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [],
+        "description": ""
+      }
+    ],
+    "parameters": [
+      {
+        "name": "secret_word",
+        "type": "categorical",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "max_turns",
+        "type": "integer",
+        "domain": [
+          1.0,
+          50.0
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      }
+    ],
+    "item_policy": {
+      "mode": "enumerate",
+      "bank_path": "games/word-guess/word_guess/items/words_v1.jsonl",
+      "item_bank_sha256": "a87db424f43657df97f062b77da372f4ac1be1059fdca0ef43c6fac36af94ddb"
+    },
+    "engine_defaults": {
+      "num_agents": 2
+    },
+    "inputs": [],
+    "measures": [
+      {
+        "name": "won",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      },
+      {
+        "name": "turns_used",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "minimize",
+        "extractor": null
+      },
+      {
+        "name": "efficiency",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "minimize",
+        "extractor": null
+      }
+    ],
+    "oracle_version": "answer-key-v1",
+    "blurb": "Two participants coordinate yes-or-no questions to identify a secret word.",
+    "source_url": "https://github.com/devYaoYH/Project-Groundwork/tree/main/games/word-guess"
+  },
+  "surface_sha256": "874c5c3fdca3a4aea5341508fea87c0705ea4da7075694023c371db51b71ebd5",
+  "declaration_sha256": "b6206059ea4c1b857dbfda51f929ab1bad023bc42032636d7188c03d9cf80ec3",
+  "image_digest": "sha256:29bd15a0dd4416824b8047615cb8f1729a27ad050502783cf1b578ae74cfaed5"
+}

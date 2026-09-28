@@ -161,6 +161,7 @@ export function EpisodeView() {
         </div>
         <div className="launch-actions">
           <Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
+          <Chip tone={detail?.provenance_grade === "verified" ? "good" : "bad"}>{detail?.provenance_grade ?? "unverified"}</Chip>
           {runMode === "smoke" || runMode === "dry_run" ? (
             <Chip tone="warn">{runMode}</Chip>
           ) : null}

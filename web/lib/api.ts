@@ -103,6 +103,8 @@ export type EpisodeSummary = {
   // interrupted episode's event log: evidence, not a result.
   status: string;
   run_mode: "live" | "smoke" | "dry_run";
+  provenance_grade?: "verified" | "unverified";
+  image_digest?: string | null;
   started_at: string | null;
   ended_at: string | null;
   stopped: boolean;
@@ -158,6 +160,7 @@ export type Lane = {
 export type EpisodeDetail = {
   episode: EpisodeTrace;
   run_mode: "live" | "smoke" | "dry_run";
+  provenance_grade: "verified" | "unverified";
   lanes: Lane[] | null;
   index_label: string | null;
   cursor_max: number;
@@ -245,6 +248,8 @@ export type Launch = {
   max_parallelism: number;
   trace_database: string;
   mode: "live" | "smoke" | "dry_run";
+  provenance_grade: "verified" | "unverified";
+  image_digest: string | null;
   execution_path: string | null;
   shard_index: number | null;
   shard_count: number | null;

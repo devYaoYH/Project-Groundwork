@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "environment_id": "calendar",
+  "release": "v1",
+  "release_id": "calendar",
+  "package": "calendar-environment",
+  "surface": {
+    "roles": [
+      {
+        "id": "calendar-agent",
+        "count": 5,
+        "accepts": [
+          "llm",
+          "scripted",
+          "human"
+        ],
+        "bindings": [
+          "baseline",
+          "dsm",
+          "imap",
+          "paper_dsm",
+          "private_dsm",
+          "sd"
+        ],
+        "description": ""
+      }
+    ],
+    "parameters": [
+      {
+        "name": "density",
+        "type": "continuous",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "num_slots",
+        "type": "integer",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "num_meetings",
+        "type": "integer",
+        "domain": null,
+        "fixed": false,
+        "source": "item",
+        "item_key": null
+      },
+      {
+        "name": "communication_protocol",
+        "type": "categorical",
+        "domain": [
+          "dm",
+          "groupchat",
+          "mixed"
+        ],
+        "fixed": false,
+        "source": "design",
+        "item_key": null
+      }
+    ],
+    "item_policy": {
+      "mode": "enumerate",
+      "bank_path": "games/calendar/tasks/tiny_varied_density_5a3p.jsonl",
+      "item_bank_sha256": "9f1b6f0216b1ae5dcdbfccd91ff07cc4254c8e5547fb1fec8871fad6b7f0d7a6"
+    },
+    "engine_defaults": {
+      "num_agents": 5
+    },
+    "inputs": [],
+    "measures": [
+      {
+        "name": "coordination_rate",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      },
+      {
+        "name": "efficiency",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "episode",
+        "unit": "joint",
+        "direction": "maximize",
+        "extractor": null
+      },
+      {
+        "name": "per_agent_excess_burden",
+        "producer": "environment",
+        "grain": "episode",
+        "index_label": null,
+        "scope": "participant",
+        "unit": "participant",
+        "direction": "minimize",
+        "extractor": null
+      }
+    ],
+    "oracle_version": "cp-sat-v1",
+    "blurb": "Assistants coordinate private calendars over a frozen set of solvable schedules.",
+    "source_url": "https://github.com/devYaoYH/Project-Groundwork/tree/main/games/calendar"
+  },
+  "surface_sha256": "194462e06288d78e926dd0bff7725a9e8fae9e971c15c5ffaca048a174fdf41f",
+  "declaration_sha256": "13b0f56416f40d8d6edd9c3c998c015619b76ef0b22030291a24c8ee9d3689d3",
+  "image_digest": "sha256:cf02340188a4b5323efeea92b056488c32700c0af4d33e25b4f702cff665ea10"
+}

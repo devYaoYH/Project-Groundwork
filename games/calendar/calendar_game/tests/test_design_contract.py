@@ -9,6 +9,7 @@ from a2a_engine.compiler import compile, validate
 from a2a_engine.design import parse_design_text
 from a2a_engine.items import ItemBank
 from calendar_game.declaration import DECLARATION
+from calendar_game.game import CalendarGame
 
 
 _BANK = ItemBank.load(
@@ -80,7 +81,7 @@ def test_calendar_design_keeps_llm_binding_as_the_model_name():
         ("sd", "sd"),
     ],
 )
-def test_calendar_design_compiles_scripted_policy_binding_to_runtime_type(binding, runtime_type):
+def test_calendar_design_preserves_scripted_binding_for_worker_resolution(binding, runtime_type):
     plan = compile(
         _design(binding),
         DECLARATION,
@@ -90,5 +91,12 @@ def test_calendar_design_compiles_scripted_policy_binding_to_runtime_type(bindin
     )
 
     agents = plan.preview_episode_config["agents"]
-    assert [agent["type"] for agent in agents] == [runtime_type] * 5
+    assert [agent["type"] for agent in agents] == ["scripted"] * 5
     assert [agent["binding"] for agent in agents] == [binding] * 5
+    game = object.__new__(CalendarGame)
+    game.dry_run = False
+    resolved = game._make_client(agents[0])
+    # A locked plan compiled before the surface move already contains a
+    # resolved runtime type; the worker must still accept those frozen bytes.
+    legacy = game._make_client({**agents[0], "type": runtime_type})
+    assert type(resolved) is type(legacy)

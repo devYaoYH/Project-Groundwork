@@ -370,10 +370,15 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
     )
     locked = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256 or "")
     launcher = _silent(control)
+    launcher.name = "local_container"  # Synthetic verified container evidence.
+    digest = "sha256:" + "a" * 64
+    with control._session() as db:
+        db.execute("UPDATE releases SET image_digest = ? WHERE id = ?", (digest, locked.release_id))
 
     first = control.launch_experiment(locked.id)
     first_configs = control._design_episode_configs(locked, mode="live")
     for index, config in enumerate(first_configs):
+        config["provenance"].update(provenance_grade="verified", image_digest=digest)
         _record_planned_episode(
             control, config, episode_uid=f"first-{index}",
             metrics={"score": [1.0, 5.0][index], "won": index == 0},
@@ -389,6 +394,7 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
     second_configs = control._design_episode_configs(locked, mode="live")
     for index, config in enumerate(second_configs):
         config["provenance"] = {**config["provenance"], "attempt": attempts[config["episode_id"]]}
+        config["provenance"].update(provenance_grade="verified", image_digest=digest)
         _record_planned_episode(
             control, config, episode_uid=f"second-{index}",
             metrics={"score": [3.0, 7.0][index], "won": index == 1},

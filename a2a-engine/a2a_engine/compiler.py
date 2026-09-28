@@ -16,7 +16,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .design import Design, DesignValidationError, ParticipantConfig, ValidationIssue
+from .design import Design, DesignValidationError, ValidationIssue
 from .environment import ParameterConfig, ReleaseDeclaration
 from .items import Item, ItemBank
 from .provenance import build_provenance
@@ -414,7 +414,7 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
     defaults["agents"] = [
         {
             "id": participant.id,
-            "type": _runtime_agent_type(participant, declaration),
+            "type": participant.kind,
             **(
                 {"model": participant.binding}
                 if participant.kind == "llm" and participant.binding
@@ -424,15 +424,6 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
         for participant in design.roster
     ]
     return defaults
-
-
-def _runtime_agent_type(participant: ParticipantConfig, declaration: ReleaseDeclaration) -> str:
-    if participant.kind != "scripted" or not participant.role or not participant.binding:
-        return participant.kind
-    role = next((role for role in declaration.roles if role.id == participant.role), None)
-    if role is None:
-        return participant.kind
-    return role.scripted_bindings.get(participant.binding, participant.kind)
 
 
 def _trace_release(declaration: ReleaseDeclaration, release_id: str) -> dict[str, Any]:

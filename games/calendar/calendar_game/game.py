@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
+from a2a_engine.adapters import resolve_scripted_binding
 from a2a_engine.turns import finish_turn, identity, turn
 from pydantic import Field
 
@@ -356,6 +357,8 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 
 class CalendarGame:
     """Calendar scheduling benchmark environment."""
+
+    SCRIPTED_CLIENT_TYPES = frozenset({"scripted", "dsm", "paper_dsm", "private_dsm", "imap", "sd"})
 
     def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False) -> None:
         self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
@@ -830,39 +833,37 @@ class CalendarGame:
     def run_with_scenario(self, scenario: dict) -> EpisodeTrace:
         return asyncio.run(self._run_async(scenario))
 
+    def _make_client(self, cfg: dict) -> BaseClient:
+        if self.dry_run:
+            return ScriptedClient()
+        agent_type = cfg.get("type", "llm")
+        if agent_type == "scripted" and cfg.get("binding"):
+            agent_type = resolve_scripted_binding("calendar-agent", cfg["binding"], DECLARATION)
+        if agent_type == "scripted":
+            return ScriptedClient()
+        if agent_type == "dsm":
+            return DSMClient()
+        if agent_type == "paper_dsm":
+            return PaperDSMClient()
+        if agent_type == "private_dsm":
+            return PrivateDSMClient()
+        if agent_type in {"imap", "incremental_map"}:
+            return IncrementalMAPClient()
+        if agent_type in {"sd", "scheduling_difficulty"}:
+            return SDClient()
+        if agent_type == "dspy":
+            cfg = self._llm_spec_with_defaults(cfg)
+            prompt_variant = cfg.get("prompt_variant") or cfg.get("extra", {}).get("prompt_variant")
+            prompt_variant_dir = cfg.get("prompt_variant_dir") or cfg.get("extra", {}).get("prompt_variant_dir")
+            return DSPyClient(make_llm_client(cfg), prompt_variant=prompt_variant, prompt_variant_dir=prompt_variant_dir)
+        cfg = self._llm_spec_with_defaults(cfg)
+        return LLMClient(make_llm_client(cfg))
+
     def _build_agents(self, scenario: dict) -> list[Agent]:
         """Construct and calendar-initialize agents from scenario. Separated for testability."""
         agents: list[Agent] = []
         for agent_id in range(self.config.num_agents):
-            if self.dry_run:
-                client: BaseClient = ScriptedClient()
-            else:
-                cfg = self._agent_spec_for(agent_id)
-                agent_type = cfg.get("type", "llm")
-                if agent_type == "scripted":
-                    client = ScriptedClient()
-                elif agent_type == "dsm":
-                    client = DSMClient()
-                elif agent_type == "paper_dsm":
-                    client = PaperDSMClient()
-                elif agent_type == "private_dsm":
-                    client = PrivateDSMClient()
-                elif agent_type in {"imap", "incremental_map"}:
-                    client = IncrementalMAPClient()
-                elif agent_type in {"sd", "scheduling_difficulty"}:
-                    client = SDClient()
-                elif agent_type == "dspy":
-                    cfg = self._llm_spec_with_defaults(cfg)
-                    prompt_variant = cfg.get("prompt_variant") or cfg.get("extra", {}).get("prompt_variant")
-                    prompt_variant_dir = cfg.get("prompt_variant_dir") or cfg.get("extra", {}).get("prompt_variant_dir")
-                    client = DSPyClient(
-                        make_llm_client(cfg),
-                        prompt_variant=prompt_variant,
-                        prompt_variant_dir=prompt_variant_dir,
-                    )
-                else:
-                    cfg = self._llm_spec_with_defaults(cfg)
-                    client = LLMClient(make_llm_client(cfg))
+            client = self._make_client(self._agent_spec_for(agent_id))
             # Calendar's long-standing BaseClient protocol remains the domain
             # seam.  The adapter adds lifecycle spans around it rather than
             # changing client behavior or making the environment depend on one agent

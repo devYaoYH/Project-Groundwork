@@ -191,6 +191,14 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
         **cfg["provenance"],
         "run_mode": executed_run_mode(dry_run=dry_run, persist=persist),
     }
+    executed_digest = os.environ.get("A2A_EXECUTION_IMAGE_DIGEST")
+    planned_digest = cfg["provenance"].get("image_digest")
+    if executed_digest and planned_digest and executed_digest != planned_digest:
+        raise ValueError("executing image digest does not match the pinned launch release")
+    if not executed_digest or not planned_digest:
+        cfg["provenance"].update(provenance_grade="unverified", image_digest=None)
+    else:
+        cfg["provenance"].update(provenance_grade="verified", image_digest=executed_digest)
     return {"config": cfg, "dry_run": dry_run, "persist": persist,
             "experiment_name": experiment_name,
             "cell_id": logical_cell_id, "episode_idx": logical_episode_idx,

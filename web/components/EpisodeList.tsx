@@ -145,6 +145,7 @@ export function EpisodeList() {
           { label: "item", className: "mono", render: (group) => group.latest.item_id ?? <span className="muted">-</span> },
           { label: "latest status", render: (group) => <Chip tone={TONE[group.latest.status] ?? "plain"}>{group.latest.status}</Chip> },
           { label: "mode", render: (group) => <Chip tone={group.latest.run_mode === "smoke" ? "warn" : "plain"}>{group.latest.run_mode ?? "live"}</Chip> },
+          { label: "provenance", render: (group) => <Chip tone={group.latest.provenance_grade === "verified" ? "good" : "bad"}>{group.latest.provenance_grade ?? "unverified"}</Chip> },
           { label: "measures", render: (group) => headline(group.latest.metrics) },
         ]} /> : null}
       </section>

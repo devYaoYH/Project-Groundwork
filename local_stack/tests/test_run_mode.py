@@ -54,14 +54,14 @@ def test_live_result_survives_smoke_and_dry_run_and_two_step_agrees(tmp_path):
     control.launcher.finish(first.id)
     control.reconcile()
     expected = control.cell_evidence(experiment.id)
-    assert sum(cell["completed_replicas"] for cell in expected) == 1
+    assert sum(cell["completed_replicas"] for cell in expected) == 0
 
     smoke = control.launch_experiment(experiment.id, mode="smoke")
     assert control.experiment(experiment.id).design_sha256 == locked_digest
     with control._session() as db:
         rows = db.execute("SELECT * FROM episodes").fetchall()
-        assert all(counts_as_result(row) for row in rows)
-        assert db.execute(f"SELECT COUNT(*) FROM episodes WHERE {RESULT_PREDICATE}").fetchone()[0] == len(rows)
+        assert all(not counts_as_result(row) for row in rows)
+        assert db.execute(f"SELECT COUNT(*) FROM episodes WHERE {RESULT_PREDICATE}").fetchone()[0] == 0
     _put(control, episode_id, 2, "smoke", 0.0)
     control.launcher.finish(smoke.id)
     control.reconcile()
@@ -73,7 +73,7 @@ def test_live_result_survives_smoke_and_dry_run_and_two_step_agrees(tmp_path):
         rows = db.execute("SELECT * FROM episodes").fetchall()
         assert sum(counts_as_result(row) for row in rows) == db.execute(
             f"SELECT COUNT(*) FROM episodes WHERE {RESULT_PREDICATE}"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 0
     assert all(config["provenance"].get("run_mode") is None for config in live_plan)
     previous = LocalStackHandler.database, LocalStackHandler._control_plane
     try:

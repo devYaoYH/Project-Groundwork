@@ -148,6 +148,7 @@ def test_sqlite_control_plane_lists_traces_and_rebuilds_calendar_ratings(tmp_pat
         agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
         experiment_name="local-test",
         episode_id="local-test.cell.0",
+        provenance={"provenance_grade": "verified", "image_digest": "sha256:" + "a" * 64},
     )
     trace = EpisodeTrace(
         episode_uid="calendar-run",
@@ -189,7 +190,8 @@ def test_calendar_leaderboard_ignores_smoke_rows(tmp_path):
             environment_id="calendar", num_agents=2,
             agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
             experiment_name="calendar-mode", episode_id=f"calendar-mode.cell.{uid}",
-            provenance={"run_mode": mode},
+            provenance={"run_mode": mode, "provenance_grade": "verified",
+                        "image_digest": "sha256:" + "a" * 64},
         )
         trace = EpisodeTrace(
             episode_uid=uid, config=config,
@@ -206,6 +208,32 @@ def test_calendar_leaderboard_ignores_smoke_rows(tmp_path):
         board = LocalStackHandler._calendar_leaderboard()
         assert board["metadata"]["rating_event_count"] == 1
         assert board["metadata"]["results_only"] is True
+    finally:
+        LocalStackHandler.database = previous
+
+
+def test_calendar_leaderboard_excludes_unverified_live_rows(tmp_path):
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    for uid, verified in (("unverified", False), ("verified", True)):
+        config = EpisodeConfigBase(
+            environment_id="calendar", num_agents=2,
+            agents=[ParticipantBinding(model="model-a"), ParticipantBinding(model="model-b")],
+            experiment_name="calendar-grades", episode_id=f"calendar-grades.cell.{uid}",
+            provenance={"run_mode": "live", "provenance_grade": "verified" if verified else "unverified",
+                        "image_digest": "sha256:" + "a" * 64 if verified else None},
+        )
+        trace = EpisodeTrace(
+            episode_uid=uid, config=config,
+            metrics={"coordination_rate": 0.8, "per_agent_excess_burden": [1.0, 2.0]},
+        )
+        store.put_episode(trace, EpisodeManifest.from_run(
+            config=config.model_dump(), experiment_name="calendar-grades",
+            cell_id="cell", episode_idx=0, episode_uid=uid,
+        ))
+    previous = LocalStackHandler.database
+    try:
+        LocalStackHandler.database = store.path
+        assert LocalStackHandler._calendar_leaderboard()["metadata"]["rating_event_count"] == 1
     finally:
         LocalStackHandler.database = previous
 
@@ -994,6 +1022,7 @@ def test_episode_detail_survives_a_trace_with_no_events_and_no_provenance(tmp_pa
         assert detail == {
             "episode": detail["episode"],
             "run_mode": "live",
+            "provenance_grade": "unverified",
             "lanes": [],
             "index_label": None,
             "cursor_max": 0,

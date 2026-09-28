@@ -91,6 +91,13 @@ class AdapterRegistry:
 adapters = AdapterRegistry()
 
 
+def resolve_scripted_binding(role: str, binding: str, declaration: Any) -> str:
+    """Resolve an authored binding only inside the executing environment image."""
+    declared = next((entry for entry in declaration.roles if entry.id == role), None)
+    if declared is None or binding not in declared.scripted_bindings:
+        raise ValueError(f"undeclared scripted binding {binding!r} for role {role!r}")
+    return declared.scripted_bindings[binding]
+
+
 def register_adapter(descriptor: AdapterDescriptor, factory: AdapterFactory) -> None:
     adapters.register(descriptor, factory)
-

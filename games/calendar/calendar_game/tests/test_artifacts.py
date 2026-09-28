@@ -34,7 +34,8 @@ def test_completed_calendar_trace_is_self_contained_and_replayable(tmp_path):
 
     # This path has no task file to read. The rating replay consumes only the
     # persisted trace and, after ingestion, its digest-bound analysis artifact.
-    first = rebuild_rating_snapshot(store, CalendarRatingAdapter())
+    assert rebuild_rating_snapshot(store, CalendarRatingAdapter()).events == ()
+    first = rebuild_rating_snapshot(store, CalendarRatingAdapter(), include_non_results=True)
     assert len(first.events) == 1
     assert "excess_vps" in first.suppressed_metric_names
 
@@ -52,7 +53,7 @@ def test_completed_calendar_trace_is_self_contained_and_replayable(tmp_path):
     )
     assert repeated.unchanged_episode_uids == (trace.episode_uid,)
 
-    second = rebuild_rating_snapshot(store, CalendarRatingAdapter())
+    second = rebuild_rating_snapshot(store, CalendarRatingAdapter(), include_non_results=True)
     assert "excess_vps" not in second.suppressed_metric_names
     assert [metric.name for metric in second.snapshot.metrics] == [
         "coordination_ratio", "excess_cost", "excess_vps"

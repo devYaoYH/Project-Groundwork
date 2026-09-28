@@ -40,6 +40,10 @@ RUN_MODE_SMOKE = "smoke"
 RUN_MODE_DRY_RUN = "dry_run"
 RUN_MODES = (RUN_MODE_LIVE, RUN_MODE_SMOKE, RUN_MODE_DRY_RUN)
 
+def execution_grade(block: dict[str, Any]) -> str:
+    """An absent or inconsistent execution identity cannot be verified."""
+    return "verified" if block.get("provenance_grade") == "verified" and block.get("image_digest") else "unverified"
+
 
 def executed_run_mode(*, dry_run: bool, persist: bool) -> str:
     """Name the mode a runner process actually executed in.
@@ -185,6 +189,8 @@ def promoted_columns(trace: EpisodeTrace) -> dict[str, Any]:
         "seed": _as_int(trace.config.seed if trace.config.seed is not None else block.get("seed")),
         "status": episode_status(trace),
         "run_mode": run_mode_of(block),
+        "provenance_grade": execution_grade(block),
+        "image_digest": block.get("image_digest") if execution_grade(block) == "verified" else None,
     }
 
 
