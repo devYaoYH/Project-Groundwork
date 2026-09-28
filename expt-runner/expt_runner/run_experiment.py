@@ -680,7 +680,11 @@ def main(argv: list[str] | None = None) -> int:
         items=contexts,
         max_workers=args.max_parallelism,
         on_result=lambda ctx, p: log.info("ok  %s -> %s", ctx["config"]["episode_id"], p),
-        on_error=lambda ctx, e: log.error("fail %s: %s", ctx["config"]["episode_id"], e),
+        # exc_info: the one line alone ("no such group") named no file, and the
+        # worker's stdout is the only place this traceback exists.
+        on_error=lambda ctx, e: log.error(
+            "fail %s: %s", ctx["config"]["episode_id"], e, exc_info=e,
+        ),
     )
     log.info("Done: %d ok, %d failed", len(results), len(errors))
     shutdown_tracing()

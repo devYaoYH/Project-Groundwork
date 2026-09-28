@@ -188,3 +188,19 @@ def test_strike_prices_are_locked_once_agreed():
     trades = trace.final_state["trades"]
     assert [t["unit_index"] for t in trades] == list(range(1, len(trades) + 1))
     assert trace.final_state["strike_prices"] == [t["price"] for t in trades]
+
+
+@pytest.mark.parametrize("reply, price, parse_failed", [
+    ("PRICE: 13.50", 13.5, False),
+    # An unlabelled reply with a number takes the fallback. It used to raise
+    # "no such group" instead, killing a live episode mid-round.
+    ("I'll hold at 14 this round.", 14.0, False),
+    ("I'd rather not say.", 12.0, True),
+])
+def test_seller_reply_parsing_never_raises(reply, price, parse_failed):
+    from buyer_seller.agents import SellerAgent
+
+    seller = SellerAgent(None, cost=10.0, num_items=3, max_rounds=10, discount_factor=0.9)
+    parsed = seller.parse_response(reply, {"your_last_offer": 12.0}, {})
+    assert parsed["price"] == price
+    assert parsed["parse_failed"] is parse_failed

@@ -66,7 +66,10 @@ Optionally add one short sentence of reasoning after the decision line.\
 """
 
 _PRICE_RE = re.compile(r"PRICE:\s*\$?\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
-_ANY_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# Captured, like _PRICE_RE: parse_response reads group(1) from whichever
+# matched, and an uncaptured fallback raised "no such group" -- killing the
+# episode on exactly the unlabelled reply this fallback exists to absorb.
+_ANY_NUMBER_RE = re.compile(r"(-?\d+(?:\.\d+)?)")
 _ACCEPT_RE = re.compile(r"\bACCEPT\b", re.IGNORECASE)
 _REJECT_RE = re.compile(r"\bREJECT\b", re.IGNORECASE)
 
