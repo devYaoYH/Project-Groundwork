@@ -128,6 +128,7 @@ def response(result: Any, *, model: str, latency_ms: float | None = None) -> Non
     call = current_call.get()
     if call is None:
         return
+    raw_result = result
     result = result if isinstance(result, dict) else {"text": result}
     usage = {k: result.get(k) for k in ("prompt_tokens", "completion_tokens", "total_tokens",
                                          "reasoning_tokens", "cached_prompt_tokens") if k in result}
@@ -137,6 +138,7 @@ def response(result: Any, *, model: str, latency_ms: float | None = None) -> Non
             (result.get("duration_s") * 1000 if result.get("duration_s") is not None else None)}
     if should_capture_content():
         data["text"] = result.get("text")
+        data["result"] = raw_result
     emit("llm.response", data)
 
 

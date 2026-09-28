@@ -284,6 +284,11 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/cancel"):
                 launch_id = unquote(parsed.path.removeprefix("/api/launches/").removesuffix("/cancel").rstrip("/"))
                 return self._json(self._control().cancel_launch(launch_id).__dict__)
+            if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/resume"):
+                launch_id = unquote(parsed.path.removeprefix("/api/launches/").removesuffix("/resume").rstrip("/"))
+                return self._json(self._control().resume_attempt(
+                    launch_id, str(body.get("episode_id") or ""),
+                ).__dict__, 202)
         except OracleUnavailable as exc:
             return self._json({"error": str(exc)}, 409)
         except DesignDigestMismatch as exc:

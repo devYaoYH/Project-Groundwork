@@ -1189,6 +1189,80 @@ class ControlPlane:
             with self._dispatching_lock:
                 self._dispatching.discard(launch.id)
 
+    def resume_attempt(self, launch_id: str, episode_id: str) -> Launch:
+        """Dispatch one new experimental attempt from a settled partial trace."""
+        source = self.launch(launch_id)
+        if source.status in {"QUEUED", "RUNNING", "CANCELLING"} or source.mode != "live":
+            raise ValueError("only a settled live launch can be resumed")
+        experiment = self.experiment(source.experiment_id)
+        if experiment.design_text is None or experiment.locked_at is None:
+            raise ValueError("resume requires a locked design with a frozen episode plan")
+        with self._session() as db:
+            attempt = db.execute(
+                "SELECT * FROM attempts WHERE launch_id = ? AND episode_id = ?",
+                (launch_id, episode_id),
+            ).fetchone()
+        if attempt is None or attempt["status"] not in {"UNREPORTED", "FAILED", "CANCELLED"} or not attempt["episode_uri"]:
+            raise ValueError("the selected attempt has no recovered PARTIAL episode")
+        source_attempt = self._attempt(attempt)
+        refs = list(self.artifacts.iter_event_sinks(launch_id, episode_id=episode_id))
+        if len(refs) != 1:
+            raise ValueError("resume requires exactly one durable source artifact")
+        ref = refs[0]
+        if source_attempt.episode_uri != self._store().uri(ref.episode_uid):
+            raise ValueError("resume source does not match the selected attempt")
+        trace = self._store().get_episode(ref.episode_uid)
+        if trace is None or not trace.observability.get("partial") or (
+            trace.observability.get("durable_through") != ref.observed_through()
+        ):
+            raise ValueError("resume requires the recovered PARTIAL trace and its durable source")
+        entries = read_event_sink(ref)
+        if not entries or ref.observed_through() != len(entries):
+            raise ValueError("resume artifact does not match its durable high-water mark")
+        from a2a_engine.llm.replay import ReplayingClient
+        ReplayingClient(entries)
+        configs = [cfg for cfg in self._design_episode_configs(experiment, mode="live")
+                   if cfg["episode_id"] == episode_id]
+        if len(configs) != 1:
+            raise ValueError("episode is not uniquely present in the frozen design")
+        config = configs[0]
+        with self._session() as db:
+            next_attempt = self._next_attempt(db, episode_id)
+        config["provenance"] = {**config["provenance"], "attempt": next_attempt, "run_mode": "live"}
+        config["_resume_from"] = {
+            "uri": ref.uri, "sha256": sha256_bytes(ref.read_bytes()),
+            "durable_through": len(entries), "episode_id": episode_id,
+        }
+        new_id = str(uuid.uuid4())
+        path = self._write_execution_plan(new_id, experiment, [config])
+        input_ref = self._publish_launch_input(new_id, Path(path).read_bytes())
+        launch = Launch(
+            id=new_id, experiment_id=experiment.id, status="QUEUED",
+            max_parallelism=1, trace_database=str(self.trace_database), created_at=_now(),
+            mode="live", shard_count=1, execution_path=path,
+            launch_input_uri=input_ref.uri, launch_input_sha256=input_ref.sha256,
+        )
+        with self._session() as db:
+            db.execute(
+                "INSERT INTO launches (id, experiment_id, status, max_parallelism, trace_database, "
+                "mode, execution_path, launch_input_uri, launch_input_sha256, shard_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (launch.id, launch.experiment_id, launch.status, launch.max_parallelism,
+                 launch.trace_database, launch.mode, launch.execution_path,
+                 launch.launch_input_uri, launch.launch_input_sha256, launch.shard_count, launch.created_at),
+            )
+            db.execute(
+                "INSERT INTO attempts (id, launch_id, episode_id, cell_id, episode_idx, attempt, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'QUEUED')",
+                (str(uuid.uuid4()), new_id, episode_id, source_attempt.cell_id,
+                 source_attempt.episode_idx, next_attempt),
+            )
+            self._event(db, new_id, "launch.queued", {
+                "resume_of": launch_id, "episode_id": episode_id, "source_episode_uid": ref.episode_uid,
+            })
+        self._dispatch(launch, LaunchInputRef(uri=input_ref.uri, sha256=input_ref.sha256))
+        return self.launch(new_id)
+
     def _design_episode_configs(self, experiment: Experiment, *, mode: str) -> list[dict[str, Any]]:
         """Read the locked fixed plan or compile an unlocked smoke/dry-run draft."""
         if experiment.design_text is None:

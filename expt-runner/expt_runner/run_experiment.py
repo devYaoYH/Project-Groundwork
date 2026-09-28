@@ -48,6 +48,7 @@ from a2a_engine._context import current_conversation_id
 from a2a_engine.artifacts import (
     ArtifactDigestMismatch,
     ArtifactRef,
+    fetch_verified,
     make_artifact_store,
     materialize,
 )
@@ -56,6 +57,7 @@ from a2a_engine.event_sink import (
     current_event_sink,
     open_event_sink,
 )
+from a2a_engine.llm.replay import ReplayingClient, current_replay
 from a2a_engine.experiment import resolve_storage
 from a2a_engine.manifest import EpisodeManifest, git_hash
 from a2a_engine.provenance import build_provenance, executed_run_mode
@@ -131,6 +133,7 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
     # plus this small marker, so the runner consumes the exact config that was
     # reviewed at lock time instead of deriving a new identity or seed.
     planned = cfg.pop("_design_episode", None)
+    resume_ref = cfg.pop("_resume_from", None)
     if planned is not None and not isinstance(planned, dict):
         raise ValueError("_design_episode must be a mapping when present")
     logical_cell_id = str(planned.get("cell_id") if planned else cell_id)
@@ -191,7 +194,7 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
     return {"config": cfg, "dry_run": dry_run, "persist": persist,
             "experiment_name": experiment_name,
             "cell_id": logical_cell_id, "episode_idx": logical_episode_idx,
-            "attempt": planned_attempt}
+            "attempt": planned_attempt, "resume_from": resume_ref}
 
 
 def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
@@ -279,6 +282,16 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     if not environment_id:
         raise ValueError("config is missing 'environment_id'")
     spec = get_environment_spec(environment_id)
+    replay = None
+    if ctx.get("resume_from"):
+        ref = ctx["resume_from"]
+        raw = fetch_verified(ArtifactRef(uri=ref["uri"], sha256=ref["sha256"]))
+        entries = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        if not entries or any(entry.get("episode_id") != cfg["episode_id"] for entry in entries):
+            raise ValueError("resume artifact does not belong to the planned episode")
+        if len(entries) != ref["durable_through"]:
+            raise ValueError("resume artifact is not durable through the recorded watermark")
+        replay = ReplayingClient(entries)
 
     # The key assertion belongs to --dry-run, whose question is model
     # reachability. A smoke test runs scripted agents to exercise storage, so
@@ -300,9 +313,11 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     sink_token = current_event_sink.set(sink)
     from a2a_engine.turns import current_log
     log_token = current_log.set(None)
+    replay_token = current_replay.set(replay)
     try:
         return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
     finally:
+        current_replay.reset(replay_token)
         current_log.reset(log_token)
         if sink is not None:
             sink.close()
@@ -576,6 +591,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--resume", action="store_true",
                         help="Skip episode_id values already present in local results manifests.")
+    parser.add_argument("--resume-episode", help="Run only this planned episode_id, restarting its interrupted turn.")
+    parser.add_argument("--resume-from", help="URI of that episode's durable event artifact.")
+    parser.add_argument("--resume-from-sha256", help="Digest of the resume artifact's exact bytes.")
+    parser.add_argument("--resume-durable-through", type=int, help="Durable event count in the source artifact.")
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("CLOUD_RUN_TASK_INDEX", 0)),
                         help="Zero-based shard index to run after expanding the experiment.")
     parser.add_argument("--shard-count", type=int, default=int(os.environ.get("CLOUD_RUN_TASK_COUNT", 1)),
@@ -605,6 +624,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--launch-input requires --launch-input-sha256")
     if bool(args.artifact_root) != bool(args.launch_id):
         parser.error("--artifact-root and --launch-id are passed together or not at all")
+    if args.resume_episode and not (args.resume_from and args.resume_from_sha256 and args.resume_durable_through is not None):
+        parser.error("--resume-episode requires --resume-from, --resume-from-sha256 and --resume-durable-through")
+    if not args.resume_episode and any(v is not None for v in (args.resume_from, args.resume_from_sha256, args.resume_durable_through)):
+        parser.error("resume reference requires --resume-episode")
+    if args.resume_episode and (args.smoke_test or args.dry_run or args.resume):
+        parser.error("per-episode resume requires a live run")
 
     if args.artifact_root:
         # Declared once for the process. Every episode opened afterwards
@@ -663,6 +688,16 @@ def main(argv: list[str] | None = None) -> int:
             "Shard enabled: running shard %d/%d with %d of %d expanded runs",
             args.shard_index, args.shard_count, len(contexts), before,
         )
+
+    if args.resume_episode:
+        contexts = [ctx for ctx in contexts if ctx["config"]["episode_id"] == args.resume_episode]
+        if len(contexts) != 1:
+            raise ValueError("resume episode is not uniquely present in the launch input")
+        contexts[0]["resume_from"] = {"uri": args.resume_from, "sha256": args.resume_from_sha256,
+                                      "durable_through": args.resume_durable_through}
+    for ctx in contexts:
+        if ctx.get("resume_from") and ctx["config"]["episode_id"] != ctx["resume_from"].get("episode_id", ctx["config"]["episode_id"]):
+            raise ValueError("resume reference names a different episode")
 
     if args.resume:
         # Ask the configured sink what it already holds; only fall back to the

@@ -73,6 +73,10 @@ def call_llm_streaming(
     dict with keys: text, model, duration_s, prompt_tokens, completion_tokens,
     total_tokens (plus Anthropic cache fields when applicable).
     """
+    from a2a_engine.llm.replay import current_replay
+    replay = current_replay.get()
+    if replay is not None and _turns.current_turn.get() is not None and _turns.current_turn.get()["turn_index"] < replay.restart_turn:
+        return replay.call("streaming", model, messages, lambda: None)
     owns_call = _turns.current_call.get() is None
     with _turns.ensure_call():
         try:
@@ -165,6 +169,10 @@ def call_llm_oneshot(
 
     Raises ``urllib.error.HTTPError`` on HTTP failures.
     """
+    from a2a_engine.llm.replay import current_replay
+    replay = current_replay.get()
+    if replay is not None and _turns.current_turn.get() is not None and _turns.current_turn.get()["turn_index"] < replay.restart_turn:
+        return replay.call("oneshot", model, messages, lambda: None)
     owns_call = _turns.current_call.get() is None
     with _turns.ensure_call():
         try:

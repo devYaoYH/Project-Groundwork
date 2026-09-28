@@ -380,6 +380,13 @@ export function getLaunch(id: string): Promise<LaunchDetail> {
   return request<LaunchDetail>(`/api/launches/${encodeURIComponent(id)}`);
 }
 
+export function resumeAttempt(launchId: string, episodeId: string): Promise<Launch> {
+  return request<Launch>(`/api/launches/${encodeURIComponent(launchId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ episode_id: episodeId }),
+  });
+}
+
 // The payload an ``attempt.progress`` event carries. Progress is derived by
 // the control plane from durable evidence, so `durable_through` is a count of
 // events that reached shared storage -- not a claim a worker made about

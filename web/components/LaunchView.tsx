@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { Chip } from "./Chip";
@@ -9,7 +10,7 @@ import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
 import {
   AttemptProgress, getLaunch, LaunchAttempt, LaunchDetail, LaunchLog,
-  subscribeLaunchEvents, TERMINAL_LAUNCH_EVENTS,
+  resumeAttempt, subscribeLaunchEvents, TERMINAL_LAUNCH_EVENTS,
 } from "../lib/api";
 
 const STATUS_TONE: Record<string, "plain" | "good" | "warn"> = {
@@ -30,6 +31,7 @@ function logLine(entry: LaunchLog): string {
 
 export function LaunchView() {
   const id = (useSearchParams().get("id") || "").trim();
+  const router = useRouter();
   const [detail, setDetail] = useState<LaunchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   // What the durable record has said since this page opened. Kept beside the
@@ -37,6 +39,7 @@ export function LaunchView() {
   // launch always replaces a derivation rather than being merged with one.
   const [observed, setObserved] = useState<Record<string, AttemptProgress>>({});
   const [streamed, setStreamed] = useState<LaunchLog[]>([]);
+  const [resuming, setResuming] = useState<string | null>(null);
 
   // The one-shot read stays exactly as it was: it is the initial state, and it
   // is the whole view for a browser with no EventSource.
@@ -79,7 +82,7 @@ export function LaunchView() {
   }, [detail, streamed]);
 
   if (!id) return <p className="notice notice-error">Choose a launch from an experiment.</p>;
-  if (error) return <p className="notice notice-error">{error}</p>;
+  if (error && !detail) return <p className="notice notice-error">{error}</p>;
   if (!detail) return <p className="empty-state">Loading launch...</p>;
   const { launch, attempts, progress } = detail;
   const liveOf = (attempt: LaunchAttempt): AttemptProgress | null =>
@@ -97,6 +100,7 @@ export function LaunchView() {
     <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: "experiment", href: `/experiment/?id=${encodeURIComponent(launch.experiment_id)}` }, { label: "launch" }]} />
     <header className="page-heading page-heading-split"><div><h1>Launch inspection</h1><p className="mono">{launch.id}</p></div><Chip tone={STATUS_TONE[launch.status] ?? "plain"}>{launch.status}</Chip></header>
     {launch.error ? <p className="notice notice-error">{launch.error}</p> : null}
+    {error ? <p className="notice notice-error">{error}</p> : null}
     <section className="metric-grid"><div className="metric"><span>mode</span><strong>{launch.mode.replace("_", " ")}</strong></div><div className="metric"><span>progress</span><strong>{completed}/{progress.planned}</strong></div><div className="metric"><span>failed</span><strong>{progress.failed}</strong></div><div className="metric"><span>shards</span><strong>{launch.shard_count ?? 1}</strong></div><div className="metric"><span>parallelism / shard</span><strong>{launch.max_parallelism}</strong></div></section>
     <section className="card section-card"><div className="section-heading"><h2>Launch record</h2><p>Created {timestamp(launch.created_at)} · started {timestamp(launch.started_at)} · ended {timestamp(launch.ended_at)}</p></div><dl className="launch-metadata"><dt>experiment</dt><dd><Link href={`/experiment/?id=${encodeURIComponent(launch.experiment_id)}`}>{launch.experiment_id}</Link></dd><dt>trace database</dt><dd className="mono">{launch.trace_database}</dd><dt>execution plan</dt><dd className="mono">{launch.execution_path ?? "-"}</dd></dl></section>
     <section className="card section-card"><div className="section-heading"><h2>Episodes</h2><p>One row per replication in this launch, advancing as the control plane observes durable evidence. Open the cell trace history to inspect earlier physical runs; dry runs intentionally have no trace.</p></div><DataTable rows={attempts} rowKey={(attempt) => attempt.id} columns={[
@@ -105,6 +109,12 @@ export function LaunchView() {
       { label: "execution", className: "mono", render: (attempt) => attempt.execution ?? "-" },
       { label: "trace history", render: (attempt) => <Link className="text-link" href={`/episodes/?cell_id=${encodeURIComponent(attempt.cell_id)}`}>View cell traces</Link> },
       { label: "status", render: (attempt) => <Chip tone={STATUS_TONE[statusOf(attempt)] ?? "plain"}>{statusOf(attempt)}</Chip> },
+      { label: "resume", render: (attempt) => ["UNREPORTED", "FAILED", "CANCELLED"].includes(attempt.status) && attempt.episode_uid && launch.mode === "live" ? <button disabled={resuming !== null} onClick={() => {
+        setResuming(attempt.id); setError(null);
+        resumeAttempt(id, attempt.episode_id)
+          .then((next) => router.push(`/launch/?id=${encodeURIComponent(next.id)}`))
+          .catch((reason: Error) => { setResuming(null); setError(reason.message); });
+      }}>{resuming === attempt.id ? "Resuming..." : "Resume"}</button> : null },
       // Durable events, not emitted ones: the count is how far the shared
       // record reached, which is also how much of this episode would survive
       // its worker being killed right now.

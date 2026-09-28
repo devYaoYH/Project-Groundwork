@@ -194,6 +194,14 @@ class LLMClient(BaseModel):
 
     def oneshot(self, messages: list[dict], **kw) -> str:
         """One-shot completion, retried on transient failures."""
+        from a2a_engine.llm.replay import current_replay
+        replay = current_replay.get()
+        if replay is not None and _turns.current_turn.get() is not None:
+            return replay.call("oneshot", self.model, messages,
+                               lambda: self._oneshot_live(messages, **kw))
+        return self._oneshot_live(messages, **kw)
+
+    def _oneshot_live(self, messages: list[dict], **kw) -> str:
         with _turns.llm_call():
             result = call_with_retry(
                 lambda: call_llm_oneshot(
@@ -241,6 +249,17 @@ class LLMClient(BaseModel):
         call sites such as calendar's ``streaming_with_retry(max_retries=4)``
         keep working unchanged.
         """
+        from a2a_engine.llm.replay import current_replay
+        replay = current_replay.get()
+        if replay is not None and _turns.current_turn.get() is not None:
+            return replay.call("streaming", self.model, messages,
+                               lambda: self._streaming_with_retry_live(
+                                   messages, max_retries, backoff_base, backoff_max, policy, **kw))
+        return self._streaming_with_retry_live(messages, max_retries, backoff_base,
+                                               backoff_max, policy, **kw)
+
+    def _streaming_with_retry_live(self, messages, max_retries, backoff_base,
+                                   backoff_max, policy, **kw):
         if policy is None:
             policy = self.retry
             overrides = {}
@@ -291,6 +310,10 @@ def call_llm_streaming(
     timeout: int = 120,
 ) -> dict:
     """Streaming LLM call. Returns dict with text, model, duration_s, token usage."""
+    from a2a_engine.llm.replay import current_replay
+    replay = current_replay.get()
+    if replay is not None and _turns.current_turn.get() is not None and _turns.current_turn.get()["turn_index"] < replay.restart_turn:
+        return replay.call("streaming", model, messages, lambda: None)
     owns_call = _turns.current_call.get() is None
     with _turns.ensure_call():
         try:
@@ -402,6 +425,11 @@ def call_llm_streaming_with_retry(
 
     The keyword arguments are kept for compatibility; ``policy`` supersedes them.
     """
+    from a2a_engine.llm.replay import current_replay
+    replay = current_replay.get()
+    if replay is not None and _turns.current_turn.get() is not None and _turns.current_turn.get()["turn_index"] < replay.restart_turn:
+        return replay.call("streaming", kwargs.get("model", args[3] if len(args) > 3 else ""),
+                           kwargs.get("messages", args[4] if len(args) > 4 else []), lambda: None)
     if policy is None:
         policy = RetryPolicy(
             max_attempts=max_retries,
@@ -432,6 +460,10 @@ def call_llm_oneshot(
     gcp_location: str | None = None,
 ) -> str:
     """Non-streaming LLM call returning text."""
+    from a2a_engine.llm.replay import current_replay
+    replay = current_replay.get()
+    if replay is not None and _turns.current_turn.get() is not None and _turns.current_turn.get()["turn_index"] < replay.restart_turn:
+        return replay.call("oneshot", model, messages, lambda: None)
     owns_call = _turns.current_call.get() is None
     with _turns.ensure_call():
         try:
