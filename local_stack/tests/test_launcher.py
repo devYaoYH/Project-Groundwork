@@ -623,3 +623,77 @@ def test_a_recovered_fragment_carries_the_identity_its_launch_input_planned(tmp_
     assert row["seed"] == planned["seed"]
     provenance = json.loads(row["config"])["provenance"]
     assert provenance["participants"] == planned["provenance"]["participants"]
+
+
+def test_a_physical_retry_keeps_both_rows_and_highest_execution_wins(tmp_path):
+    control = _control(tmp_path)
+    locked = _locked(control, BUYER_SELLER_DESIGN, release_id="buyer_seller", name="Retried")
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    launch = control.launch_experiment(locked.id, mode="live")
+    config = control._design_episode_configs(locked, mode="live")[0]
+    config["provenance"] = {**config["provenance"], "attempt": 1, "run_mode": "live"}
+    episode = EpisodeConfigBase.model_validate(config)
+    store = SQLiteEpisodeStore(path=control.path)
+    for execution, score in [(0, 1.0), (1, 2.0)]:
+        uid = f"retry-{execution}"
+        trace = EpisodeTrace(
+            episode_uid=uid, config=episode, metrics={"score": score},
+        )
+        manifest = EpisodeManifest.from_run(
+            config=config, experiment_name=locked.name,
+            cell_id=config["provenance"]["cell_id"], episode_idx=0, episode_uid=uid,
+        )
+        manifest.execution = execution
+        manifest.shard_index = 0
+        store.put_episode(trace, manifest)
+    for index, other in enumerate(control._design_episode_configs(locked, mode="live")[1:]):
+        other["provenance"] = {**other["provenance"], "attempt": 1, "run_mode": "live"}
+        _persist_planned_episode(control, other, episode_uid=f"other-{index}")
+    launcher.finish(launch.id)
+    assert control.launch(launch.id).status == "COMPLETED"
+    assert control.progress(launch.id)["completed"] == control.progress(launch.id)["planned"]
+    detail = control.launch_detail(launch.id)
+    winner = next(row for row in detail["attempts"] if row["episode_id"] == config["episode_id"])
+    assert winner["episode_uid"] == "retry-1"
+    assert winner["execution"] == 1
+    assert control._completed_executions_sql(launch.id) == control._completed_executions_two_step(launch.id)
+    assert control._progress_rows_sql(launch.id) == control._progress_rows_two_step(launch.id)
+    assert control.cell_evidence(locked.id) == control._cell_evidence_two_step(locked.id)
+    evidence = next(row for row in control.cell_evidence(locked.id) if row["cell_id"] == config["provenance"]["cell_id"])
+    assert evidence["completed_replicas"] == 1
+    assert next(metric for metric in evidence["metric_summaries"] if metric["name"] == "score")["mean"] == 2.0
+    records = store.episode_summaries({"episode_id": config["episode_id"]})[0]
+    assert {(row["episode_uid"], row["execution"]) for row in records} == {("retry-0", 0), ("retry-1", 1)}
+    manifests = store.list_episodes({"episode_id": config["episode_id"]})[0]
+    assert {row["resolved_config_hash"] for row in manifests} == {manifests[0]["resolved_config_hash"]}
+    for uid in ("retry-0", "retry-1"):
+        persisted = store.get_episode(uid)
+        assert persisted is not None
+        assert "execution" not in persisted.config.provenance
+        assert persisted.config.seed == config["seed"]
+        assert persisted.config.provenance["design_sha256"] == config["provenance"]["design_sha256"]
+        assert "execution" not in persisted.model_dump_json()
+
+
+def test_two_shards_and_one_shard_run_the_same_locked_episode_set(tmp_path):
+    from a2a_engine.artifacts import fetch_verified
+    import yaml
+
+    control = _control(tmp_path)
+    design = BUYER_SELLER_DESIGN.replace("episodes_per_cell: 1", "episodes_per_cell: 2")
+    locked = _locked(control, design, release_id="buyer_seller", name="Shard comparison")
+    first = control.launch_experiment(locked.id, mode="smoke", shard_count=1)
+    assert _settle(control, first.id) == "COMPLETED"
+    second = control.launch_experiment(locked.id, mode="smoke", shard_count=2)
+    assert _settle(control, second.id) == "COMPLETED"
+    assert first.shard_index is None and second.shard_index is None
+    assert first.shard_count == 1 and second.shard_count == 2
+    def identity(launch):
+        plan = yaml.safe_load(fetch_verified(ArtifactRef(launch.launch_input_uri, launch.launch_input_sha256)))
+        return {(cell["config"]["episode_id"], cell["config"]["seed"]) for cell in plan["cells"]}
+    assert identity(first) == identity(second)
+    assert control.progress(first.id)["planned"] == control.progress(second.id)["planned"]
+    assert control.progress(second.id)["completed"] == control.progress(second.id)["planned"]
+    rows = control._store().episode_summaries({"experiment_id": locked.id}, limit=100)[0]
+    assert {row["shard_index"] for row in rows} == {0, 1}

@@ -127,6 +127,9 @@ class EpisodeManifest(BaseModel):
     episode_idx: int
     environment_id: str
     episode_uid: str
+    # Operational identity is outside resolved config and content digests.
+    execution: int = 0
+    shard_index: int | None = None
 
     # --- provenance ---
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

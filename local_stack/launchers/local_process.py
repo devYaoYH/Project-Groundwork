@@ -117,7 +117,7 @@ class LocalProcessLauncher:
         self.credentials = dict(credentials or {})
         self.env_allowlist = tuple(env_allowlist)
         self.python = python or sys.executable
-        self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._processes: dict[str, list[subprocess.Popen[bytes]]] = {}
         self._cancelled: set[str] = set()
         self._lock = threading.Lock()
 
@@ -129,45 +129,58 @@ class LocalProcessLauncher:
         # thread to read it any more, and a remote worker's logs belong to its
         # platform: the control plane learns what happened from the evidence
         # the worker persisted, not from its stdout.
-        process = subprocess.Popen(
-            command,
-            cwd=self.workspace,
-            env=self._environment(launch),
-        )
+        processes: list[subprocess.Popen[bytes]] = []
+        try:
+            for index in range(launch.shard_count or 1):
+                env = self._environment(launch)
+                env.update({
+                    "CLOUD_RUN_TASK_INDEX": str(index),
+                    "CLOUD_RUN_TASK_COUNT": str(launch.shard_count or 1),
+                    "CLOUD_RUN_TASK_ATTEMPT": "0",
+                })
+                processes.append(subprocess.Popen(command, cwd=self.workspace, env=env))
+        except Exception:
+            for process in processes:
+                process.terminate()
+            for process in processes:
+                process.wait()
+            raise
         with self._lock:
-            self._processes[launch.id] = process
+            self._processes[launch.id] = processes
         return ExecutionHandle(
             backend=self.name,
             id=launch.id,
-            detail={"pid": process.pid, "launch_input_uri": input_ref.uri},
+            detail={"pids": [process.pid for process in processes], "launch_input_uri": input_ref.uri},
         )
 
     def describe(self, handle: ExecutionHandle) -> ExecutionStatus:
         with self._lock:
-            process = self._processes.get(handle.id)
+            processes = self._processes.get(handle.id)
             cancelled = handle.id in self._cancelled
-        if process is None:
+        if processes is None:
             # A handle this instance never started, or one a restart lost.
             # Either way the process tree cannot answer, and the episodes fact
             # table can.
             return ExecutionStatus.UNKNOWN
-        code = process.poll()
-        if code is None:
+        codes = [process.poll() for process in processes]
+        if any(code is None for code in codes):
             return ExecutionStatus.RUNNING
         with self._lock:
             self._processes.pop(handle.id, None)
             self._cancelled.discard(handle.id)
         if cancelled:
             return ExecutionStatus.CANCELLED
-        return ExecutionStatus.SUCCEEDED if code == 0 else ExecutionStatus.FAILED
+        return ExecutionStatus.SUCCEEDED if all(code == 0 for code in codes) else ExecutionStatus.FAILED
 
     def cancel(self, handle: ExecutionHandle) -> bool:
         with self._lock:
-            process = self._processes.get(handle.id)
-            if process is None or process.poll() is not None:
+            processes = self._processes.get(handle.id)
+            running = [process for process in processes or [] if process.poll() is None]
+            if not running:
                 return False
             self._cancelled.add(handle.id)
-        process.terminate()
+        for process in running:
+            process.terminate()
         return True
 
     # -- construction ------------------------------------------------------

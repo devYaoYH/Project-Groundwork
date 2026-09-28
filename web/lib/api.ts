@@ -96,6 +96,8 @@ export type EpisodeSummary = {
   release_id: string | null;
   item_id: string | null;
   attempt: number;
+  execution?: number;
+  shard_index?: number | null;
   seed: number | null;
   // COMPLETED | STOPPED | PARTIAL. PARTIAL is a trace recovered from an
   // interrupted episode's event log: evidence, not a result.
@@ -259,6 +261,7 @@ export type LaunchAttempt = {
   cell_id: string;
   episode_idx: number;
   attempt: number;
+  execution: number | null;
   status: string;
   episode_uid: string | null;
   episode_uri: string | null;
@@ -467,7 +470,7 @@ export function lockExperiment(id: string, designSha256: string): Promise<Experi
 export function launchExperiment(
   experimentId: string,
   mode: Launch["mode"],
-  options: { maxParallelism?: number; shardIndex?: number; shardCount?: number } = {},
+  options: { maxParallelism?: number; shardCount?: number } = {},
 ): Promise<Launch> {
   return request<Launch>("/api/launches", {
     method: "POST",
@@ -475,7 +478,6 @@ export function launchExperiment(
       experiment_id: experimentId,
       mode,
       max_parallelism: options.maxParallelism,
-      shard_index: options.shardIndex,
       shard_count: options.shardCount,
     }),
   });

@@ -76,6 +76,7 @@ _SUMMARY_COLUMNS = (
     "episode_uid", "environment_id", "experiment_name", "episode_id",
     "cell_id", "episode_idx", "experiment_id", "release_id", "item_id",
     "attempt", "seed", "status", "run_mode", "started_at", "ended_at", "stopped",
+    "execution", "shard_index",
     "created_at",
 )
 
@@ -160,6 +161,8 @@ class SQLiteEpisodeStore:
             promoted["release_id"],
             promoted["item_id"],
             promoted["attempt"],
+            manifest.execution,
+            manifest.shard_index,
             promoted["seed"] if promoted["seed"] is not None else manifest.seed,
             promoted["status"],
             promoted["run_mode"],
@@ -186,13 +189,25 @@ class SQLiteEpisodeStore:
                     manifest.storage.uri = self.uri(trace.episode_uid)
                     manifest.storage.status = "written"
                     conn.execute(
-                        "INSERT OR REPLACE INTO episodes ("
+                        "INSERT INTO episodes ("
                         "  episode_uid, environment_id, experiment_name, episode_id,"
                         "  episode_tokens, cell_id, episode_idx, experiment_id, release_id, item_id,"
-                        "  attempt, seed, status, run_mode,"
+                        "  attempt, execution, shard_index, seed, status, run_mode,"
                         "  config, events, final_state, metrics, release, episode,"
                         "  observability, started_at, ended_at, stopped, manifest"
-                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(episode_uid) DO UPDATE SET "
+                        "environment_id=excluded.environment_id, experiment_name=excluded.experiment_name, "
+                        "episode_id=excluded.episode_id, episode_tokens=excluded.episode_tokens, "
+                        "cell_id=excluded.cell_id, episode_idx=excluded.episode_idx, "
+                        "experiment_id=excluded.experiment_id, release_id=excluded.release_id, "
+                        "item_id=excluded.item_id, attempt=excluded.attempt, "
+                        "execution=excluded.execution, shard_index=excluded.shard_index, "
+                        "seed=excluded.seed, status=excluded.status, run_mode=excluded.run_mode, "
+                        "config=excluded.config, events=excluded.events, final_state=excluded.final_state, "
+                        "metrics=excluded.metrics, release=excluded.release, episode=excluded.episode, "
+                        "observability=excluded.observability, started_at=excluded.started_at, "
+                        "ended_at=excluded.ended_at, stopped=excluded.stopped, manifest=excluded.manifest",
                         (*row, manifest.model_dump_json()),
                     )
                     # Replacing a trace means its source payload changed; any
@@ -416,7 +431,7 @@ class SQLiteEpisodeStore:
                     SELECT e.episode_id, e.attempt, e.status AS trace_status, e.metrics,
                            ROW_NUMBER() OVER (
                                PARTITION BY e.episode_id, e.attempt
-                               ORDER BY e.created_at DESC, e.episode_uid DESC
+                               ORDER BY e.execution DESC, e.created_at DESC
                            ) AS trace_rank
                     FROM episodes e
                     WHERE {result_predicate("e")}
@@ -509,6 +524,19 @@ class SQLiteEpisodeStore:
 
     # --- resume support ---
 
+    def next_execution(self, episode_id: str, attempt: int) -> int:
+        """Allocate a counter for a direct CLI run with no platform task identity."""
+        conn = self._connect()
+        try:
+            self._ensure_schema(conn)
+            row = conn.execute(
+                "SELECT MAX(execution) AS latest FROM episodes WHERE episode_id = ? AND attempt = ?",
+                (episode_id, attempt),
+            ).fetchone()
+            return int(row["latest"]) + 1 if row["latest"] is not None else 0
+        finally:
+            conn.close()
+
     def completed_episode_ids(self, experiment_name: str) -> set[str]:
         """The deterministic ids this store already holds a completed run for.
 
@@ -549,7 +577,7 @@ class SQLiteEpisodeStore:
             for start in range(0, len(wanted), 900):
                 batch = wanted[start:start + 900]
                 records.extend(dict(row) for row in conn.execute(
-                    "SELECT episode_uid, episode_id, attempt, status, run_mode, metrics, created_at "
+                    "SELECT episode_uid, episode_id, attempt, execution, status, run_mode, metrics, created_at "
                     f"FROM episodes WHERE episode_id IN ({', '.join('?' for _ in batch)})",
                     tuple(batch),
                 ).fetchall())
@@ -580,7 +608,8 @@ class SQLiteEpisodeStore:
         try:
             self._ensure_schema(conn)
             rows = conn.execute(
-                f"SELECT episode_id, attempt, episode_uid FROM episodes {clause}",
+                f"SELECT episode_id, attempt, episode_uid, execution FROM episodes {clause} "
+                "ORDER BY attempt, execution",
                 tuple(params),
             ).fetchall()
         finally:

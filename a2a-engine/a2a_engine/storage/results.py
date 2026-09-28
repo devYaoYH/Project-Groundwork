@@ -125,15 +125,15 @@ def latest_result_traces(
 ) -> dict[tuple[str, int], Mapping[str, Any]]:
     """The newest result row per ``(episode_id, attempt)``.
 
-    Ordered exactly as the SQL window: ``created_at DESC, episode_uid DESC``.
+    Ordered exactly as the SQL window: ``execution DESC, created_at DESC``.
     A missing ``created_at`` sorts lowest, as SQLite sorts ``NULL``.
     """
-    best: dict[tuple[str, int], tuple[tuple[str, str], Mapping[str, Any]]] = {}
+    best: dict[tuple[str, int], tuple[tuple[int, str], Mapping[str, Any]]] = {}
     for row in rows:
         if not counts_as_result(row) or not row["episode_id"]:
             continue
         key = (str(row["episode_id"]), int(row["attempt"]))
-        rank = (str(row["created_at"] or ""), str(row["episode_uid"]))
+        rank = (int(row.get("execution", 0)), str(row["created_at"] or ""))
         current = best.get(key)
         if current is None or rank > current[0]:
             best[key] = (rank, row)

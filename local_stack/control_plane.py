@@ -1039,10 +1039,8 @@ class ControlPlane:
             raise ValueError("mode must be live, smoke, or dry_run")
         if shard_count is not None and shard_count < 1:
             raise ValueError("shard_count must be >= 1")
-        if shard_index is not None and shard_index < 0:
-            raise ValueError("shard_index must be >= 0")
-        if shard_count is not None and (shard_index or 0) >= shard_count:
-            raise ValueError("shard_index must be less than shard_count")
+        if shard_index is not None:
+            raise ValueError("shard_index belongs to a worker, not a launch")
         experiment = self.experiment(experiment_id)
         execution_path: str | None = None
         design_configs: list[dict[str, Any]] | None = None
@@ -1055,23 +1053,21 @@ class ControlPlane:
             # Every compiled episode references one of these item ids.
             design_bank = self._item_bank(experiment.environment_id)
             design_configs = self._design_episode_configs(experiment, mode=mode)
-            effective_shard_count = shard_count or 1
-            effective_shard_index = shard_index or 0
-            design_configs = [
-                config for index, config in enumerate(design_configs)
-                if index % effective_shard_count == effective_shard_index
-            ]
             if not design_configs:
-                raise ValueError("this shard contains no planned episodes")
+                raise ValueError("this launch contains no planned episodes")
+        effective_shard_count = shard_count or 1
+        if design_configs is None:
+            planned = self._planned_attempts(experiment, smoke_test=mode == "smoke")
         else:
-            effective_shard_count = None
-            effective_shard_index = None
+            planned = design_configs
+        if effective_shard_count > len(planned):
+            raise ValueError("shard_count cannot exceed planned episodes")
 
         launch_id = str(uuid.uuid4())
         launch = Launch(
             id=launch_id, experiment_id=experiment.id, status="QUEUED",
             max_parallelism=max_parallelism, trace_database=str(self.trace_database),
-            created_at=_now(), mode=mode, shard_index=effective_shard_index,
+            created_at=_now(), mode=mode, shard_index=None,
             shard_count=effective_shard_count,
         )
         attempt_rows: list[tuple[str, str, int, int]]
@@ -1090,9 +1086,7 @@ class ControlPlane:
             else:
                 attempt_rows = [
                     (episode_id, cell_id, episode_idx, self._next_attempt(db, episode_id))
-                    for episode_id, cell_id, episode_idx in self._planned_attempts(
-                        experiment, smoke_test=mode == "smoke"
-                    )
+                    for episode_id, cell_id, episode_idx in planned
                 ]
 
         if design_configs is not None:
@@ -1325,14 +1319,15 @@ class ControlPlane:
         with self._session() as db:
             attempts = db.execute(
                 """
-                SELECT a.*, (
+                SELECT a.*, winner.episode_uid, winner.execution
+                FROM attempts a
+                LEFT JOIN episodes winner ON winner.episode_uid = (
                     SELECT e.episode_uid
                     FROM episodes e
                     WHERE e.episode_id = a.episode_id AND e.attempt = a.attempt
-                    ORDER BY e.created_at DESC
+                    ORDER BY e.attempt DESC, e.execution DESC
                     LIMIT 1
-                ) AS episode_uid
-                FROM attempts a
+                )
                 WHERE a.launch_id = ?
                 ORDER BY a.cell_id, a.episode_idx
                 """,
@@ -1346,6 +1341,7 @@ class ControlPlane:
                 # URI provenance remains available to older callers, while the
                 # explicit uid is the durable link to a persisted episode.
                 "episode_uid": row["episode_uid"],
+                "execution": row["execution"],
                 "redis_stream": prefix + row["episode_id"],
             } for row in attempts],
             "progress": self._progress_rows(launch_id),
@@ -1482,6 +1478,7 @@ class ControlPlane:
                  AND e.attempt = a.attempt
                  AND e.status = 'COMPLETED'
                 WHERE a.launch_id = ?
+                ORDER BY a.attempt, e.execution
                 """,
                 (launch_id,),
             ).fetchall()

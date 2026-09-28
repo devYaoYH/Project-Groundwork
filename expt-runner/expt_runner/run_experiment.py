@@ -369,6 +369,8 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
         game_package=spec.package,
         repo_root=Path.cwd(),
     )
+    manifest.execution = ctx.get("execution", 0)
+    manifest.shard_index = ctx.get("shard_index", 0)
     uri = store.put_episode(trace, manifest)
     _expire_event_stream(cfg)
 
@@ -489,7 +491,9 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
 
     contexts: list[dict] = []
     missing: list[str] = []
-    for cell, resolved in expanded:
+    for index, (cell, resolved) in enumerate(expanded):
+        if index % args.shard_count != args.shard_index:
+            continue
         environment_id = str(resolved.get("environment_id") or "")
         try:
             get_environment_spec(environment_id)
@@ -500,6 +504,10 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
             ctx = _make_run_context(spec.name, cell.label, resolved, i,
                                     dry_run=True, persist=True)
             ctx["verify_readback"] = True
+            ctx["execution"] = args.execution
+            ctx["shard_index"] = args.shard_index
+            if not args.launch_input and "CLOUD_RUN_TASK_ATTEMPT" not in os.environ and hasattr(store, "next_execution"):
+                ctx["execution"] = store.next_execution(ctx["config"]["episode_id"], ctx["attempt"])
             contexts.append(ctx)
         print(f"      OK   {cell.label} -> environment={environment_id}")
     for problem in missing:
@@ -565,10 +573,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--resume", action="store_true",
                         help="Skip episode_id values already present in local results manifests.")
-    parser.add_argument("--shard-index", type=int, default=0,
+    parser.add_argument("--shard-index", type=int, default=int(os.environ.get("CLOUD_RUN_TASK_INDEX", 0)),
                         help="Zero-based shard index to run after expanding the experiment.")
-    parser.add_argument("--shard-count", type=int, default=1,
+    parser.add_argument("--shard-count", type=int, default=int(os.environ.get("CLOUD_RUN_TASK_COUNT", 1)),
                         help="Total number of shards used to partition expanded runs.")
+    parser.add_argument("--execution", type=int, default=int(os.environ.get("CLOUD_RUN_TASK_ATTEMPT", 0)),
+                        help="Physical execution counter for this task (zero-based).")
     parser.add_argument("--storage-backend", default=os.environ.get("A2A_STORAGE_BACKEND"),
                         help="Override the trace store backend (local | sqlite | s3 | firestore).")
     parser.add_argument("--s3-bucket", default=os.environ.get("A2A_TRACE_BUCKET"),
@@ -584,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--shard-count must be >= 1")
     if args.shard_index < 0 or args.shard_index >= args.shard_count:
         parser.error("--shard-index must satisfy 0 <= index < shard-count")
+    if args.execution < 0:
+        parser.error("--execution must be >= 0")
     if bool(args.yaml_path) == bool(args.launch_input):
         parser.error("pass exactly one of yaml_path or --launch-input")
     if args.launch_input and not args.launch_input_sha256:
@@ -632,10 +644,11 @@ def main(argv: list[str] | None = None) -> int:
     contexts: list[dict] = []
     for cell, resolved in expand_cells(spec, resolve_config=resolve_hooks):
         for i in range(cell.count):
-            contexts.append(
-                _make_run_context(spec.name, cell.label, resolved, i,
-                                  args.dry_run, persist=not args.dry_run)
-            )
+            ctx = _make_run_context(spec.name, cell.label, resolved, i,
+                                    args.dry_run, persist=not args.dry_run)
+            ctx["execution"] = args.execution
+            ctx["shard_index"] = args.shard_index
+            contexts.append(ctx)
 
     if args.shard_count > 1:
         before = len(contexts)
@@ -663,6 +676,12 @@ def main(argv: list[str] | None = None) -> int:
         ]
         log.info("Resume enabled: skipping %d completed runs, %d remaining",
                  before - len(contexts), len(contexts))
+
+    if not args.launch_input and "CLOUD_RUN_TASK_ATTEMPT" not in os.environ and hasattr(store, "next_execution"):
+        for ctx in contexts:
+            ctx["execution"] = store.next_execution(
+                ctx["config"]["episode_id"], ctx["attempt"],
+            )
 
     if not contexts:
         log.warning("No runs to execute.")

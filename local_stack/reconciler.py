@@ -95,6 +95,9 @@ class Reconciler:
         status = self._describe(handle)
         if status not in SETTLEABLE_EXECUTION_STATUSES:
             return False
+        # Rows can arrive between the first progress read and a terminal
+        # describe. Publish the final durable mark before the terminal frame.
+        self._publish_progress(launch)
         self.control._settle_from_evidence(launch, execution=status)
         return True
 

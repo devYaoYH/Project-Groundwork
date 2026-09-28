@@ -135,6 +135,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     release_id        TEXT REFERENCES releases(id),
     item_id           TEXT REFERENCES items(item_id),
     attempt           INTEGER NOT NULL DEFAULT 1,
+    execution         INTEGER NOT NULL DEFAULT 0,
+    shard_index       INTEGER,
     seed              INTEGER,
     -- COMPLETED | STOPPED | PARTIAL.  A PARTIAL row is a trace recovered from
     -- an interrupted episode's event log: evidence, not a result.
@@ -279,6 +281,9 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("episodes", "item_id", "ALTER TABLE episodes ADD COLUMN item_id TEXT"),
     ("episodes", "attempt",
      "ALTER TABLE episodes ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
+    ("episodes", "execution",
+     "ALTER TABLE episodes ADD COLUMN execution INTEGER NOT NULL DEFAULT 0"),
+    ("episodes", "shard_index", "ALTER TABLE episodes ADD COLUMN shard_index INTEGER"),
     ("episodes", "episode_tokens",
      "ALTER TABLE episodes ADD COLUMN episode_tokens TEXT NOT NULL DEFAULT ''"),
     ("episodes", "seed", "ALTER TABLE episodes ADD COLUMN seed INTEGER"),
@@ -335,6 +340,7 @@ def apply_schema(conn) -> None:
             existing[table].add(column)
     if existing.get("episodes"):
         _migrate_run_mode(conn)
+        _migrate_execution(conn)
     # ``episode_tokens`` is only a read projection, so old traces retain every
     # durable byte while becoming searchable after an additive migration.
     if "episodes" in existing and "episode_tokens" in existing["episodes"]:
@@ -353,6 +359,37 @@ def apply_schema(conn) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_tokens ON episodes(episode_tokens)")
     conn.commit()
+
+
+def _migrate_execution(conn) -> None:
+    """Number legacy duplicate executions before enforcing physical uniqueness."""
+    # Repeating this assignment is harmless: the ordering is now stable and
+    # already-unique groups retain their counter on subsequent schema opens.
+    duplicates = conn.execute(
+        "SELECT episode_id, attempt FROM episodes WHERE episode_id IS NOT NULL "
+        "GROUP BY episode_id, attempt HAVING COUNT(*) > 1"
+    ).fetchall()
+    for episode_id, attempt in duplicates:
+        rows = conn.execute(
+            "SELECT episode_uid, execution FROM episodes WHERE episode_id = ? AND attempt = ? "
+            "ORDER BY created_at, episode_uid", (episode_id, attempt),
+        ).fetchall()
+        counters = [int(row[1]) for row in rows]
+        if len(counters) == len(set(counters)):
+            continue
+        # Preserve an existing explicit counter where possible; legacy rows
+        # all have zero and receive ascending values in insertion-time order.
+        used: set[int] = set()
+        for uid, counter in rows:
+            counter = int(counter)
+            if counter in used:
+                counter = max(used) + 1
+                conn.execute("UPDATE episodes SET execution = ? WHERE episode_uid = ?", (counter, uid))
+            used.add(counter)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_physical "
+        "ON episodes(episode_id, attempt, execution)"
+    )
 
 
 # Assign each pre-existing row the mode it most plausibly ran in, most specific
