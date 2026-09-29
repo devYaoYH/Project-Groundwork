@@ -17,6 +17,8 @@ from a2a_engine.items import ItemBank
 from a2a_engine.registry import discover_environments, get_environment_spec
 from a2a_engine.release_surface import PublishedRelease, project_surface, publish_release, surface_digest
 from local_stack.control_plane import ControlPlane
+from local_stack.launchers import ExecutionStatus
+from local_stack.tests.fakes import FakeLauncher
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 
 
@@ -52,6 +54,107 @@ def test_corrupt_surface_digest_is_rejected(tmp_path):
     control = ControlPlane(tmp_path / "control.db", workspace=ROOT)
     with pytest.raises(ValueError, match="surface digest mismatch"):
         control.ingest_release(manifest)
+
+
+def test_locked_experiment_keeps_its_image_across_retries_and_rejects_republish(tmp_path, monkeypatch):
+    discover_environments()
+    declaration = get_environment_spec("buyer_seller").declaration
+    first = "sha256:" + "1" * 64
+    second = "sha256:" + "2" * 64
+    control = ControlPlane(tmp_path / "control.db", workspace=ROOT)
+    control.ingest_release(publish_release(declaration, image_digest=first).model_dump(mode="json"))
+    monkeypatch.setattr(control, "seed_installed_releases", lambda: [])
+    from local_stack.tests.test_design_api import DESIGN
+
+    experiment = control.create_experiment(name="pinned", release_id="buyer_seller", design_text=DESIGN)
+    experiment = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    assert experiment.pinned_image_digest == first
+    fake = FakeLauncher()
+    fake.name = "local_container"
+    control.launcher = fake
+    initial = control.launch_experiment(experiment.id, mode="smoke")
+    fake.finish(initial.id, ExecutionStatus.FAILED)
+    control.reconcile()
+
+    with pytest.raises(ValueError, match="publish a new release ID"):
+        control.ingest_release(publish_release(declaration, image_digest=second).model_dump(mode="json"))
+    assert control._release_by_id("buyer_seller").image_digest == first
+    retry = control.launch_experiment(experiment.id, mode="smoke")
+    assert retry.image_digest == initial.image_digest == first
+    for launch, ref in fake.submitted:
+        assert launch.image_digest == first
+        assert ref.sha256
+        plan = yaml.safe_load(Path(launch.execution_path).read_text())
+        assert all(cell["config"]["provenance"]["image_digest"] == first
+                   for cell in plan["cells"])
+
+
+def test_lock_without_image_cannot_be_upgraded_by_later_publish(tmp_path, monkeypatch):
+    discover_environments()
+    declaration = get_environment_spec("buyer_seller").declaration
+    control = ControlPlane(tmp_path / "control.db", workspace=ROOT)
+    control.ingest_release(publish_release(declaration).model_dump(mode="json"))
+    monkeypatch.setattr(control, "seed_installed_releases", lambda: [])
+    from local_stack.tests.test_design_api import DESIGN
+
+    experiment = control.create_experiment(name="local", release_id="buyer_seller", design_text=DESIGN)
+    experiment = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    assert experiment.pinned_image_digest == ""
+    with pytest.raises(ValueError, match="publish a new release ID"):
+        control.ingest_release(publish_release(declaration, image_digest="sha256:" + "a" * 64).model_dump(mode="json"))
+    fake = FakeLauncher()
+    fake.name = "local_container"
+    control.launcher = fake
+    launch = control.launch_experiment(experiment.id, mode="smoke")
+    assert launch.image_digest is None and launch.provenance_grade == "unverified"
+
+
+def test_existing_locked_experiment_migrates_pin_from_its_first_launch(tmp_path, monkeypatch):
+    discover_environments()
+    declaration = get_environment_spec("buyer_seller").declaration
+    first = "sha256:" + "3" * 64
+    control = ControlPlane(tmp_path / "control.db", workspace=ROOT)
+    control.ingest_release(publish_release(declaration, image_digest=first).model_dump(mode="json"))
+    monkeypatch.setattr(control, "seed_installed_releases", lambda: [])
+    from local_stack.tests.test_design_api import DESIGN
+
+    experiment = control.create_experiment(name="legacy-pin", release_id="buyer_seller", design_text=DESIGN)
+    experiment = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    fake = FakeLauncher(status=ExecutionStatus.FAILED)
+    fake.name = "local_container"
+    control.launcher = fake
+    control.launch_experiment(experiment.id, mode="smoke")
+    with control._session() as db:
+        db.execute("ALTER TABLE experiments DROP COLUMN pinned_image_digest")
+        db.execute("UPDATE releases SET image_digest = ? WHERE id = ?", ("sha256:" + "4" * 64, "buyer_seller"))
+    migrated = ControlPlane(control.path, workspace=ROOT)
+    assert migrated.experiment(experiment.id).pinned_image_digest == first
+
+
+def test_mixed_legacy_images_cannot_acquire_a_false_single_pin(tmp_path, monkeypatch):
+    discover_environments()
+    declaration = get_environment_spec("buyer_seller").declaration
+    first = "sha256:" + "5" * 64
+    control = ControlPlane(tmp_path / "control.db", workspace=ROOT)
+    control.ingest_release(publish_release(declaration, image_digest=first).model_dump(mode="json"))
+    monkeypatch.setattr(control, "seed_installed_releases", lambda: [])
+    from local_stack.tests.test_design_api import DESIGN
+
+    experiment = control.create_experiment(name="mixed-legacy", release_id="buyer_seller", design_text=DESIGN)
+    experiment = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    fake = FakeLauncher(status=ExecutionStatus.FAILED)
+    fake.name = "local_container"
+    control.launcher = fake
+    control.launch_experiment(experiment.id, mode="smoke")
+    control.launch_experiment(experiment.id, mode="smoke")
+    with control._session() as db:
+        db.execute("UPDATE launches SET image_digest = ? WHERE id = ?",
+                   ("sha256:" + "6" * 64, fake.submitted[-1][0].id))
+        db.execute("ALTER TABLE experiments DROP COLUMN pinned_image_digest")
+    migrated = ControlPlane(control.path, workspace=ROOT)
+    assert migrated.experiment(experiment.id).pinned_image_digest is None
+    with pytest.raises(ValueError, match="no pinned image identity"):
+        migrated.launch_experiment(experiment.id, mode="smoke")
 
 
 def test_manifest_and_declaration_compile_identically_and_reject_unknown_binding(tmp_path):

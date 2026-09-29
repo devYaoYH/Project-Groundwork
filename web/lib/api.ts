@@ -189,6 +189,7 @@ export type Experiment = {
   design_text: string | null;
   design_sha256: string | null;
   locked_at: string | null;
+  pinned_image_digest: string | null;
   forked_from: string | null;
 };
 
@@ -482,7 +483,7 @@ export function lockExperiment(id: string, designSha256: string): Promise<Experi
 export function launchExperiment(
   experimentId: string,
   mode: Launch["mode"],
-  options: { maxParallelism?: number; shardCount?: number } = {},
+  options: { maxParallelism?: number; shardCount?: number; force?: boolean } = {},
 ): Promise<Launch> {
   return request<Launch>("/api/launches", {
     method: "POST",
@@ -491,6 +492,7 @@ export function launchExperiment(
       mode,
       max_parallelism: options.maxParallelism,
       shard_count: options.shardCount,
+      force: options.force ?? false,
     }),
   });
 }

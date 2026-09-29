@@ -258,6 +258,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                     mode=str(body.get("mode") or "live"),
                     shard_index=(int(body["shard_index"]) if body.get("shard_index") is not None else None),
                     shard_count=(int(body["shard_count"]) if body.get("shard_count") is not None else None),
+                    force=body.get("force", False),
                 )
                 return self._json(launch.__dict__, 202)
             if parsed.path.startswith("/api/launches/") and parsed.path.endswith("/cancel"):

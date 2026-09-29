@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 import yaml
+import pytest
 
 from a2a_engine.event_sink import configure_event_artifacts, open_event_sink
 from a2a_engine.tracing import EventLog
@@ -80,6 +81,9 @@ def test_resume_endpoint_publishes_a_single_digest_bound_new_attempt(tmp_path):
         assert planned["_resume_from"]["episode_id"] == episode_id
         assert planned["_resume_from"]["durable_through"] > 0
         assert "_resume_from" not in planned["provenance"]
+        fake.name = "local_container"
+        with pytest.raises(ValueError, match="different execution image"):
+            plane.resume_attempt(source.id, episode_id)
     finally:
         server.shutdown()
         server.server_close()

@@ -386,7 +386,7 @@ def test_cell_evidence_uses_only_the_latest_execution_for_each_replication(tmp_p
     launcher.finish(first.id)
     assert control.launch(first.id).status == "COMPLETED"
 
-    second = control.launch_experiment(locked.id)
+    second = control.launch_experiment(locked.id, force=True)
     attempts = {
         attempt["episode_id"]: attempt["attempt"]
         for attempt in control.launch_detail(second.id)["attempts"]

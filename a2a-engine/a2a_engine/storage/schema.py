@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     design_text       TEXT,
     design_sha256     TEXT,
     locked_at         TEXT,
+    pinned_image_digest TEXT,
     forked_from       TEXT REFERENCES experiments(id),
     -- Compatibility normalization records the original content when a
     -- narrowly-scoped metadata correction creates a current design revision.
@@ -310,6 +311,7 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("experiments", "design_text", "ALTER TABLE experiments ADD COLUMN design_text TEXT"),
     ("experiments", "design_sha256", "ALTER TABLE experiments ADD COLUMN design_sha256 TEXT"),
     ("experiments", "locked_at", "ALTER TABLE experiments ADD COLUMN locked_at TEXT"),
+    ("experiments", "pinned_image_digest", "ALTER TABLE experiments ADD COLUMN pinned_image_digest TEXT"),
     ("experiments", "forked_from", "ALTER TABLE experiments ADD COLUMN forked_from TEXT"),
     ("experiments", "authored_design_text", "ALTER TABLE experiments ADD COLUMN authored_design_text TEXT"),
     ("experiments", "authored_design_sha256", "ALTER TABLE experiments ADD COLUMN authored_design_sha256 TEXT"),
@@ -344,12 +346,37 @@ def apply_schema(conn) -> None:
     # it reaches the additive ALTER.
     conn.executescript(SCHEMA)
     existing: dict[str, set[str]] = {}
+    migrated_experiment_pin = False
     for table, column, statement in MIGRATIONS:
         if table not in existing:
             existing[table] = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if existing[table] and column not in existing[table]:
             conn.execute(statement)
             existing[table].add(column)
+            if table == "experiments" and column == "pinned_image_digest":
+                migrated_experiment_pin = True
+    if migrated_experiment_pin:
+        # Existing launches are stronger evidence than a mutable catalog row.
+        # An older experiment that has only unpinned launches stays unpinned.
+        conn.execute("""
+            UPDATE experiments SET pinned_image_digest = COALESCE(
+                (SELECT COALESCE(l.image_digest, '') FROM launches l
+                 WHERE l.experiment_id = experiments.id
+                 ORDER BY l.created_at, l.id LIMIT 1),
+                (SELECT COALESCE(r.image_digest, '') FROM releases r
+                 WHERE r.id = experiments.release_id)
+            ) WHERE locked_at IS NOT NULL
+        """)
+        # An older mixed-image experiment has no honest single pin. Keep it
+        # readable, but refuse new launches until it is explicitly revised.
+        conn.execute("""
+            UPDATE experiments SET pinned_image_digest = NULL
+            WHERE id IN (
+                SELECT l.experiment_id FROM launches l
+                GROUP BY l.experiment_id
+                HAVING COUNT(DISTINCT COALESCE(l.image_digest, '')) > 1
+            )
+        """)
     if existing.get("episodes"):
         _migrate_run_mode(conn)
         _migrate_execution(conn)

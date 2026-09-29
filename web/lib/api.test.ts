@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  forkDesign, getEnvironment, getItems, listEpisodes, runOracle, saveDesign, subscribeLaunchEvents,
+  forkDesign, getEnvironment, getItems, launchExperiment, listEpisodes, runOracle, saveDesign, subscribeLaunchEvents,
 } from "./api.ts";
 
 test("Word-Guess environment navigation preserves its API identifier", async () => {
@@ -96,6 +96,24 @@ test("forkDesign uses the explicit fork endpoint", async () => {
   assert.equal(path, "/api/experiments/experiment%20id/fork");
   assert.equal(init?.method, "POST");
   assert.equal(init?.body, "{}");
+});
+
+test("launchExperiment sends force only when explicitly requested", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ id: "launch" }), {
+      status: 202, headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    await launchExperiment("experiment", "live");
+    await launchExperiment("experiment", "live", { force: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(bodies.map((body) => body.force), [false, true]);
 });
 
 test("listEpisodes preserves repeated environment and status filters", async () => {

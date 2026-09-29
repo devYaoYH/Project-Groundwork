@@ -162,6 +162,7 @@ class Experiment:
     design_text: str | None = None
     design_sha256: str | None = None
     locked_at: str | None = None
+    pinned_image_digest: str | None = None
     forked_from: str | None = None
     authored_design_text: str | None = None
     authored_design_sha256: str | None = None
@@ -490,7 +491,22 @@ class ControlPlane:
         """
         published = set()
         for path in sorted(self.workspace.glob("games/*/runtime/release.manifest.json")):
-            release = self.ingest_release(json.loads(path.read_text(encoding="utf-8")))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            with self._session() as db:
+                current = db.execute(
+                    "SELECT environment_id, manifest FROM releases WHERE id = ?",
+                    (payload.get("release_id"),),
+                ).fetchone()
+                locked = db.execute(
+                    "SELECT 1 FROM experiments WHERE release_id = ? AND locked_at IS NOT NULL LIMIT 1",
+                    (payload.get("release_id"),),
+                ).fetchone()
+            if current and (current["manifest"] or locked):
+                # Discovery is additive, never a hidden release update. A rebuilt
+                # manifest needs an explicit ingest (and a new ID if locked).
+                published.add(current["environment_id"])
+                continue
+            release = self.ingest_release(payload)
             published.add(release.environment_id)
         created: list[Release] = []
         with self._session() as db:
@@ -571,6 +587,26 @@ class ControlPlane:
             manifest=manifest.model_dump(mode="json"),
         )
         with self._session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT image_digest, declaration_sha256, item_bank_sha256, manifest "
+                "FROM releases WHERE id = ?", (release.id,),
+            ).fetchone()
+            locked = db.execute(
+                "SELECT 1 FROM experiments WHERE release_id = ? AND locked_at IS NOT NULL LIMIT 1",
+                (release.id,),
+            ).fetchone()
+            if existing and locked and (
+                existing["image_digest"] != release.image_digest
+                or existing["declaration_sha256"] != release.declaration_sha256
+                or existing["item_bank_sha256"] != release.item_bank_sha256
+                or (existing["manifest"] is not None and
+                    json.loads(existing["manifest"]) != release.manifest)
+            ):
+                raise ValueError(
+                    f"release {release.id!r} is used by a locked experiment; "
+                    "publish a new release ID instead of replacing its image or design inputs"
+                )
             db.execute(
                 "INSERT INTO releases (id, environment_id, version, declaration_sha256, "
                 "item_bank_sha256, oracle_version, package, source_ref, metadata, created_at, "
@@ -1046,6 +1082,16 @@ class ControlPlane:
         )
         locked_at = _now()
         with self._session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute(
+                "SELECT image_digest, declaration_sha256, item_bank_sha256 FROM releases WHERE id = ?",
+                (release.id,),
+            ).fetchone()
+            if current is None or (current["image_digest"], current["declaration_sha256"],
+                                   current["item_bank_sha256"]) != (
+                                       release.image_digest, release.declaration_sha256,
+                                       release.item_bank_sha256):
+                raise ValueError("release changed while locking; validate against the current release")
             db.execute("DELETE FROM cells WHERE experiment_id = ?", (experiment.id,))
             db.execute("DELETE FROM participants WHERE experiment_id = ?", (experiment.id,))
             self._sync_items(db, bank)
@@ -1067,13 +1113,16 @@ class ControlPlane:
                     for participant in design.roster
                 ],
             )
-            db.execute("UPDATE experiments SET locked_at = ? WHERE id = ?", (locked_at, experiment.id))
+            db.execute(
+                "UPDATE experiments SET locked_at = ?, pinned_image_digest = ? WHERE id = ?",
+                (locked_at, release.image_digest or "", experiment.id),
+            )
         return self.experiment(experiment.id)
 
     def launch_experiment(self, experiment_id: str, *, max_parallelism: int = 1,
                           smoke_test: bool = False, mode: str | None = None,
                           shard_index: int | None = None,
-                          shard_count: int | None = None) -> Launch:
+                          shard_count: int | None = None, force: bool = False) -> Launch:
         """Launch direct YAML or a fixed design plan.
 
         A locked design consumes its persisted episode configs.  Smoke and
@@ -1089,6 +1138,8 @@ class ControlPlane:
             raise ValueError("shard_count must be >= 1")
         if shard_index is not None:
             raise ValueError("shard_index belongs to a worker, not a launch")
+        if not isinstance(force, bool):
+            raise ValueError("force must be a boolean")
         experiment = self.experiment(experiment_id)
         execution_path: str | None = None
         design_configs: list[dict[str, Any]] | None = None
@@ -1103,6 +1154,27 @@ class ControlPlane:
             design_configs = self._design_episode_configs(experiment, mode=mode)
             if not design_configs:
                 raise ValueError("this launch contains no planned episodes")
+        if mode == "live":
+            with self._session() as db:
+                prior = db.execute(
+                    "SELECT 1 FROM launches WHERE experiment_id = ? AND mode = 'live' LIMIT 1",
+                    (experiment.id,),
+                ).fetchone()
+                active = db.execute(
+                    "SELECT 1 FROM launches WHERE experiment_id = ? AND mode = 'live' "
+                    "AND status IN ('QUEUED', 'RUNNING', 'CANCELLING') LIMIT 1",
+                    (experiment.id,),
+                ).fetchone()
+                if active:
+                    raise ValueError("a live launch is still active; settle it before retrying")
+                if prior and not force:
+                    if design_configs is None:
+                        raise ValueError("selective retry requires a locked design plan; use force for legacy YAML")
+                    completed = self._successful_live_episodes(db, experiment.id)
+                    design_configs = [config for config in design_configs
+                                      if config["episode_id"] not in completed]
+                    if not design_configs:
+                        raise ValueError("all live episodes already completed; use force to rerun them")
         effective_shard_count = shard_count or 1
         if design_configs is None:
             planned = self._planned_attempts(experiment, smoke_test=mode == "smoke")
@@ -1111,8 +1183,9 @@ class ControlPlane:
         if effective_shard_count > len(planned):
             raise ValueError("shard_count cannot exceed planned episodes")
 
-        release = self._release_by_id(experiment.release_id)
-        image_digest = release.image_digest if self.launcher.name == "local_container" else None
+        if experiment.locked_at is not None and experiment.pinned_image_digest is None:
+            raise ValueError("locked experiment has no pinned image identity")
+        image_digest = (experiment.pinned_image_digest or None) if self.launcher.name == "local_container" else None
         grade = "verified" if image_digest else "unverified"
         from a2a_engine.agent_pool import load_agent_pool
         pool = load_agent_pool(self.workspace / "experiments")
@@ -1175,6 +1248,22 @@ class ControlPlane:
         })
 
         with self._session() as db:
+            if mode == "live":
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute(
+                    "SELECT 1 FROM launches WHERE experiment_id = ? AND mode = 'live' "
+                    "AND status IN ('QUEUED', 'RUNNING', 'CANCELLING') LIMIT 1",
+                    (experiment.id,),
+                ).fetchone():
+                    raise ValueError("a live launch is still active; settle it before retrying")
+                completed_now = self._successful_live_episodes(db, experiment.id) if not force else set()
+                if design_configs is not None and any(
+                    config["episode_id"] in completed_now for config in design_configs
+                ):
+                    raise ValueError("live results changed while planning; retry the launch")
+                if any(self._next_attempt(db, episode_id) != attempt
+                       for episode_id, _, _, attempt in attempt_rows):
+                    raise ValueError("attempt numbers changed while planning; retry the launch")
             if design_bank is not None:
                 self._ensure_items(
                     db,
@@ -1212,6 +1301,20 @@ class ControlPlane:
             uri=str(launch.launch_input_uri), sha256=str(launch.launch_input_sha256),
         ))
         return self.launch(launch.id)
+
+    @staticmethod
+    def _successful_live_episodes(db: sqlite3.Connection, experiment_id: str) -> set[str]:
+        return {
+            row[0] for row in db.execute(
+                "SELECT DISTINCT a.episode_id FROM attempts a "
+                "JOIN launches l ON l.id = a.launch_id "
+                "JOIN episodes e ON e.episode_id = a.episode_id AND e.attempt = a.attempt "
+                "WHERE l.experiment_id = ? AND l.mode = 'live' "
+                "AND a.status = 'COMPLETED' AND e.status = 'COMPLETED' "
+                "AND e.run_mode = 'live' AND e.experiment_id = ?",
+                (experiment_id, experiment_id),
+            ).fetchall()
+        }
 
     def _dispatch(self, launch: Launch, input_ref: LaunchInputRef) -> None:
         """Hand the launch to the launcher and persist the handle it returns."""
@@ -1293,9 +1396,21 @@ class ControlPlane:
         if len(configs) != 1:
             raise ValueError("episode is not uniquely present in the frozen design")
         config = configs[0]
+        from a2a_engine.agent_pool import load_agent_pool
+        pool = load_agent_pool(self.workspace / "experiments")
+        bindings = [str(name) for agent in config.get("agents", []) if isinstance(agent, dict)
+                    for name in (agent.get("binding"), agent.get("model")) if name in pool.agents]
+        credentials = pool.required_credentials(bindings)
+        missing = pool.missing_credentials(bindings, self.credential_presence(credentials))
+        if missing:
+            raise ValueError(f"missing worker credentials: {', '.join(missing)}")
         with self._session() as db:
             next_attempt = self._next_attempt(db, episode_id)
-        image_digest = source.image_digest if self.launcher.name == "local_container" else None
+        if experiment.pinned_image_digest is None:
+            raise ValueError("locked experiment has no pinned image identity")
+        image_digest = (experiment.pinned_image_digest or None) if self.launcher.name == "local_container" else None
+        if image_digest and source.image_digest != image_digest:
+            raise ValueError("cannot resume a source attempt from a different execution image")
         grade = "verified" if image_digest else "unverified"
         config["provenance"] = {**config["provenance"], "attempt": next_attempt,
                                 "run_mode": "live", "provenance_grade": grade,
@@ -1305,7 +1420,7 @@ class ControlPlane:
             "durable_through": len(entries), "episode_id": episode_id,
         }
         new_id = str(uuid.uuid4())
-        path = self._write_execution_plan(new_id, experiment, [config])
+        path = self._write_execution_plan(new_id, experiment, [config], credentials=credentials)
         input_ref = self._publish_launch_input(new_id, Path(path).read_bytes())
         launch = Launch(
             id=new_id, experiment_id=experiment.id, status="QUEUED",

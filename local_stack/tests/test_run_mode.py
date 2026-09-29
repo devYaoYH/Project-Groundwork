@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.schemas import EpisodeConfigBase, EpisodeTrace
 from a2a_engine.storage.schema import apply_schema
@@ -10,6 +12,7 @@ from a2a_engine.storage.results import RESULT_PREDICATE, counts_as_result
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from expt_runner.run_experiment import _make_run_context
 from local_stack.control_plane import ControlPlane
+from local_stack.launchers import ExecutionStatus
 from local_stack.server import LocalStackHandler
 from local_stack.tests.fakes import FakeLauncher
 
@@ -105,6 +108,74 @@ def test_worker_overrides_plan_claim_without_mutating_design_identity():
     assert smoke["config"]["provenance"]["design_sha256"] == "original"
     assert smoke["config"]["seed"] == 17
     assert planned["provenance"]["run_mode"] == "live"
+
+
+def test_live_rerun_selects_only_unsuccessful_slots_unless_forced(tmp_path):
+    control = ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
+    experiment = control.create_experiment(
+        name="Retry selection", release_id="buyer_seller", design_text=DESIGN,
+    )
+    experiment = control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    initial = control.launch_experiment(experiment.id, mode="live")
+    planned = control.planned_episode_ids(initial.id)
+    assert len(planned) == 2
+    with pytest.raises(ValueError, match="still active"):
+        control.launch_experiment(experiment.id, mode="live")
+    _put(control, planned[0], 1, "live", 1.0)
+    launcher.finish(initial.id)
+    control.reconcile()
+
+    retry = control.launch_experiment(experiment.id, mode="live")
+    assert control.planned_episode_ids(retry.id) == [planned[1]]
+    assert retry.image_digest == initial.image_digest
+    with control._session() as db:
+        assert db.execute("SELECT attempt FROM attempts WHERE launch_id = ?", (retry.id,)).fetchone()[0] == 2
+    _put(control, planned[1], 2, "live", 2.0)
+    launcher.finish(retry.id)
+    control.reconcile()
+
+    with pytest.raises(ValueError, match="all live episodes already completed"):
+        control.launch_experiment(experiment.id, mode="live")
+    forced = control.launch_experiment(experiment.id, mode="live", force=True)
+    assert set(control.planned_episode_ids(forced.id)) == set(planned)
+    assert forced.image_digest == initial.image_digest
+
+
+def test_smoke_success_does_not_suppress_first_live_launch(tmp_path):
+    control = ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
+    experiment = control.create_experiment(
+        name="Smoke then live", release_id="buyer_seller", design_text=DESIGN,
+    )
+    control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    smoke = control.launch_experiment(experiment.id, mode="smoke")
+    planned = control.planned_episode_ids(smoke.id)
+    _put(control, planned[0], 1, "smoke", 0.0)
+    launcher.finish(smoke.id)
+    control.reconcile()
+    live = control.launch_experiment(experiment.id, mode="live")
+    assert set(control.planned_episode_ids(live.id)) == set(planned)
+    with pytest.raises(ValueError, match="force must be a boolean"):
+        control.launch_experiment(experiment.id, mode="live", force="yes")
+
+
+def test_legacy_yaml_rerun_requires_explicit_force(tmp_path):
+    control = ControlPlane(tmp_path / "a2a.db", workspace=WORKSPACE)
+    experiment = control.create_experiment(
+        release_id="buyer_seller", yaml_path="games/buyer-seller/experiments/example.yaml",
+    )
+    launcher = FakeLauncher()
+    control.launcher = launcher
+    initial = control.launch_experiment(experiment.id, mode="live")
+    launcher.finish(initial.id, ExecutionStatus.FAILED)
+    control.reconcile()
+    with pytest.raises(ValueError, match="use force for legacy YAML"):
+        control.launch_experiment(experiment.id, mode="live")
+    forced = control.launch_experiment(experiment.id, mode="live", force=True)
+    assert forced.id != initial.id
 
 
 def test_older_database_attributes_launches_and_cli_smoke_without_nulls(tmp_path):

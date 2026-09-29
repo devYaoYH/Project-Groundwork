@@ -39,6 +39,7 @@ export function DesignEditor() {
   const [forking, setForking] = useState(false);
   const [shardCount, setShardCount] = useState("1");
   const [maxParallelism, setMaxParallelism] = useState("1");
+  const [forceRerun, setForceRerun] = useState(false);
   const savingRef = useRef(false);
 
   useEffect(() => {
@@ -166,7 +167,7 @@ export function DesignEditor() {
     setMessage(null);
     try {
       const result = await launchExperiment(experiment.id, mode, {
-        shardCount: shards, maxParallelism: parallelism,
+        shardCount: shards, maxParallelism: parallelism, force: mode === "live" && forceRerun,
       });
       window.location.assign(`/launch/?id=${encodeURIComponent(result.id)}`);
       return;
@@ -222,9 +223,10 @@ export function DesignEditor() {
                   <span>Up to this many episodes run in threads inside each runner.</span>
                 </label>
               </div>
-              <p>At most {validConcurrency ? shards * parallelism : "-"} episodes can run at once across all shards. A shard needs at least one planned episode{plan ? ` (smoke: ${plan.cells.length}; live/dry run: ${plan.episodes_planned})` : ""}.</p>
+              <p>At most {validConcurrency ? shards * parallelism : "-"} episodes can run at once across all shards. A shard needs at least one selected episode; a retry may select fewer than the original plan.</p>
               {!validConcurrency ? <p className="notice notice-error">Enter whole numbers of at least 1 for both controls.</p> : null}
             </fieldset>
+            {locked ? <label className="launch-force"><input type="checkbox" checked={forceRerun} onChange={(event) => setForceRerun(event.target.checked)} disabled={busy} /> Force rerun completed live episodes (normally only incomplete episodes are retried)</label> : null}
             <div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid || !canLaunchMode("dry_run")}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid || !canLaunchMode("smoke")}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked || !canLaunchMode("live")}>Launch live</button></div>
           </section>
         </div>

@@ -97,6 +97,15 @@ Episode attempts carry a terminal status:
 episode adds a row rather than replacing one. A failed attempt is kept, not
 tombstoned: "the result for this episode" is a query — the completed attempt
 with the highest `attempt` — rather than a stored flag.
+After the first live launch of a locked design, launching live again selects
+only episode IDs without a completed live attempt. Completed slots retain their
+earlier traces and attempt numbers; a retry adds attempts only for unfinished
+slots. If all slots succeeded, the API reports that there is nothing to retry.
+Set `force: true` on `POST /api/launches` (or check Force rerun in the design
+editor) to rerun every planned slot. An active live launch must settle first.
+Smoke and dry-run launches remain independent health checks. Legacy YAML
+experiments require `force: true` to repeat a live run because they have no
+frozen per-episode plan to select from.
 
 ## How a live launch from the browser gets its keys
 
@@ -107,6 +116,14 @@ names the pool declares, and resolves the values immediately before executing.
 The worker verifies the launch-input digest before parsing it. Local worker
 service executions are **unverified**, even if the selected release manifest
 names a digest: only execution inside that exact digest-pinned image is verified.
+Locking a design also pins the release image digest on the experiment. Later
+launches and turn resumes cannot silently adopt a rebuilt image; if that image
+is unavailable, a verified retry fails instead of switching builds. Published
+release IDs used by locked experiments cannot be republished with a different
+image or design surface. Use a new release ID and experiment for a code revision.
+An experiment locked without an image remains unverified even if an image is
+published later. This fixes execution identity, not provider determinism: a
+repeated API call may still return different content.
 
 The names come from the agent pool. Every binding in `experiments/agents.yaml`
 already declares the variable it needs — that is what lets a missing key be
