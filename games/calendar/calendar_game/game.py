@@ -12,6 +12,7 @@ from pathlib import Path
 
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from a2a_engine.comm import CHANNELS, CommRouter, RoutingContext, Topology, canonical_channel
+from a2a_engine.remote.seats import validate_runtime
 from pydantic import Field
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
@@ -358,7 +359,7 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 class CalendarGame:
     """Calendar scheduling benchmark environment."""
 
-    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False) -> None:
+    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None) -> None:
         self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
         self.topology = Topology.from_communication(
             getattr(self.config, "communication", None),
@@ -371,6 +372,22 @@ class CalendarGame:
         self.router = CommRouter(self.topology)
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
+        self.runtime_context = runtime_context
+        self._remote_clients = {}
+        self._remote_budget_usage = {}
+        external = {
+            seat for seat in range(self.config.num_agents)
+            if validate_runtime(self._agent_spec_for(seat)) == "external"
+        }
+        if runtime_context is not None and set(runtime_context.episode.seats) != external:
+            raise ValueError("provisioned external seats do not match configured seats")
+        if external:
+            if runtime_context is None:
+                raise ValueError("Phase 2 external seats require a privately provisioned runtime_context")
+            if not runtime_context.episode.active:
+                raise ValueError("provisioned episode attempt has been closed")
+            if self.config.enable_reflection or self.config.decision_retries:
+                raise ValueError("remote reflection and decision retries require Phase 3; disable reflection and set decision_retries=0")
 
     def _participant_id_for_agent(self, agent_id: int) -> str:
         """Use the same seat-to-identity mapping the pinned roster records."""
@@ -384,12 +401,33 @@ class CalendarGame:
         """Emit Calendar data with stable participant and chat aliases."""
         payload = dict(data)
         agent_id = payload.get("agent_id")
+        remote = self._remote_clients.get(agent_id)
+        if remote is not None:
+            if event_type in {"turn_start", "decide_start"}:
+                payload.update(remote.prepare(payload, self._remote_budget_usage.get(agent_id, 0)))
+            elif event_type in {"turn_end", "decide_end"}:
+                payload.update(remote.lifecycle)
+            elif event_type == "agent_registered":
+                payload.update(runtime="external", protocol_version="a2a-turns/1", agent_info=remote.seat.agent_info)
         if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
             payload.setdefault("participant_id", self._participant_id_for_agent(agent_id))
             if event_type.endswith("_sent"):
                 payload.setdefault("speaker", payload["participant_id"])
                 payload.setdefault("text", payload.get("content", ""))
         self.events.append(event_type, data=payload)
+
+    def _worker_attempts(self, agent_id: int, tool_calls: list) -> list:
+        remote = self._remote_clients.get(agent_id)
+        return remote.worker_attempts() if remote is not None else tool_calls
+
+    def _remote_rejection(self, tool, *, agent_id, round_num, turn, phase) -> bool:
+        if agent_id in self._remote_clients and isinstance(tool, dict) and "_remote_rejection" in tool:
+            rejection = tool["_remote_rejection"]
+            self._invalid_tool_call(round_num=round_num, turn=turn, phase=phase, agent_id=agent_id,
+                                    tool={"type": "remote_rejected_call", "code": rejection["code"]},
+                                    reason=rejection["reason"])
+            return True
+        return False
 
     @staticmethod
     def _meeting_participants(scenario: dict) -> dict[int, list[int]]:
@@ -588,6 +626,9 @@ class CalendarGame:
         """
         actions: list[dict] = []
         for tool in tool_calls:
+            if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                      turn=turn_index, phase="DECISION"):
+                continue
             reason: str | None = None
             if not isinstance(tool, dict):
                 reason = "tool call is not an object"
@@ -779,16 +820,37 @@ class CalendarGame:
         raise ValueError(f"task_id {self.config.task_id!r} not found in {task_path}")
 
     def run(self) -> EpisodeTrace:
-        return self.run_with_scenario(self.generate_scenario())
+        try:
+            return self.run_with_scenario(self.generate_scenario())
+        finally:
+            self._close_remote()
 
     def run_with_scenario(self, scenario: dict) -> EpisodeTrace:
-        return asyncio.run(self._run_async(scenario))
+        try:
+            return asyncio.run(self._run_async(scenario))
+        finally:
+            self._close_remote()
+
+    def _close_remote(self) -> None:
+        if self.runtime_context is not None:
+            try:
+                for client in self._remote_clients.values():
+                    client.episode_end()
+            finally:
+                self.runtime_context.close()
 
     def _build_agents(self, scenario: dict) -> list[Agent]:
         """Construct and calendar-initialize agents from scenario. Separated for testability."""
         agents: list[Agent] = []
+        external = set(self.runtime_context.episode.seats) if self.runtime_context else set()
+        if any(not external.issubset(set(meeting["participants"])) for meeting in scenario["meetings"]):
+            raise ValueError("remote non-participant/voluntary turns require Phase 3")
         for agent_id in range(self.config.num_agents):
-            if self.dry_run:
+            if agent_id in external:
+                from calendar_game.remote import RemoteSeatClient
+                client = RemoteSeatClient(self.runtime_context, agent_id, self.router)
+                self._remote_clients[agent_id] = client
+            elif self.dry_run:
                 client: BaseClient = ScriptedClient()
             else:
                 cfg = self._agent_spec_for(agent_id)
@@ -968,7 +1030,10 @@ class CalendarGame:
 
     def _run_with_agents(self, agents: list[Agent], scenario: dict) -> EpisodeTrace:
         """Run the full environment loop with a pre-built agent list. Exposed for testing."""
-        return asyncio.run(self._run_async(scenario, agents=agents))
+        try:
+            return asyncio.run(self._run_async(scenario, agents=agents))
+        finally:
+            self._close_remote()
 
     async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> EpisodeTrace:
         self._ensure_speaker_orders(scenario)
@@ -1142,6 +1207,9 @@ class CalendarGame:
             nonlocal max_participant_groupchat_chars
             nonlocal max_all_groupchat_chars
 
+            if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                      turn=turn_index, phase=phase):
+                return False
             tool_type = self._canonical_tool_type(tool.get("type"))
             decision = self.router.authorize(
                 agent_id, tool_type, tool.get("to"), phase=phase, round=round_num,
@@ -1242,10 +1310,14 @@ class CalendarGame:
             return policy.protocol
 
         def separate_messages(tool_calls: list, *, agent_id: int, phase: str) -> list:
-            if self.topology.legacy:
+            tool_calls = self._worker_attempts(agent_id, tool_calls)
+            if self.topology.legacy and agent_id not in self._remote_clients:
                 return tool_calls
             actions = []
             for tool in tool_calls:
+                if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                          turn=turn_index, phase=phase):
+                    continue
                 if isinstance(tool, dict) and self._canonical_tool_type(tool.get("type")) in CHANNELS:
                     deliver_cheap_talk_tool(
                         tool=tool, agent_id=agent_id, meeting=meeting,
@@ -1299,6 +1371,7 @@ class CalendarGame:
             round_messaging_tools_invoked_by_agent: dict[int, int] = {
                 i: 0 for i in range(self.config.num_agents)
             }
+            self._remote_budget_usage = round_messaging_tools_invoked_by_agent
             turn_index = 0
             blocked_slot_violations: list[dict] = []
 
@@ -1355,7 +1428,7 @@ class CalendarGame:
                         "raw_api_response": result.raw,
                     })
 
-                    for tool in result.tool_calls:
+                    for tool in self._worker_attempts(agent_id, result.tool_calls):
                         if not isinstance(tool, dict):
                             self._invalid_tool_call(
                                 round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
@@ -1411,7 +1484,7 @@ class CalendarGame:
                         "usage": result.usage.__dict__ if result.usage else None,
                         "latency_ms": result.latency_ms, "raw_api_response": result.raw,
                     })
-                    for tool in result.tool_calls:
+                    for tool in self._worker_attempts(agent_id, result.tool_calls):
                         if not isinstance(tool, dict):
                             self._invalid_tool_call(
                                 round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
