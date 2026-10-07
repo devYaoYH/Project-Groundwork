@@ -109,6 +109,9 @@ class InstrumentedCalendarClient(BaseClient):
             lambda: self.delegate.observe_penalty(incurred_penalty),
         )
 
+    def observe_messages(self, messages: list[dict]) -> None:
+        self.delegate.observe_messages(messages)
+
     def reflect_calendar_belief(
         self,
         target_agent_id: int,

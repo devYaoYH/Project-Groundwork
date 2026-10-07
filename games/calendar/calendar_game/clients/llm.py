@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover
 from calendar_game.agents import BaseClient, DecideResult, GameConfig, TokenUsage, TurnResult
 from calendar_game.agents import ReflectionResult
 from calendar_game.prompts import (
+    append_phase_inbox,
     build_decision_message,
     build_reflection_message,
     build_retry_message,
@@ -284,9 +285,20 @@ class LLMClient(BaseClient):
         self._incurred_penalty: int = 0
         self._first_turn: bool = True
         self._communication_protocol = game_config.communication_protocol
+        self._communication_by_phase = game_config.communication_by_phase
+        self._communication_policy_by_phase = game_config.communication_policy_by_phase
+        self._phase_inbox: list[dict] = []
 
     def observe_penalty(self, incurred_penalty: int) -> None:
         self._incurred_penalty = incurred_penalty
+
+    def observe_messages(self, messages: list[dict]) -> None:
+        self._phase_inbox = list(messages)
+
+    def _with_phase_inbox(self, prompt: str) -> str:
+        prompt = append_phase_inbox(prompt, self._phase_inbox)
+        self._phase_inbox = []
+        return prompt
 
     def start_round(self, meeting: dict, calendar_render: str, round_num: int) -> None:
         self._round_meeting = hydrate_meeting_for_llm(
@@ -313,12 +325,13 @@ class LLMClient(BaseClient):
         turn_index: int | None = None,
         max_turns_per_round: int | None = None,
     ) -> TurnResult:
+        communication_policy = self._communication_policy_by_phase.get("CHEAP_TALK")
         if self._first_turn:
             self._first_turn = False
             if self._round_meeting is None:
                 user_msg = (
                     f"=== YOUR CALENDAR ===\n{self._round_calendar}\n\n"
-                    f"{build_turn_message(messages, turn_index, max_turns_per_round, self._communication_protocol)}"
+                    f"{build_turn_message(messages, turn_index, max_turns_per_round, self._communication_protocol, communication_policy=communication_policy)}"
                 )
             else:
                 user_msg = build_round_start_message(
@@ -329,6 +342,7 @@ class LLMClient(BaseClient):
                     turn_index=turn_index,
                     max_turns_per_round=max_turns_per_round,
                     communication_protocol=self._communication_protocol,
+                    communication_policy=communication_policy,
                 )
                 if messages:
                     user_msg += "\n\n" + build_turn_message(
@@ -336,6 +350,7 @@ class LLMClient(BaseClient):
                         turn_index,
                         max_turns_per_round,
                         self._communication_protocol,
+                        communication_policy=communication_policy,
                     )
         else:
             user_msg = build_turn_message(
@@ -343,6 +358,7 @@ class LLMClient(BaseClient):
                 turn_index,
                 max_turns_per_round,
                 self._communication_protocol,
+                communication_policy=communication_policy,
             )
         result = self._call(user_msg)
         return self._make_turn_result(result)
@@ -356,8 +372,11 @@ class LLMClient(BaseClient):
             calendar_render,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
         )
-        msg = build_decision_message(hydrated_meeting, hydrated_calendar)
-        result = self._call(msg)
+        msg = build_decision_message(
+            hydrated_meeting, hydrated_calendar, self._communication_by_phase.get("DECISION", "none"),
+            communication_policy=self._communication_policy_by_phase.get("DECISION"),
+        )
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,
@@ -366,7 +385,7 @@ class LLMClient(BaseClient):
 
     def retry_decide(self, attempt: int, max_attempts: int, conflict: str) -> DecideResult:
         msg = build_retry_message(attempt, max_attempts, conflict)
-        result = self._call(msg)
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,
@@ -382,8 +401,11 @@ class LLMClient(BaseClient):
             calendar_render,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
         )
-        msg = build_voluntary_reschedule_message(hydrated_meeting, hydrated_calendar)
-        result = self._call(msg)
+        msg = build_voluntary_reschedule_message(
+            hydrated_meeting, hydrated_calendar, self._communication_by_phase.get("VOLUNTARY", "none"),
+            communication_policy=self._communication_policy_by_phase.get("VOLUNTARY"),
+        )
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,

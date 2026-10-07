@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
+from a2a_engine.comm import CHANNELS, CommRouter, RoutingContext, Topology, canonical_channel
 from pydantic import Field
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
@@ -25,6 +26,7 @@ from calendar_game.clients import (
     ScriptedClient,
 )
 from calendar_game.prompts import (
+    append_phase_inbox,
     build_decision_message,
     build_reflection_message,
     build_round_start_message,
@@ -358,6 +360,15 @@ class CalendarGame:
 
     def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False) -> None:
         self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
+        self.topology = Topology.from_communication(
+            getattr(self.config, "communication", None),
+            seats=list(range(self.config.num_agents)),
+            phases={"CHEAP_TALK", "VOLUNTARY", "DECISION", "RESOLUTION", "FALLBACK", "REFLECTION"},
+            default_send_phases={"CHEAP_TALK"},
+            communication_protocol=self.config.communication_protocol,
+            dm_cap=self.config.dm_cap,
+        )
+        self.router = CommRouter(self.topology)
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
 
@@ -604,50 +615,10 @@ class CalendarGame:
         return actions
 
     def _communication_channels(self) -> set[str]:
-        raw_protocol = self.config.communication_protocol or "dm"
-        aliases = {
-            "direct": {"dm"},
-            "direct_message": {"dm"},
-            "private": {"dm"},
-            "participant_groupchat": {"participant_groupchat"},
-            "participant_chat": {"participant_groupchat"},
-            "meeting_groupchat": {"participant_groupchat"},
-            "meeting_chat": {"participant_groupchat"},
-            "group": {"all_groupchat"},
-            "groupchat": {"all_groupchat"},
-            "group_chat": {"all_groupchat"},
-            "all_groupchat": {"all_groupchat"},
-            "all_agent_groupchat": {"all_groupchat"},
-            "all_agent_chat": {"all_groupchat"},
-            "dm_and_groupchat": {"dm", "all_groupchat"},
-            "dm_and_all_groupchat": {"dm", "all_groupchat"},
-            "dm_and_participant_groupchat": {"dm", "participant_groupchat"},
-            "both": {"dm", "all_groupchat"},
-            "mixed": {"dm", "all_groupchat"},
-            "all": {"dm", "participant_groupchat", "all_groupchat"},
-        }
-        valid = {"dm", "participant_groupchat", "all_groupchat"}
-        if isinstance(raw_protocol, dict):
-            channels: set[str] = set()
-            for key, enabled in raw_protocol.items():
-                if not enabled:
-                    continue
-                normalized = str(key).lower()
-                channels.update(aliases.get(normalized, {normalized}))
-        else:
-            protocol = str(raw_protocol).lower()
-            channels = set(aliases.get(protocol, {protocol}))
-        if not channels or any(channel not in valid for channel in channels):
-            raise ValueError(
-                "communication_protocol must enable one or more of: "
-                "dm, participant_groupchat, all_groupchat"
-            )
-        return channels
+        return set(self.topology.effective(phase="CHEAP_TALK", round=0).channels)
 
     def _communication_protocol(self) -> str:
-        channels = self._communication_channels()
-        order = ["dm", "participant_groupchat", "all_groupchat"]
-        return "+".join(channel for channel in order if channel in channels)
+        return self.topology.effective(phase="CHEAP_TALK", round=0).protocol
 
     def _allows_channel(self, channel: str) -> bool:
         return channel in self._communication_channels()
@@ -665,18 +636,7 @@ class CalendarGame:
         return self._allows_participant_groupchat() or self._allows_all_groupchat()
 
     def _canonical_tool_type(self, tool_type: object) -> str:
-        protocol = str(tool_type or "").lower()
-        aliases = {
-            "groupchat": "all_groupchat",
-            "group_chat": "all_groupchat",
-            "group": "all_groupchat",
-            "all_agent_groupchat": "all_groupchat",
-            "all_agent_chat": "all_groupchat",
-            "participant_chat": "participant_groupchat",
-            "meeting_groupchat": "participant_groupchat",
-            "meeting_chat": "participant_groupchat",
-        }
-        return aliases.get(protocol, protocol)
+        return canonical_channel(tool_type)
 
     def _agent_spec_for(self, agent_id: int) -> dict:
         if agent_id < len(self.config.agents):
@@ -1058,6 +1018,11 @@ class CalendarGame:
 
         # 4. Register all agents
         all_agent_ids = list(range(self.config.num_agents))
+        communication_policy_by_phase = (
+            {phase: self.topology.effective(phase=phase, round=0).as_dict()
+             for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
+            if not self.topology.legacy else {}
+        )
         for agent_id, agent in enumerate(agents):
             dsm_prior_meetings = [
                 {
@@ -1090,6 +1055,12 @@ class CalendarGame:
                 dsm_initial_budget=self.config.dsm_initial_budget,
                 sd_model={int(k): float(v) for k, v in self.config.sd_model.items()},
                 communication_protocol=communication_protocol,
+                communication_by_phase=(
+                    {phase: self.topology.effective(phase=phase, round=0).protocol
+                     for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
+                    if not self.topology.legacy else {}
+                ),
+                communication_policy_by_phase=communication_policy_by_phase,
             )
             agent.register(agent_id, game_config)
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
@@ -1159,6 +1130,7 @@ class CalendarGame:
             round_num: int,
             turn_index: int,
             already_queued: set[int],
+            phase: str = "CHEAP_TALK",
         ) -> bool:
             nonlocal total_dms_sent
             nonlocal total_participant_groupchat_messages_sent
@@ -1171,43 +1143,24 @@ class CalendarGame:
             nonlocal max_all_groupchat_chars
 
             tool_type = self._canonical_tool_type(tool.get("type"))
-            if (
-                tool_type in {"dm", "participant_groupchat", "all_groupchat"}
-                and self.config.dm_cap >= 0
-                and round_messaging_tools_invoked_by_agent[agent_id] >= self.config.dm_cap
-            ):
+            decision = self.router.authorize(
+                agent_id, tool_type, tool.get("to"), phase=phase, round=round_num,
+                context=RoutingContext(tuple(all_agent_ids), meeting["id"], tuple(meeting["participants"])),
+                attempted_this_round=round_messaging_tools_invoked_by_agent[agent_id],
+            )
+            if decision.charge_attempt:
+                round_messaging_tools_invoked_by_agent[agent_id] += 1
+            if not decision.allowed:
+                if decision.reason is None:
+                    return False
                 self._invalid_tool_call(
-                    round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
+                    round_num=round_num, turn=turn_index, phase=phase,
                     agent_id=agent_id, tool=tool,
-                    reason=(
-                        "per-agent cheap-talk messaging-tool budget exhausted "
-                        f"(dm_cap={self.config.dm_cap})"
-                    ),
+                    reason=decision.reason,
                 )
                 return False
-            if tool_type in {"dm", "participant_groupchat", "all_groupchat"}:
-                round_messaging_tools_invoked_by_agent[agent_id] += 1
             if tool_type == "dm":
-                if not self._allows_dm():
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm tool is disabled by communication_protocol",
-                    )
-                    return False
-                try:
-                    to = int(tool["to"])
-                except (KeyError, TypeError, ValueError):
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm tool missing integer 'to'",
-                    )
-                    return False
-                if to < 0 or to >= self.config.num_agents:
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm recipient is out of range",
-                    )
-                    return False
+                to = decision.recipients[0]
                 msg = {
                     "from": agent_id,
                     "to": to,
@@ -1224,7 +1177,7 @@ class CalendarGame:
                 total_dm_chars += dm_chars
                 max_dm_chars = max(max_dm_chars, dm_chars)
                 self._append_event("dm_sent", data={
-                    "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
+                    "round": round_num, "turn": turn_index, "phase": phase,
                     "agent_id": agent_id,
                     "from_agent": agent_id, "to_agent": to,
                     "meeting_id": msg["meeting_id"], "content": msg["content"],
@@ -1236,24 +1189,10 @@ class CalendarGame:
                 return True
 
             if tool_type in {"participant_groupchat", "all_groupchat"}:
-                if not self._allows_channel(tool_type):
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool,
-                        reason=f"{tool_type} tool is disabled by communication_protocol",
-                    )
-                    return False
                 content = str(tool.get("content", ""))
                 msg_chars = len(content)
-                if tool_type == "participant_groupchat":
-                    recipients = [
-                        to for to in meeting["participants"]
-                        if to != agent_id
-                    ]
-                    event_type = "participant_groupchat_sent"
-                else:
-                    recipients = [to for to in all_agent_ids if to != agent_id]
-                    event_type = "all_groupchat_sent"
+                recipients = list(decision.recipients)
+                event_type = f"{tool_type}_sent"
                 for to in recipients:
                     agents[to].inbox_queue.append({
                         "from": agent_id,
@@ -1277,7 +1216,7 @@ class CalendarGame:
                     total_all_groupchat_chars += msg_chars
                     max_all_groupchat_chars = max(max_all_groupchat_chars, msg_chars)
                 self._append_event(event_type, data={
-                    "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
+                    "round": round_num, "turn": turn_index, "phase": phase,
                     "agent_id": agent_id,
                     "from_agent": agent_id,
                     "to_agents": recipients,
@@ -1289,6 +1228,41 @@ class CalendarGame:
                 return True
 
             return False
+
+        effective_policy = None
+
+        def enter_phase(phase: str, round_num: int) -> str:
+            nonlocal effective_policy
+            policy = self.topology.effective(phase=phase, round=round_num)
+            if policy != effective_policy:
+                self._append_event("topology_changed", data={
+                    "phase": phase, "round": round_num, **policy.as_dict(),
+                })
+                effective_policy = policy
+            return policy.protocol
+
+        def separate_messages(tool_calls: list, *, agent_id: int, phase: str) -> list:
+            if self.topology.legacy:
+                return tool_calls
+            actions = []
+            for tool in tool_calls:
+                if isinstance(tool, dict) and self._canonical_tool_type(tool.get("type")) in CHANNELS:
+                    deliver_cheap_talk_tool(
+                        tool=tool, agent_id=agent_id, meeting=meeting,
+                        round_num=round_num, turn_index=turn_index,
+                        already_queued=already_queued, phase=phase,
+                    )
+                else:
+                    actions.append(tool)
+            return actions
+
+        def decision_inbox(agent: Agent) -> dict:
+            if self.topology.legacy:
+                return {}
+            messages = list(agent.inbox_queue)
+            agent.inbox_queue.clear()
+            agent.client.observe_messages(messages)
+            return {"inbox_drained": messages}
 
         # 6. Main loop — one round per meeting
         for round_num, meeting in enumerate(scenario["meetings"]):
@@ -1304,6 +1278,7 @@ class CalendarGame:
                     })
 
             speaker_order = self._speaker_order(meeting)
+            communication_protocol = enter_phase("CHEAP_TALK", round_num)
             self._append_event("round_start", data={
                 "round": round_num, "turn": 0, "phase": "CHEAP_TALK", "agent_id": None,
                 "meeting": meeting,
@@ -1348,6 +1323,7 @@ class CalendarGame:
                             turn_index=turn_index,
                             max_turns_per_round=self.config.max_turns_per_round,
                             communication_protocol=communication_protocol,
+                            communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                         )
                         if turn_index == 0
                         else build_turn_message(
@@ -1355,6 +1331,7 @@ class CalendarGame:
                             turn_index,
                             self.config.max_turns_per_round,
                             communication_protocol=communication_protocol,
+                            communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                         )
                     )
                     self._append_event("turn_start", data={
@@ -1414,6 +1391,7 @@ class CalendarGame:
                         turn_index,
                         self.config.max_turns_per_round,
                         communication_protocol=communication_protocol,
+                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                     )
                     self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
@@ -1453,8 +1431,10 @@ class CalendarGame:
                 turn_index += 1
 
             # --- VOLUNTARY RESCHEDULE PHASE (non-participants who received DMs) ---
+            voluntary_protocol = enter_phase("VOLUNTARY", round_num)
             for agent_id in sorted(already_queued - set(meeting["participants"])):
                 agent = agents[agent_id]
+                inbox_data = decision_inbox(agent)
                 calendar_render = agents[agent_id].calendar.render()
                 prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
@@ -1462,7 +1442,14 @@ class CalendarGame:
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                     "agent_id": agent_id,
                     "calendar_render": prompt_calendar_render,
-                    "prompt_sent": build_voluntary_reschedule_message(prompt_meeting, prompt_calendar_render),
+                    "prompt_sent": append_phase_inbox(
+                        build_voluntary_reschedule_message(
+                            prompt_meeting, prompt_calendar_render, voluntary_protocol,
+                            communication_policy=communication_policy_by_phase.get("VOLUNTARY"),
+                        ),
+                        inbox_data.get("inbox_drained", []),
+                    ),
+                    **inbox_data,
                 })
                 result = agents[agent_id].voluntary_decide(meeting)
                 total_client_calls[agent_id] += 1
@@ -1475,7 +1462,7 @@ class CalendarGame:
                     "latency_ms": result.latency_ms, "raw_api_response": result.raw,
                 })
                 actions = [
-                    a for a in result.tool_calls
+                    a for a in separate_messages(result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
                     if isinstance(a, dict) and a.get("type") == "reschedule"
                 ]
                 for attempt in range(self.config.decision_retries + 1):
@@ -1508,29 +1495,39 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
+                            decision_inbox(agents[agent_id])
                             retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
                             total_client_calls[agent_id] += 1
                             actions = [
-                                a for a in retry_result.tool_calls
+                                a for a in separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
                                 if isinstance(a, dict) and a.get("type") == "reschedule"
                             ]
                         else:
                             break
 
             # --- DECISION PHASE ---
+            decision_protocol = enter_phase("DECISION", round_num)
             staged_decisions: dict[int, tuple[Calendar, list[dict], int]] = {}
             decision_phase_failed = False
             for agent_id in speaker_order:
                 agent = agents[agent_id]
+                inbox_data = decision_inbox(agent)
                 snapshot_render = agents[agent_id].calendar.snapshot().render()
                 prompt_snapshot_render = self._prompt_calendar_for_agent(agent, snapshot_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                decision_prompt = build_decision_message(prompt_meeting, prompt_snapshot_render)
+                decision_prompt = append_phase_inbox(
+                    build_decision_message(
+                        prompt_meeting, prompt_snapshot_render, decision_protocol,
+                        communication_policy=communication_policy_by_phase.get("DECISION"),
+                    ),
+                    inbox_data.get("inbox_drained", []),
+                )
                 self._append_event("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id,
                     "calendar_snapshot_render": prompt_snapshot_render,
                     "prompt_sent": decision_prompt,
+                    **inbox_data,
                 })
                 result = agents[agent_id].decide(meeting)
                 total_client_calls[agent_id] += 1
@@ -1547,7 +1544,7 @@ class CalendarGame:
                 # validate and apply cell with retries
                 # Inject meeting cost into schedule actions so apply_cell can store it
                 actions = self._decision_actions(
-                    result.tool_calls, meeting,
+                    separate_messages(result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
                     round_num=round_num, turn_index=turn_index,
                     agent_id=agent_id, attempt=0,
                 )
@@ -1583,10 +1580,11 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
+                            decision_inbox(agents[agent_id])
                             retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
                             total_client_calls[agent_id] += 1
                             actions = self._decision_actions(
-                                retry_result.tool_calls, meeting,
+                                separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
                                 round_num=round_num, turn_index=turn_index,
                                 agent_id=agent_id, attempt=attempt + 1,
                             )
@@ -1631,6 +1629,7 @@ class CalendarGame:
                     })
 
             # --- RESOLUTION PHASE ---
+            enter_phase("RESOLUTION", round_num)
             per_agent_slot: dict[str, int | None] = {}
             for agent_id in meeting["participants"]:
                 found_slot = None
@@ -1729,6 +1728,7 @@ class CalendarGame:
 
             # --- FALLBACK PHASE ---
             if not coordinated and not blocked_slot_violations and self.config.enable_fallback and not self.dry_run:
+                enter_phase("FALLBACK", round_num)
                 self._append_event("fallback_start", data={
                     "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                     "agent_id": None,
@@ -1822,6 +1822,8 @@ class CalendarGame:
             })
 
             if reflection_frequency == "round":
+                if self.config.enable_reflection:
+                    enter_phase("REFLECTION", round_num)
                 round_reflections, reflection_call_counts = await self._run_reflection_measurement(
                     agents=agents,
                     all_agent_ids=all_agent_ids,
@@ -1834,6 +1836,8 @@ class CalendarGame:
                     total_client_calls[agent_id] += count
 
         if reflection_frequency == "environment":
+            if self.config.enable_reflection:
+                enter_phase("REFLECTION", len(scenario["meetings"]))
             game_reflections, reflection_call_counts = await self._run_reflection_measurement(
                 agents=agents,
                 all_agent_ids=all_agent_ids,

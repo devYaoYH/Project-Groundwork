@@ -25,10 +25,15 @@ def build_system_prompt(game_config: dict) -> str:
     num_agents = game_config["num_agents"]
     dm_cap = game_config.get("dm_cap", "unlimited")
     communication_protocol = str(game_config.get("communication_protocol", "dm"))
+    phase_policies = game_config.get("communication_policy_by_phase", {})
+    cheap_talk_policy = phase_policies.get("CHEAP_TALK")
+    budget_parameter = f"Cheap-talk messaging-tool runaway guard per agent per meeting round: {dm_cap}"
+    if cheap_talk_policy is not None:
+        budget_parameter = f"CHEAP_TALK {_communication_budget_text(cheap_talk_policy)}"
 
     all_ids_str = ", ".join(str(a) for a in all_agent_ids)
 
-    return f"""You are responsible for helping your user schedule a series of meetings. Your goal is to MINIMIZE THE TOTAL COST incurred by your user across all meetings. Costs are incurred by rescheduling errands and meetings on your calendar, but not by scheduling the new meeting itself.
+    prompt = f"""You are responsible for helping your user schedule a series of meetings. Your goal is to MINIMIZE THE TOTAL COST incurred by your user across all meetings. Costs are incurred by rescheduling errands and meetings on your calendar, but not by scheduling the new meeting itself.
 
 === RULES ===
 1. You may not double-book meetings: you cannot schedule a meeting in a slot that is already occupied.
@@ -64,7 +69,7 @@ Cost to reschedule: moving errands and meetings will incur a variable penalty co
 You interact with the release by returning a JSON list of tool-call objects.
 
 ** CHEAP_TALK phase — only the active communication tool(s) are valid: **
-{_cheap_talk_tool_spec(communication_protocol)}
+{_cheap_talk_tool_spec(communication_protocol, communication_policy=cheap_talk_policy)}
 
 ** DECISION phase — only these tools are valid: **
 {{"type": "schedule", "meeting_id": <meeting_id (int)>, "slot": <slot_index (int)>}}
@@ -108,7 +113,7 @@ Always respond with a JSON object with two keys:
   "actions"  : a list of tool calls (use [] to pass with no action)
 
 Example:
-{_response_format_example(communication_protocol)}
+{_response_format_example(communication_protocol, communication_policy=cheap_talk_policy)}
 
 Do NOT include any text outside the JSON object.
 
@@ -118,7 +123,7 @@ All agents in this release ({num_agents} total): {all_ids_str}
 
 === ENVIRONMENT PARAMETERS ===
 - Number of calendar slots: {num_slots}
-- Cheap-talk messaging-tool runaway guard per agent per meeting round: {dm_cap}
+- {budget_parameter}
 - Decision retries allowed if validation fails: {decision_retries}
 - Communication protocol: {communication_protocol}
 - One meeting will be scheduled per round, with a random subset of agents as participants.
@@ -126,35 +131,62 @@ All agents in this release ({num_agents} total): {all_ids_str}
 
 Do NOT include any text outside the JSON object.
 """
+    phase_protocols = game_config.get("communication_by_phase", {})
+    if phase_protocols:
+        prompt = prompt.replace(
+            "** DECISION phase — only these tools are valid: **",
+            "** DECISION phase — calendar tools (communication policy listed below): **",
+        ).replace(
+            '   - Only the "reschedule" tool is valid.',
+            '   - The "reschedule" tool is valid; communication follows the phase policy below.',
+        ).replace(
+            '   - Only "schedule" and "reschedule" tools are valid.',
+            '   - "schedule" and "reschedule" are valid; communication follows the phase policy below.',
+        )
+        prompt += "\n=== EFFECTIVE COMMUNICATION POLICY ===\nMessages go only to graph neighbors; participant chat also requires meeting membership.\n"
+        for phase, protocol in phase_protocols.items():
+            policy_text = _phase_communication_text(protocol, communication_policy=phase_policies.get(phase))
+            policy_text = policy_text.replace("Note: no new messages are available at this time. ", "")
+            prompt += f"{phase}: {policy_text}\n"
+    return prompt
 
 
-def _cheap_talk_tool_spec(communication_protocol: str) -> str:
+def _cheap_talk_tool_spec(communication_protocol: str, *, communication_policy: dict | None = None) -> str:
     channels = _communication_channels(communication_protocol)
+    if not channels:
+        return "Communication is disabled. Return [] for actions."
+    graph_scoped = communication_policy is not None
     specs: list[str] = []
     if "dm" in channels:
-        specs.append("""{"type": "dm", "to": <agent_id (int)>, "content": "<message string>"}
-  - Send a private direct message to exactly one agent about this meeting.""")
+        recipient = "graph neighbor" if graph_scoped else "agent"
+        specs.append(f"""{{"type": "dm", "to": <agent_id (int)>, "content": "<message string>"}}
+  - Send a private direct message to exactly one {recipient} about this meeting.""")
     if "participant_groupchat" in channels:
-        specs.append("""{"type": "participant_groupchat", "content": "<message string>"}
-  - Send a message visible only to current meeting participants.""")
+        recipients = "graph neighbors who are current meeting participants" if graph_scoped else "current meeting participants"
+        specs.append(f"""{{"type": "participant_groupchat", "content": "<message string>"}}
+  - Send a message visible only to {recipients}.""")
     if "all_groupchat" in channels:
-        specs.append("""{"type": "all_groupchat", "content": "<message string>"}
-  - Send a message visible to every agent in the task, including non-participants.""")
+        recipients = "graph neighbors excluding yourself, including neighboring non-participants" if graph_scoped else "every agent in the task, including non-participants"
+        specs.append(f"""{{"type": "all_groupchat", "content": "<message string>"}}
+  - Send a message visible to {recipients}.""")
     return "\n\n".join(specs) + "\n  - You may send multiple communication actions per CHEAP_TALK turn."
 
 
-def _response_format_example(communication_protocol: str) -> str:
+def _response_format_example(communication_protocol: str, *, communication_policy: dict | None = None) -> str:
     channels = _communication_channels(communication_protocol)
+    if not channels:
+        return '{"thinking": "Communication is disabled.", "actions": []}'
     if "participant_groupchat" in channels:
         return """{
   "thinking": "Slot 2 is free for me and seems worth proposing to the group.",
   "actions": [{"type": "participant_groupchat", "content": "Slot 2 works for me."}]
 }"""
     if "all_groupchat" in channels:
-        return """{
-  "thinking": "Slot 2 is free for me and seems worth proposing to everyone.",
-  "actions": [{"type": "all_groupchat", "content": "Slot 2 works for me."}]
-}"""
+        recipients = "graph neighbors" if communication_policy is not None else "everyone"
+        return f"""{{
+  "thinking": "Slot 2 is free for me and seems worth proposing to {recipients}.",
+  "actions": [{{"type": "all_groupchat", "content": "Slot 2 works for me."}}]
+}}"""
     return """{
   "thinking": "Agent 1 suggested slot 5 but I have an errand there. Slot 2 is free for both of us.",
   "actions": [{"type": "dm", "to": 1, "content": "Let's use slot 2."}]
@@ -163,6 +195,8 @@ def _response_format_example(communication_protocol: str) -> str:
 
 def _communication_channels(communication_protocol: str) -> set[str]:
     protocol = str(communication_protocol or "dm").lower()
+    if protocol == "none":
+        return set()
     aliases = {
         "dm": {"dm"},
         "direct": {"dm"},
@@ -235,8 +269,24 @@ def _turn_budget_text(turn_index: int | None, max_turns_per_round: int | None) -
     )
 
 
-def _cheap_talk_action_text(communication_protocol: str) -> str:
+def _communication_budget_text(communication_policy: dict) -> str:
+    cap = communication_policy["budget"]["per_agent_per_round"]
+    budget = "unlimited" if cap == -1 else str(cap)
+    return (
+        f"Messaging-tool budget per agent per meeting round: {budget}. "
+        "Usage is shared across channels and phases and does not reset at phase boundaries."
+    )
+
+
+def _cheap_talk_action_text(communication_protocol: str, *, communication_policy: dict | None = None) -> str:
+    if communication_policy is not None:
+        return (
+            _cheap_talk_tool_spec(communication_protocol, communication_policy=communication_policy)
+            + "\n" + _communication_budget_text(communication_policy)
+        )
     channels = _communication_channels(communication_protocol)
+    if not channels:
+        return "Communication is disabled right now. Return [] for actions."
     names = []
     if "dm" in channels:
         names.append('"dm"')
@@ -255,6 +305,8 @@ def build_round_start_message(
     turn_index: int | None = None,
     max_turns_per_round: int | None = None,
     communication_protocol: str = "dm",
+    *,
+    communication_policy: dict | None = None,
 ) -> str:
     """
     User message for turn 0 of CHEAP_TALK (delivered via start_round).
@@ -280,7 +332,7 @@ Duration   : {duration} slot(s)
 You have personally incurred {incurred_penalty} total penalty points from rescheduling or displacement in previous decisions.
 
 ** CURRENT PHASE: CHEAP_TALK **
-{_cheap_talk_action_text(communication_protocol)}
+{_cheap_talk_action_text(communication_protocol, communication_policy=communication_policy)}
 Coordinate with the other participants to agree on a slot for meeting {meeting_id}.
 {_turn_budget_text(turn_index, max_turns_per_round)}
 
@@ -300,6 +352,8 @@ def build_turn_message(
     turn_index: int | None = None,
     max_turns_per_round: int | None = None,
     communication_protocol: str = "dm",
+    *,
+    communication_policy: dict | None = None,
 ) -> str:
     """
     User message for subsequent CHEAP_TALK turns (delivered via turn()).
@@ -309,7 +363,7 @@ def build_turn_message(
         return (
             "No new messages in your inbox.\n\n"
             f"{_turn_budget_text(turn_index, max_turns_per_round)}"
-            f"{_cheap_talk_action_text(communication_protocol)} "
+            f"{_cheap_talk_action_text(communication_protocol, communication_policy=communication_policy)} "
             "CHEAP_TALK phase is still active. Return a JSON object with \"thinking\" and \"actions\" keys. Use [] for actions to pass."
         )
 
@@ -322,16 +376,43 @@ def build_turn_message(
             "all_groupchat": "All-agent groupchat",
             "groupchat": "Groupchat",
         }.get(channel, str(channel))
+        if communication_policy is not None and channel in {"all_groupchat", "groupchat"}:
+            prefix = "Graph-neighbor groupchat"
         lines.append(f"  [{i}] {prefix} from Agent {msg['from']} (meeting {msg['meeting_id']}): {msg['content']}")
     lines.append(
         f"\n{_turn_budget_text(turn_index, max_turns_per_round)}"
-        f"{_cheap_talk_action_text(communication_protocol)} "
+        f"{_cheap_talk_action_text(communication_protocol, communication_policy=communication_policy)} "
         "CHEAP_TALK phase is still active. Return a JSON object with \"thinking\" and \"actions\" keys. Use [] for actions to pass."
     )
     return "\n".join(lines)
 
 
-def build_decision_message(meeting: dict, calendar_render: str) -> str:
+def _phase_communication_text(communication_protocol: str, *, communication_policy: dict | None = None) -> str:
+    budget_text = "" if communication_policy is None else "\n" + _communication_budget_text(communication_policy)
+    if not _communication_channels(communication_protocol):
+        return "No messages may be sent during this phase (no \"dm\" tool).\nNote: no new messages are available at this time. Communication is closed for this phase." + budget_text
+    return (
+        f"Communication tools enabled: {communication_protocol}. Messages are delivered at the end of your turn, "
+        "separately from your calendar cell.\n"
+        + _cheap_talk_tool_spec(communication_protocol, communication_policy=communication_policy).replace("CHEAP_TALK turn", "turn")
+        + budget_text
+    )
+
+
+def append_phase_inbox(prompt: str, messages: list[dict]) -> str:
+    if not messages:
+        return prompt
+    prompt = prompt.replace("Note: no new messages are available at this time. ", "")
+    lines = [prompt, "\nNew messages received:\n"]
+    for index, message in enumerate(messages, start=1):
+        lines.append(
+            f"  [{index}] {message.get('channel', 'dm')} from Agent {message['from']} "
+            f"(meeting {message['meeting_id']}): {message['content']}"
+        )
+    return "\n".join(lines)
+
+
+def build_decision_message(meeting: dict, calendar_render: str, communication_protocol: str = "none", *, communication_policy: dict | None = None) -> str:
     """
     User message for DECISION phase (delivered via decide()).
     """
@@ -341,11 +422,11 @@ def build_decision_message(meeting: dict, calendar_render: str) -> str:
     participants_str = ", ".join(str(p) for p in participants)
     label_lines = _meeting_privacy_context(meeting)
 
+    tools_note = 'Only "schedule" and "reschedule" tools are valid.' if communication_protocol == "none" else 'Calendar tools: "schedule" and "reschedule"; enabled communication tools are listed below.'
     return f"""=== DECISION PHASE ===
 
-Time to commit your scheduling decision. Only "schedule" and "reschedule" tools are valid.
-No messages may be sent during this phase (no "dm" tool).
-Note: no new messages are available at this time. Communication is closed for this phase.
+Time to commit your scheduling decision. {tools_note}
+{_phase_communication_text(communication_protocol, communication_policy=communication_policy)}
 
 ** MEETING TO SCHEDULE **
 Meeting ID : {meeting_id}
@@ -373,13 +454,14 @@ Example:
 """
 
 
-def build_voluntary_reschedule_message(meeting: dict, calendar_render: str) -> str:
+def build_voluntary_reschedule_message(meeting: dict, calendar_render: str, communication_protocol: str = "none", *, communication_policy: dict | None = None) -> str:
     """
     User message for the VOLUNTARY phase: non-participants who received DMs may
     reschedule items on their own calendar to honor coordination commitments.
     """
     meeting_id = meeting["id"]
     participants_str = ", ".join(str(p) for p in meeting["participants"])
+    communication_note = "" if communication_protocol == "none" and communication_policy is None else "\n" + _phase_communication_text(communication_protocol, communication_policy=communication_policy) + "\n"
     return f"""=== VOLUNTARY RESCHEDULE PHASE ===
 
 Meeting {meeting_id} (participants: {participants_str}) is being scheduled this round.
@@ -388,7 +470,7 @@ You are not a participant, but you received coordination messages during CHEAP_T
 If you made any commitments to free up a slot or move items on your calendar, do so now
 using "reschedule" tool calls. You may not use "schedule" in this phase.
 If you have nothing to do, return [] for actions.
-Every "reschedule" action must include a non-empty "justification" explaining why your human user's existing commitment needs to move. Base this on the coordination context you received when possible.
+{communication_note}Every "reschedule" action must include a non-empty "justification" explaining why your human user's existing commitment needs to move. Base this on the coordination context you received when possible.
 
 ** YOUR CALENDAR **
 {calendar_render}
