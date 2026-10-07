@@ -3,8 +3,10 @@
 import argparse
 import asyncio
 import hashlib
+import inspect
 import os
 import threading
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -13,14 +15,14 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from a2a_engine.remote.contract import Hello, JoinRequest, JoinResponse, PROTOCOL_VERSION, TurnCompletion, TurnInvocation
+from a2a_engine.remote.contract import MAX_BODY_BYTES, Hello, JoinRequest, JoinResponse, PROTOCOL_VERSION, TurnCompletion, TurnInvocation
 from a2a_engine.remote.dispatch import LoopbackServer, loopback_url, verify_push
 from .mcp_client import execute
 from .scripted import ScriptedPolicy
 
 
 class ScriptedRuntime:
-    def __init__(self, ticket):
+    def __init__(self, ticket, *, max_cached=128, max_inflight=16, clock=time.monotonic):
         self.ticket = ticket
         self.admission = None
         self.policy = ScriptedPolicy()
@@ -28,6 +30,10 @@ class ScriptedRuntime:
         self.ended = threading.Event()
         self.lock = asyncio.Lock()
         self.completed = OrderedDict()
+        self.inflight = {}
+        self.max_cached = max_cached
+        self.max_inflight = max_inflight
+        self.clock = clock
         self.app = Starlette(routes=[Route("/hello", self.hello, methods=["POST"]),
                                      Route("/turns", self.turn, methods=["POST"])])
 
@@ -59,7 +65,7 @@ class ScriptedRuntime:
 
     async def turn(self, request):
         try:
-            if not self.admission or self.ended.is_set():
+            if not self.admission:
                 raise ValueError()
             body = await request.body()
             identifier, deadline = verify_push(body, request.headers, self.admission.seat_secret)
@@ -72,45 +78,84 @@ class ScriptedRuntime:
         except ValueError:
             return JSONResponse({"code": "invalid_push"}, status_code=401)
         digest = hashlib.sha256(body).hexdigest()
-        async with self.lock:
-            if identifier in self.completed:
-                previous, completion = self.completed[identifier]
-                if previous != digest:
-                    return JSONResponse({"code": "invocation_conflict"}, status_code=409)
-                return JSONResponse(completion)
-            if invocation.kind != "register" and not self.registered:
-                return JSONResponse({"code": "registration_required"}, status_code=409)
-            if invocation.kind == "register" and self.registered:
-                return JSONResponse({"code": "already_registered"}, status_code=409)
-            if invocation.kind == "reflect":
-                return JSONResponse({"code": "unsupported", "message": "reflection requires Phase 3"}, status_code=400)
-            if invocation.kind == "turn" and (not invocation.capability or invocation.phase not in {"CHEAP_TALK", "DECISION"}):
-                return JSONResponse({"code": "unsupported_turn"}, status_code=400)
+        self._expire()
+        if identifier in self.completed:
+            previous, _expiry, response, status = self.completed[identifier]
+            if previous != digest:
+                return JSONResponse({"code": "invocation_conflict"}, status_code=409)
+            return JSONResponse(response, status_code=status)
+        if identifier in self.inflight:
+            previous, task = self.inflight[identifier]
+            if previous != digest:
+                return JSONResponse({"code": "invocation_conflict"}, status_code=409)
+        else:
+            if self.ended.is_set():
+                return JSONResponse({"code": "episode_ended"}, status_code=409)
+            if len(self.inflight) >= self.max_inflight or len(self.completed) + len(self.inflight) >= self.max_cached:
+                return JSONResponse({"code": "invocation_capacity"}, status_code=503)
             remaining = (invocation.deadline - datetime.now(timezone.utc)).total_seconds()
-            if remaining <= 0:
-                return JSONResponse({"code": "expired"}, status_code=401)
-            try:
-                async with asyncio.timeout(remaining):
-                    calls = self.policy.calls(invocation)
-                    if calls:
-                        if not invocation.capability:
-                            raise ValueError("action capability required")
-                        await execute(invocation, calls)
-            except (ValueError, TimeoutError):
-                return JSONResponse({"code": "unsupported_or_expired"}, status_code=400)
-            if invocation.kind == "register":
-                self.registered = True
-            if invocation.kind == "episode_end":
-                self.ended.set()
-            completion = TurnCompletion(turn_id=identifier).model_dump(mode="json")
-            self.completed[identifier] = (digest, completion)
-            while len(self.completed) > 128:
-                self.completed.popitem(last=False)
-            return JSONResponse(completion)
+            expiry = self.clock() + max(0, remaining)
+            task = asyncio.create_task(self._execute(invocation, digest, expiry))
+            self.inflight[identifier] = (digest, task)
+        response, status = await asyncio.shield(task)
+        return JSONResponse(response, status_code=status)
+
+    def _expire(self):
+        for identifier, (_digest, expiry, _response, _status) in list(self.completed.items()):
+            if expiry <= self.clock():
+                del self.completed[identifier]
+
+    async def _execute(self, invocation, digest, expiry):
+        identifier = invocation.turn_id
+        try:
+            async with asyncio.timeout(max(0, expiry - self.clock())):
+                async with self.lock:
+                    response, status = await self._run(invocation)
+        except TimeoutError:
+            response, status = {"code": "expired"}, 408
+        except Exception:
+            response, status = {"code": "execution_failed"}, 500
+        finally:
+            self.inflight.pop(identifier, None)
+        self.completed[identifier] = (digest, expiry, response, status)
+        self._expire()
+        return response, status
+
+    async def _run(self, invocation):
+        if invocation.kind != "register" and not self.registered:
+            return {"code": "registration_required"}, 409
+        if invocation.kind == "register" and self.registered:
+            return {"code": "already_registered"}, 409
+        if invocation.kind == "turn" and (
+                not invocation.capability or invocation.phase not in {"CHEAP_TALK", "DECISION", "VOLUNTARY", "DECISION_RETRY"}
+                or (invocation.phase == "DECISION_RETRY" and invocation.parent_phase not in {"DECISION", "VOLUNTARY"})):
+            return {"code": "unsupported_turn"}, 400
+        reflection = None
+        if invocation.kind == "reflect":
+            hook = getattr(self.policy, "reflect", None)
+            reflection = hook(invocation) if hook else None
+            if inspect.isawaitable(reflection):
+                reflection = await reflection
+        else:
+            calls = self.policy.calls(invocation)
+            if inspect.isawaitable(calls):
+                calls = await calls
+            if calls:
+                if not invocation.capability:
+                    raise ValueError("action capability required")
+                await execute(invocation, calls)
+        completion = TurnCompletion(turn_id=invocation.turn_id, reflection=reflection)
+        if len(completion.model_dump_json().encode()) > MAX_BODY_BYTES:
+            raise ValueError("completion exceeds body limit")
+        if invocation.kind == "register":
+            self.registered = True
+        if invocation.kind == "episode_end":
+            self.ended.set()
+        return completion.model_dump(mode="json"), 200
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run a Phase 2 external scripted seat")
+    parser = argparse.ArgumentParser(description="Run an external scripted seat")
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
     args = parser.parse_args()
     ticket = os.environ.get("A2A_JOIN_TICKET")

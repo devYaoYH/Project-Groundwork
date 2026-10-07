@@ -79,7 +79,7 @@ def test_authentication_failures_never_stage(open_remote_turn, kind):
 
 
 @pytest.mark.parametrize("tool,args,call_id,code", [
-    ("reschedule", {"item_id": 1, "from_slot": 0, "to_slot": 1, "justification": "move"}, "r", "unsupported"),
+    ("reschedule", {"item_id": 1, "from_slot": 0, "to_slot": 1}, "r", "invalid_arguments"),
     ("schedule", {"meeting_id": 0, "slot": 0, "seat": 1}, "r", "invalid_arguments"),
     ("schedule", {"meeting_id": 0, "slot": "0"}, "r", "invalid_arguments"),
     ("schedule", {"meeting_id": 0, "slot": 0}, None, "missing_call_id"),
@@ -149,7 +149,7 @@ def test_call_caps_include_invalid_and_read_only_calls(open_remote_turn):
         assert asyncio.run(call(harness, "env", "schedule", {"meeting_id": 0, "slot": 0}, call_id=None))["code"] == "missing_call_id"
     assert asyncio.run(call(harness, "env", "get_observation", call_id="read"))["code"] == "call_cap"
     assert asyncio.run(call(harness, "env", "schedule", {"meeting_id": 0, "slot": 0}, call_id="write"))["code"] == "call_cap"
-    assert len(recorder.records) == 3 and not recorder.cache
+    assert len(recorder.records) == 4 and not recorder.cache
 
 
 def test_closed_capability_rejected_in_existing_sdk_connection(open_remote_turn):

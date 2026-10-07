@@ -57,6 +57,7 @@ class TurnInvocation(WireModel):
     turn_id: str
     kind: Literal["register", "round_start", "turn", "reflect", "episode_end"]
     phase: str | None = None
+    parent_phase: str | None = None
     deadline: datetime
     observation: dict = Field(default_factory=dict)
     prompt: str | None = None

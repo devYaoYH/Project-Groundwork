@@ -10,12 +10,66 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 import uvicorn
+from mcp.shared.exceptions import McpError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from a2a_engine.llm.retry import RetryPolicy, compute_delay
 from .contract import MAX_BODY_BYTES, TurnCompletion
+
+DELIVERY_POLICY = RetryPolicy(max_attempts=3, backoff_base=0.05, backoff_max=0.25)
+
+
+def delivery_retryable(exc):
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(delivery_retryable(item) for item in exc.exceptions)
+    if isinstance(exc, httpx.HTTPStatusError):
+        return 500 <= exc.response.status_code < 600
+    if isinstance(exc, McpError):
+        return exc.error.code == httpx.codes.REQUEST_TIMEOUT
+    return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError,
+                            anyio.EndOfStream, anyio.BrokenResourceError, anyio.ClosedResourceError))
+
+
+class DeliveryFailure(Exception):
+    def __init__(self, closed_by, attempts):
+        super().__init__(closed_by)
+        self.closed_by = closed_by
+        self.attempts = attempts
+
+
+async def deliver_with_retry(fn, *, deadline, policy=DELIVERY_POLICY, clock=time.monotonic,
+                             sleep=asyncio.sleep, on_attempt=None):
+    """Bound requests and backoff by one monotonic deadline; never log credentials."""
+    attempts = 0
+    for index in range(policy.max_attempts):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise DeliveryFailure("deadline", attempts)
+        attempts += 1
+        if on_attempt:
+            on_attempt(attempts)
+        try:
+            async with asyncio.timeout(remaining):
+                result = await fn(remaining)
+                if clock() >= deadline:
+                    raise TimeoutError("delivery deadline exceeded")
+                return result
+        except Exception as exc:
+            if clock() >= deadline:
+                raise DeliveryFailure("deadline", attempts) from None
+            if not delivery_retryable(exc) or index == policy.max_attempts - 1:
+                raise DeliveryFailure("unreachable", attempts) from None
+            remaining = max(0, deadline - clock())
+            try:
+                async with asyncio.timeout(remaining):
+                    await sleep(min(compute_delay(index, exc, policy), remaining))
+            except TimeoutError:
+                raise DeliveryFailure("deadline", attempts) from None
+    raise DeliveryFailure("unreachable", attempts)
 
 
 def loopback_url(url: str) -> str:
@@ -51,9 +105,11 @@ def verify_push(body: bytes, headers, key: str):
         raise ValueError("invalid or expired push signature") from None
 
 
-async def post_signed(url, model, key):
+async def post_signed(url, model, key, *, timeout=None):
     loopback_url(url)
     remaining = (model.deadline - datetime.now(timezone.utc)).total_seconds()
+    if timeout is not None:
+        remaining = min(remaining, timeout)
     if remaining <= 0:
         raise TimeoutError("invocation expired")
     body = model.model_dump_json().encode()
@@ -132,12 +188,15 @@ class LoopbackServer:
         return self
 
     def run(self, coroutine, timeout=130):
-        future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+        future = self.submit(coroutine)
         try:
             return future.result(timeout)
         except BaseException:
             future.cancel()
             raise
+
+    def submit(self, coroutine):
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop)
 
     def __exit__(self, *_):
         self.server.should_exit = True
@@ -148,13 +207,62 @@ class LoopbackServer:
 
 
 class TurnDispatcher:
-    def __init__(self, io: LoopbackServer):
+    def __init__(self, io: LoopbackServer, *, policy=DELIVERY_POLICY, clock=time.monotonic,
+                 request_timeout_s=None):
         self.io = io
+        self.policy = policy
+        self.clock = clock
+        self.request_timeout_s = request_timeout_s
 
-    def dispatch(self, seat, invocation):
-        remaining = max(0.01, (invocation.deadline - datetime.now(timezone.utc)).total_seconds())
-        body = self.io.run(post_signed(seat.callback_url + "/turns", invocation, seat.secret), remaining + 1)
-        completion = TurnCompletion.model_validate_json(body)
-        if completion.turn_id != invocation.turn_id or completion.reflection is not None:
-            raise ValueError("invalid completion for Phase 2 invocation")
+    async def _deliver(self, seat, invocation, deadline, recorder=None):
+        def attempt(count):
+            if recorder:
+                with recorder.lock:
+                    if not recorder.closed:
+                        recorder.attempts = count
+
+        async def request(remaining):
+            body = await post_signed(seat.callback_url + "/turns", invocation, seat.secret,
+                                     timeout=min(remaining, self.request_timeout_s) if self.request_timeout_s else remaining)
+            completion = TurnCompletion.model_validate_json(body)
+            if completion.turn_id != invocation.turn_id or (invocation.kind != "reflect" and completion.reflection is not None):
+                raise ValueError("invalid completion")
+            return completion
+
+        try:
+            completion = await deliver_with_retry(request, deadline=deadline, clock=self.clock,
+                                                  policy=self.policy, on_attempt=attempt)
+        except DeliveryFailure as exc:
+            if recorder:
+                recorder.close(exc.closed_by)
+            raise
+        if recorder:
+            recorder.complete(completion)
         return completion
+
+    def dispatch(self, seat, invocation, recorder=None, *, deadline=None):
+        if deadline is None:
+            deadline = recorder.deadline if recorder else self.clock() + max(
+                0, (invocation.deadline - datetime.now(timezone.utc)).total_seconds())
+        future = self.io.submit(self._deliver(seat, invocation, deadline, recorder))
+        try:
+            if recorder is None:
+                try:
+                    return future.result(max(0, deadline - self.clock()))
+                except TimeoutError:
+                    raise DeliveryFailure("deadline", 0) from None
+            while not recorder.closed:
+                recorder.service_work()
+                if recorder.remaining() <= 0:
+                    recorder.close("deadline")
+                elif future.done():
+                    try:
+                        recorder.complete(future.result())
+                    except DeliveryFailure as exc:
+                        recorder.close(exc.closed_by)
+                if not recorder.closed:
+                    recorder.closed_event.wait(min(0.01, recorder.remaining()))
+            return recorder.completion
+        finally:
+            if not future.done():
+                future.cancel()

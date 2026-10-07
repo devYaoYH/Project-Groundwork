@@ -13,7 +13,7 @@ from pathlib import Path
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from a2a_engine.comm import CHANNELS, CommRouter, RoutingContext, Topology, canonical_channel
 from a2a_engine.remote.seats import validate_runtime
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
 from calendar_game.clients import (
@@ -28,11 +28,11 @@ from calendar_game.clients import (
 )
 from calendar_game.prompts import (
     append_phase_inbox,
+    build_cheap_talk_prompt,
     build_decision_message,
     build_reflection_message,
-    build_round_start_message,
+    build_retry_message,
     build_system_prompt,
-    build_turn_message,
     build_voluntary_reschedule_message,
 )
 from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeting_for_llm
@@ -92,6 +92,22 @@ class CalendarGameConfig(EpisodeConfigBase):
     sd_model: dict[int, float] = Field(default_factory=dict)
     representation_elo_base: float = 1500.0
     representation_elo_scale: float = 400.0
+    turn_timeout_s: float | dict[str, float] = 120.0
+
+    @field_validator("turn_timeout_s")
+    @classmethod
+    def valid_turn_timeouts(cls, value):
+        if isinstance(value, dict):
+            allowed = {"CHEAP_TALK", "VOLUNTARY", "DECISION", "DECISION_RETRY", "REFLECTION",
+                       "register", "round_start", "episode_end"}
+            if set(value) - allowed:
+                raise ValueError("unknown turn timeout phase")
+            values = value.values()
+        else:
+            values = [value]
+        if any(not math.isfinite(timeout) or timeout <= 0 for timeout in values):
+            raise ValueError("turn timeouts must be finite and positive")
+        return value
 
 
 def _as_float(value: object, default: float = 0.0) -> float:
@@ -386,8 +402,6 @@ class CalendarGame:
                 raise ValueError("Phase 2 external seats require a privately provisioned runtime_context")
             if not runtime_context.episode.active:
                 raise ValueError("provisioned episode attempt has been closed")
-            if self.config.enable_reflection or self.config.decision_retries:
-                raise ValueError("remote reflection and decision retries require Phase 3; disable reflection and set decision_retries=0")
 
     def _participant_id_for_agent(self, agent_id: int) -> str:
         """Use the same seat-to-identity mapping the pinned roster records."""
@@ -453,7 +467,8 @@ class CalendarGame:
             agent.calendar.meeting_participants = meeting_participants
 
     def _prompt_meeting_for_agent(self, agent: Agent, meeting: dict, round_num: int) -> dict:
-        if isinstance(agent.client, LLMClient):
+        client = getattr(agent.client, "delegate", agent.client)
+        if isinstance(client, LLMClient) or getattr(client, "private_prompts", False):
             return hydrate_meeting_for_llm(
                 meeting,
                 stable_key=f"agent:{agent.agent_id}:round:{round_num}",
@@ -461,7 +476,8 @@ class CalendarGame:
         return meeting
 
     def _prompt_calendar_for_agent(self, agent: Agent, calendar_render: str, round_num: int) -> str:
-        if isinstance(agent.client, LLMClient):
+        client = getattr(agent.client, "delegate", agent.client)
+        if isinstance(client, LLMClient) or getattr(client, "private_prompts", False):
             return hydrate_calendar_render_for_llm(
                 calendar_render,
                 stable_key=f"agent:{agent.agent_id}:round:{round_num}",
@@ -843,12 +859,12 @@ class CalendarGame:
         """Construct and calendar-initialize agents from scenario. Separated for testability."""
         agents: list[Agent] = []
         external = set(self.runtime_context.episode.seats) if self.runtime_context else set()
-        if any(not external.issubset(set(meeting["participants"])) for meeting in scenario["meetings"]):
-            raise ValueError("remote non-participant/voluntary turns require Phase 3")
         for agent_id in range(self.config.num_agents):
             if agent_id in external:
                 from calendar_game.remote import RemoteSeatClient
-                client = RemoteSeatClient(self.runtime_context, agent_id, self.router)
+                client = RemoteSeatClient(self.runtime_context, agent_id, self.router,
+                                          turn_timeout_s=self.config.turn_timeout_s,
+                                          private_prompts=self._agent_spec_for(agent_id).get("type", "llm") in {"llm", "dspy"})
                 self._remote_clients[agent_id] = client
             elif self.dry_run:
                 client: BaseClient = ScriptedClient()
@@ -1082,6 +1098,19 @@ class CalendarGame:
         })
 
         # 4. Register all agents
+        def stopped():
+            self._append_event("game_stopped", data={"reason": "seat_unavailable", "phase": "GAME_START"})
+            return EpisodeTrace(episode_uid=str(uuid.uuid4()), config=self.config,
+                                events=self.events.all(), stopped=True,
+                                final_state={"calendars": [agent.calendar.slots for agent in agents],
+                                             "rating_context": build_calendar_rating_context(scenario)}, metrics={})
+
+        if self.runtime_context:
+            try:
+                for seat in self.runtime_context.episode.seats:
+                    self.runtime_context.episode.wait_ready(seat)
+            except TimeoutError:
+                return stopped()
         all_agent_ids = list(range(self.config.num_agents))
         communication_policy_by_phase = (
             {phase: self.topology.effective(phase=phase, round=0).as_dict()
@@ -1127,7 +1156,12 @@ class CalendarGame:
                 ),
                 communication_policy_by_phase=communication_policy_by_phase,
             )
-            agent.register(agent_id, game_config)
+            try:
+                agent.register(agent_id, game_config)
+            except TimeoutError:
+                if agent_id in self._remote_clients:
+                    return stopped()
+                raise
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
                 dataclasses.asdict(game_config)
             )
@@ -1336,6 +1370,35 @@ class CalendarGame:
             agent.client.observe_messages(messages)
             return {"inbox_drained": messages}
 
+        def retry_decision(agent_id, parent_phase, attempt, conflict):
+            agent = agents[agent_id]
+            inbox_data = decision_inbox(agent)
+            remote = self._remote_clients.get(agent_id)
+            data = {
+                "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
+                "parent_phase": parent_phase, "attempt": attempt,
+                "max_attempts": self.config.decision_retries, "conflict": conflict,
+                "agent_id": agent_id,
+                "calendar_snapshot_render": self._prompt_calendar_for_agent(agent, agent.calendar.snapshot().render(), round_num),
+                "prompt_sent": append_phase_inbox(build_retry_message(attempt, self.config.decision_retries, conflict,
+                                                                        parent_phase=parent_phase),
+                                                   inbox_data.get("inbox_drained", [])),
+                **inbox_data,
+            }
+            if remote:
+                self._append_event("decide_start", data=data)
+            result = agent.client.retry_decide(attempt, self.config.decision_retries, conflict)
+            if remote:
+                self._append_event("decide_end", data={
+                    "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
+                    "parent_phase": parent_phase, "attempt": attempt, "agent_id": agent_id,
+                    "tool_calls": result.tool_calls, "text": result.text, "thinking": result.thinking,
+                    "usage": result.usage.__dict__ if result.usage else None,
+                    "latency_ms": result.latency_ms, "raw_api_response": result.raw,
+                    "retry_count": result.retry_count, "status": "pending",
+                })
+            return result
+
         # 6. Main loop — one round per meeting
         for round_num, meeting in enumerate(scenario["meetings"]):
             for agent_id, agent in enumerate(agents):
@@ -1387,25 +1450,13 @@ class CalendarGame:
                     calendar_render = agents[agent_id].calendar.render()
                     prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                     prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                    turn_prompt = (
-                        build_round_start_message(
-                            prompt_meeting,
-                            prompt_calendar_render,
-                            round_num,
-                            incurred_penalty=displacement_cost[agent_id],
-                            turn_index=turn_index,
-                            max_turns_per_round=self.config.max_turns_per_round,
-                            communication_protocol=communication_protocol,
-                            communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
-                        )
-                        if turn_index == 0
-                        else build_turn_message(
-                            inbox_snapshot,
-                            turn_index,
-                            self.config.max_turns_per_round,
-                            communication_protocol=communication_protocol,
-                            communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
-                        )
+                    turn_prompt = build_cheap_talk_prompt(
+                        prompt_meeting, prompt_calendar_render, round_num, inbox_snapshot,
+                        first_turn=agent_id not in round_turn_agent_ids,
+                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
+                        max_turns_per_round=self.config.max_turns_per_round,
+                        communication_protocol=communication_protocol,
+                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                     )
                     self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
@@ -1459,10 +1510,11 @@ class CalendarGame:
                     inbox_snapshot = list(agents[agent_id].inbox_queue)
                     calendar_render = agents[agent_id].calendar.render()
                     prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
-                    turn_prompt = build_turn_message(
-                        inbox_snapshot,
-                        turn_index,
-                        self.config.max_turns_per_round,
+                    turn_prompt = build_cheap_talk_prompt(
+                        self._prompt_meeting_for_agent(agent, meeting, round_num),
+                        prompt_calendar_render, round_num, inbox_snapshot, first_turn=True,
+                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
+                        max_turns_per_round=self.config.max_turns_per_round,
                         communication_protocol=communication_protocol,
                         communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                     )
@@ -1568,8 +1620,7 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            decision_inbox(agents[agent_id])
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            retry_result = retry_decision(agent_id, "VOLUNTARY", attempt + 1, conflict)
                             total_client_calls[agent_id] += 1
                             actions = [
                                 a for a in separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
@@ -1653,8 +1704,7 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            decision_inbox(agents[agent_id])
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            retry_result = retry_decision(agent_id, "DECISION", attempt + 1, conflict)
                             total_client_calls[agent_id] += 1
                             actions = self._decision_actions(
                                 separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,

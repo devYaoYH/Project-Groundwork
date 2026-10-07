@@ -93,9 +93,8 @@ def test_concurrent_duplicate_push_executes_once(remote_harness):
     assert len(harness.invocations) == 1
 
 
-@pytest.mark.parametrize("kind,phase,capability", [("reflect", "REFLECTION", None), ("turn", "VOLUNTARY", "cap"),
-                                                   ("turn", "DECISION_RETRY", "cap"), ("turn", "CHEAP_TALK", None)])
-def test_phase3_invocations_fail_explicitly(remote_harness, kind, phase, capability):
+@pytest.mark.parametrize("kind,phase,capability", [("turn", "DECISION_RETRY", "cap"), ("turn", "CHEAP_TALK", None)])
+def test_invalid_action_invocations_fail_explicitly(remote_harness, kind, phase, capability):
     harness = remote_harness()
     value = invocation(harness)
     assert push(harness, value).status_code == 200

@@ -1,13 +1,15 @@
 """Separate SDK clients for env and comm with stable per-invocation call IDs."""
 
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import asyncio
+import time
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from a2a_engine.remote.dispatch import loopback_url
+from a2a_engine.remote.dispatch import loopback_url, deliver_with_retry
 
 
 @asynccontextmanager
@@ -26,15 +28,13 @@ async def execute(invocation, calls):
     remaining = (invocation.deadline - datetime.now(timezone.utc)).total_seconds()
     if remaining <= 0:
         raise TimeoutError("invocation expired")
-    async with AsyncExitStack() as stack:
-        sessions = {}
-        for endpoint in dict.fromkeys(target for target, _, _ in calls):
-            session = await stack.enter_async_context(connect(invocation.mcp[endpoint], invocation.capability,
-                                                              timeout=remaining))
-            await session.list_tools()
-            sessions[endpoint] = session
+    deadline = time.monotonic() + remaining
+    async with asyncio.timeout(remaining):
         for index, (endpoint, name, arguments) in enumerate(calls):
-            result = await sessions[endpoint].call_tool(name, arguments,
-                                                       meta={"a2a/call_id": f"{invocation.turn_id}:{index}"})
-            outcomes.append(result.structuredContent)
+            async def call(timeout):
+                async with connect(invocation.mcp[endpoint], invocation.capability, timeout=timeout) as session:
+                    result = await session.call_tool(name, arguments,
+                                                     meta={"a2a/call_id": f"{invocation.turn_id}:{index}"})
+                    return result.structuredContent
+            outcomes.append(await deliver_with_retry(call, deadline=deadline))
     return outcomes

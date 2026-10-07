@@ -347,6 +347,23 @@ Return a JSON object with "thinking" and "actions" keys. "actions" should be a l
 """
 
 
+def build_cheap_talk_prompt(meeting, calendar_render, round_num, messages, *, first_turn,
+                            incurred_penalty=0, turn_index=None, max_turns_per_round=None,
+                            communication_protocol="dm", communication_policy=None):
+    turn = build_turn_message(messages, turn_index, max_turns_per_round,
+                              communication_protocol, communication_policy=communication_policy)
+    if not first_turn:
+        return turn
+    if meeting is None:
+        return f"=== YOUR CALENDAR ===\n{calendar_render}\n\n{turn}"
+    prompt = build_round_start_message(
+        meeting, calendar_render, round_num, incurred_penalty=incurred_penalty,
+        turn_index=turn_index, max_turns_per_round=max_turns_per_round,
+        communication_protocol=communication_protocol, communication_policy=communication_policy,
+    )
+    return prompt + "\n\n" + turn if messages else prompt
+
+
 def build_turn_message(
     messages: list[dict],
     turn_index: int | None = None,
@@ -520,11 +537,12 @@ def _meeting_privacy_context(meeting: dict) -> str:
     return "\n".join(lines)
 
 
-def build_retry_message(attempt: int, max_attempts: int, conflict: str) -> str:
+def build_retry_message(attempt: int, max_attempts: int, conflict: str, *, parent_phase: str = "DECISION") -> str:
     """
     User message when a decision cell fails validation.
     """
-    return f"""[RETRY {attempt}/{max_attempts}]
+    authority = "VOLUNTARY retry: only reschedule is permitted; do not use schedule.\n" if parent_phase == "VOLUNTARY" else ""
+    return f"""{authority}[RETRY {attempt}/{max_attempts}]
 
 Your previous decision cell was rejected due to the following conflict:
 

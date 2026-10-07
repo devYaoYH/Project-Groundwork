@@ -1,6 +1,7 @@
 """Episode registry and two fixed MCP surfaces sharing one app lifespan."""
 
 import secrets
+import asyncio
 import threading
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -119,7 +120,8 @@ class EnvironmentApp:
                 if f"{endpoint}.{name}" not in claims.allowed_tools:
                     raise AuthorizationError("tool is not granted")
                 meta = request_context.meta.model_dump() if request_context.meta else {}
-                outcome = recorder.call(self.specs.get((endpoint, name)), arguments, meta.get("a2a/call_id"))
+                outcome = await asyncio.to_thread(recorder.call, self.specs.get((endpoint, name)),
+                                                  arguments, meta.get("a2a/call_id"))
             except AuthorizationError:
                 outcome = ToolOutcome(status="rejected", resolves="read_only", code="unauthorized",
                                       reason="capability is not authorized for this call")

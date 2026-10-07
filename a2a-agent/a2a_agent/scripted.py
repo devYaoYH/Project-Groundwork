@@ -29,10 +29,14 @@ class ScriptedPolicy:
             return []
         meeting = observation["meeting"]
         free = free_slots(observation["calendar_render"])
-        if invocation.phase == "DECISION":
-            return [("env", "schedule", {"meeting_id": meeting["id"], "slot": free[0]})] if free else []
-        if invocation.phase != "CHEAP_TALK":
-            raise ValueError("Phase 2 scripted runtime supports CHEAP_TALK and DECISION only")
+        phase = invocation.parent_phase if invocation.phase == "DECISION_RETRY" else invocation.phase
+        if phase == "DECISION":
+            index = observation.get("attempt", 0)
+            return [("env", "schedule", {"meeting_id": meeting["id"], "slot": free[index]})] if index < len(free) else []
+        if phase == "VOLUNTARY":
+            return []
+        if phase != "CHEAP_TALK":
+            raise ValueError("unsupported scripted phase")
         if self.turned:
             return []
         self.turned = True
