@@ -68,6 +68,8 @@ class ParticipantConfig(_StrictModel):
     role: str | None = None
     kind: Literal["llm", "scripted", "human"] = "llm"
     binding: str | None = None
+    runtime: Literal["in_process", "local_process", "external"] = "in_process"
+    harness: Literal["scripted", "structured_output"] | None = None
 
 
 class UnitsConfig(_StrictModel):

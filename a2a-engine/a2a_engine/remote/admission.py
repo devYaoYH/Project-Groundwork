@@ -28,7 +28,8 @@ async def join(context, request, base_url):
             raise ValueError("join deadline passed")
         seat.secret = secrets.token_urlsafe(32)
         seat.callback_url = callback
-        seat.agent_info = request.agent_info
+        seat.agent_info = {key: value.replace(request.join_ticket, "[redacted]").replace(callback, "[redacted]")
+                           for key, value in request.agent_info.items()}
         root = f"{base_url}/episodes/{context.episode_id}"
         return JoinResponse(episode_id=context.episode_id, seat=seat.seat, seat_secret=seat.secret,
                             mcp={name: f"{root}/{name}/mcp" for name in ("env", "comm")},

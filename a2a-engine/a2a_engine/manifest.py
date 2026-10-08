@@ -41,7 +41,9 @@ def config_hash(config: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-_SECRET_KEYS = {"api_key", "apikey", "secret", "password", "token"}
+_SECRET_KEYS = {"api_key", "apikey", "secret", "password", "token", "join_ticket", "seat_secret",
+                "capability", "authorization", "signing_key", "join_url", "callback_url", "ready_url",
+                "provisioning_dir", "mcp_base", "mcp_urls"}
 
 
 def redact_config(config: Any) -> Any:
@@ -100,6 +102,10 @@ class ParticipantManifest(BaseModel):
     api_format: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    runtime: str = "in_process"
+    protocol_version: str | None = None
+    harness: str | None = None
+    agent_info: dict = Field(default_factory=dict)
 
 
 class StorageManifest(BaseModel):
@@ -150,6 +156,7 @@ class EpisodeManifest(BaseModel):
     # --- agents ---
     num_agents: int | None = None
     agents: list[ParticipantManifest] = Field(default_factory=list)
+    adapter_bindings: dict = Field(default_factory=dict)
 
     # --- storage ---
     local_trace_path: str | None = None
@@ -201,6 +208,7 @@ class EpisodeManifest(BaseModel):
             release_content_sha256=release.get("content_sha256"),
             num_agents=config.get("num_agents"),
             agents=agents,
+            adapter_bindings=release.get("adapter_bindings", {}),
         )
 
 
@@ -215,5 +223,7 @@ def _agent_fields(spec: Any) -> dict[str, Any]:
     """Pull the behavior-relevant fields off an agent spec (dict or model)."""
     if not isinstance(spec, dict):
         spec = getattr(spec, "model_dump", lambda: {})()
-    keep = ("type", "model", "api_format", "temperature", "max_tokens")
+    keep = ("type", "model", "api_format", "temperature", "max_tokens", "runtime", "harness")
+    if spec.get("runtime") == "external":
+        keep = ("type", "runtime", "harness")
     return {k: spec.get(k) for k in keep if spec.get(k) is not None}

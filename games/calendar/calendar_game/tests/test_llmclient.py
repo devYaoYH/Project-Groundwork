@@ -646,7 +646,6 @@ def test_reflection_missing_binary_alternative_uses_top_logprob_floor():
 def test_logged_and_remote_prompts_match_private_model_payloads_including_activation_and_retry(remote_harness, monkeypatch):
     import copy
     import json
-    import calendar_game.game as module
     from calendar_game.game import CalendarGame
 
     models = {}
@@ -680,7 +679,7 @@ def test_logged_and_remote_prompts_match_private_model_payloads_including_activa
         models[seat] = Model(seat)
         return models[seat]
 
-    monkeypatch.setattr(module, "make_llm_client", factory)
+    monkeypatch.setattr("a2a_engine.llm.factory.make_llm_client", factory)
     cfg = {"num_agents": 3, "num_slots": 3, "decision_retries": 1, "max_turns_per_round": 1,
            "enable_reflection": False, "enable_fallback": False,
            "agents": [{"type": "llm", "model": f"fake-{seat}"} for seat in range(3)]}

@@ -4,7 +4,7 @@ import secrets
 import asyncio
 import threading
 import time
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -55,6 +55,83 @@ class EpisodeRegistry:
                 seat.ticket = ""
                 seat.ready.clear()
             del self._episodes[context.episode_id]
+
+
+class ManagedEpisode:
+    def __init__(self, manager, episode):
+        self.manager = manager
+        self.environment = manager.environment
+        self.io = manager.io
+        self.episode = episode
+        self.children = []
+        self.descriptors = []
+        self.closed = False
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        def forget():
+            with self.manager.lock:
+                self.manager.episodes.discard(self)
+
+        with ExitStack() as cleanup:
+            cleanup.callback(forget)
+            for path in self.descriptors:
+                cleanup.callback(path.unlink, missing_ok=True)
+            for child in self.children:
+                cleanup.callback(child.close)
+            cleanup.callback(self.environment.registry.unregister, self.episode)
+
+
+class RuntimeManager:
+    """Own one app and its attempt-scoped provisioning outside serialized config."""
+
+    def __init__(self, specs, *, provisioning_dir=None):
+        from pathlib import Path
+        from .dispatch import LoopbackServer
+        self.environment = EnvironmentApp(specs)
+        self.io = LoopbackServer(self.environment.app)
+        self.provisioning_dir = Path(provisioning_dir) if provisioning_dir else None
+        self.episodes = set()
+        self.lock = threading.RLock()
+
+    def __enter__(self):
+        self.io.__enter__()
+        return self
+
+    def provision(self, config, *, scripted=False):
+        import uuid
+        from .seats import LocalProcessLauncher, validate_runtimes, write_descriptor
+        specs = validate_runtimes(config, scripted=scripted)
+        remote = {index: spec for index, spec in enumerate(specs) if spec.get("runtime", "in_process") != "in_process"}
+        if not remote:
+            return None
+        if any(spec["runtime"] == "external" for spec in remote.values()) and self.provisioning_dir is None:
+            raise ValueError("external seats require a private provisioning_dir")
+        episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
+                                                     join_timeout_s=config.get("join_timeout_s", 10))
+        runtime = ManagedEpisode(self, episode)
+        with self.lock:
+            self.episodes.add(runtime)
+        try:
+            for index, spec in remote.items():
+                seat = episode.seats[index]
+                url = f"{self.io.base_url}/episodes/{episode.episode_id}/join"
+                if spec["runtime"] == "local_process":
+                    runtime.children.append(LocalProcessLauncher(url, seat.ticket))
+                else:
+                    runtime.descriptors.append(write_descriptor(self.provisioning_dir, episode, seat, url))
+            return runtime
+        except BaseException:
+            runtime.close()
+            raise
+
+    def __exit__(self, *args):
+        with ExitStack() as cleanup:
+            cleanup.callback(self.io.__exit__, *args)
+            for runtime in list(self.episodes):
+                cleanup.callback(runtime.close)
 
 
 class EnvironmentApp:

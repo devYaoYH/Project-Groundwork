@@ -13,6 +13,9 @@ from pathlib import Path
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
 from a2a_engine.comm import CHANNELS, CommRouter, RoutingContext, Topology, canonical_channel
 from a2a_engine.remote.seats import validate_runtime
+from a2a_engine.adapters import adapters, resolve_bindings
+from a2a_engine.manifest import redact_config
+from calendar_game.resolve import resolve_config
 from pydantic import Field, field_validator
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
@@ -44,7 +47,6 @@ from calendar_game.calendar import Calendar, apply_cell, validate_cell
 from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible, find_fallback_slot
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import cost_by_agent_for_assignments, solve_greedy, solve_optimal
-from a2a_engine.llm.factory import make_llm_client
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +73,7 @@ class CalendarGameConfig(EpisodeConfigBase):
     enable_fallback: bool = True
     fallback_max_depth: int = 3
     communication_protocol: str | dict[str, bool] = "dm"
+    communication_topology: str | None = None
     enable_reflection: bool = True
     reflection_frequency: str = "round"
     reflection_max_parallelism: int | None = 20
@@ -93,6 +96,7 @@ class CalendarGameConfig(EpisodeConfigBase):
     representation_elo_base: float = 1500.0
     representation_elo_scale: float = 400.0
     turn_timeout_s: float | dict[str, float] = 120.0
+    join_timeout_s: float = Field(default=10, gt=0, allow_inf_nan=False)
 
     @field_validator("turn_timeout_s")
     @classmethod
@@ -375,8 +379,11 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 class CalendarGame:
     """Calendar scheduling benchmark environment."""
 
-    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None) -> None:
-        self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
+    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None, runtime_manager=None) -> None:
+        authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
+        self.config = CalendarGameConfig(**resolve_config(authored))
+        from a2a_engine.remote.seats import validate_runtimes
+        validate_runtimes(self.config.model_dump(), scripted=dry_run)
         self.topology = Topology.from_communication(
             getattr(self.config, "communication", None),
             seats=list(range(self.config.num_agents)),
@@ -385,23 +392,53 @@ class CalendarGame:
             communication_protocol=self.config.communication_protocol,
             dm_cap=self.config.dm_cap,
         )
-        self.router = CommRouter(self.topology)
+        self.adapter_bindings = resolve_bindings(authored, [self._agent_spec_for(seat) for seat in range(self.config.num_agents)])
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
         self.runtime_context = runtime_context
+        self.runtime_manager = runtime_manager
+        self._owned_manager = None
         self._remote_clients = {}
         self._remote_budget_usage = {}
         external = {
             seat for seat in range(self.config.num_agents)
-            if validate_runtime(self._agent_spec_for(seat)) == "external"
+            if validate_runtime(self._agent_spec_for(seat)) != "in_process"
         }
         if runtime_context is not None and set(runtime_context.episode.seats) != external:
             raise ValueError("provisioned external seats do not match configured seats")
         if external:
-            if runtime_context is None:
-                raise ValueError("Phase 2 external seats require a privately provisioned runtime_context")
-            if not runtime_context.episode.active:
+            if runtime_context is not None and not runtime_context.episode.active:
                 raise ValueError("provisioned episode attempt has been closed")
+        self.router = (CommRouter(self.topology) if external and runtime_context is None else
+                       adapters.create("communication", self.adapter_bindings["communication"],
+                                       {"topology": self.topology, "runtime_context": runtime_context}))
+
+    def _ensure_runtime(self):
+        if self.runtime_context is not None or self.adapter_bindings["communication"] != "mcp.http":
+            return
+        if self.runtime_manager is None:
+            from a2a_engine.remote.server import RuntimeManager
+            from calendar_game.remote import CALENDAR_TOOLS
+            import os
+            self._owned_manager = RuntimeManager(CALENDAR_TOOLS, provisioning_dir=os.environ.get("A2A_PROVISIONING_DIR"))
+            self.runtime_manager = self._owned_manager.__enter__()
+        self.runtime_context = self.runtime_manager.provision(self.config.model_dump(), scripted=self.dry_run)
+        self.router = adapters.create("communication", "mcp.http",
+                                      {"topology": self.topology, "runtime_context": self.runtime_context})
+
+    def _runtime_trace(self, trace):
+        from a2a_engine.schemas import ReleaseReference
+        release = getattr(self.config, "release", None)
+        release = release.model_dump() if hasattr(release, "model_dump") else dict(release or {})
+        if not release:
+            release = {"id": DECLARATION.id, "release": DECLARATION.version,
+                       "content_sha256": DECLARATION.content_sha256(),
+                       "declared_adapter_bindings": DECLARATION.adapter_bindings.model_dump()}
+        if "adapter_bindings" in release:
+            release.setdefault("declared_adapter_bindings", release["adapter_bindings"])
+        release.update(adapter_bindings=self.adapter_bindings)
+        trace.release = ReleaseReference.model_validate(release)
+        return trace
 
     def _participant_id_for_agent(self, agent_id: int) -> str:
         """Use the same seat-to-identity mapping the pinned roster records."""
@@ -422,7 +459,12 @@ class CalendarGame:
             elif event_type in {"turn_end", "decide_end"}:
                 payload.update(remote.lifecycle)
             elif event_type == "agent_registered":
-                payload.update(runtime="external", protocol_version="a2a-turns/1", agent_info=remote.seat.agent_info)
+                payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version="a2a-turns/1",
+                               agent_info={"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
+                if payload["runtime"] == "local_process":
+                    payload["harness"] = "scripted" if self.dry_run else self._agent_spec_for(agent_id).get("harness") or "scripted"
+        elif event_type == "agent_registered":
+            payload.update(runtime="in_process", protocol_version=None)
         if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
             payload.setdefault("participant_id", self._participant_id_for_agent(agent_id))
             if event_type.endswith("_sent"):
@@ -843,17 +885,23 @@ class CalendarGame:
 
     def run_with_scenario(self, scenario: dict) -> EpisodeTrace:
         try:
-            return asyncio.run(self._run_async(scenario))
+            self._ensure_runtime()
+            return self._runtime_trace(asyncio.run(self._run_async(scenario)))
         finally:
             self._close_remote()
 
     def _close_remote(self) -> None:
-        if self.runtime_context is not None:
-            try:
-                for client in self._remote_clients.values():
-                    client.episode_end()
-            finally:
-                self.runtime_context.close()
+        try:
+            if self.runtime_context is not None:
+                try:
+                    for client in self._remote_clients.values():
+                        client.episode_end()
+                finally:
+                    self.runtime_context.close()
+        finally:
+            if self._owned_manager is not None:
+                manager, self._owned_manager = self._owned_manager, None
+                manager.__exit__(None, None, None)
 
     def _build_agents(self, scenario: dict) -> list[Agent]:
         """Construct and calendar-initialize agents from scenario. Separated for testability."""
@@ -862,9 +910,12 @@ class CalendarGame:
         for agent_id in range(self.config.num_agents):
             if agent_id in external:
                 from calendar_game.remote import RemoteSeatClient
-                client = RemoteSeatClient(self.runtime_context, agent_id, self.router,
-                                          turn_timeout_s=self.config.turn_timeout_s,
-                                          private_prompts=self._agent_spec_for(agent_id).get("type", "llm") in {"llm", "dspy"})
+                client = adapters.create("model", "remote", {
+                    "runtime_context": self.runtime_context,
+                    "client_factory": lambda: RemoteSeatClient(self.runtime_context, agent_id, self.router,
+                        turn_timeout_s=self.config.turn_timeout_s,
+                        private_prompts=self._agent_spec_for(agent_id).get("type", "llm") in {"llm", "dspy"}),
+                })
                 self._remote_clients[agent_id] = client
             elif self.dry_run:
                 client: BaseClient = ScriptedClient()
@@ -888,13 +939,13 @@ class CalendarGame:
                     prompt_variant = cfg.get("prompt_variant") or cfg.get("extra", {}).get("prompt_variant")
                     prompt_variant_dir = cfg.get("prompt_variant_dir") or cfg.get("extra", {}).get("prompt_variant_dir")
                     client = DSPyClient(
-                        make_llm_client(cfg),
+                        adapters.create("model", "engine.llm", cfg),
                         prompt_variant=prompt_variant,
                         prompt_variant_dir=prompt_variant_dir,
                     )
                 else:
                     cfg = self._llm_spec_with_defaults(cfg)
-                    client = LLMClient(make_llm_client(cfg))
+                    client = LLMClient(adapters.create("model", "engine.llm", cfg))
             # Calendar's long-standing BaseClient protocol remains the domain
             # seam.  The adapter adds lifecycle spans around it rather than
             # changing client behavior or making the environment depend on one agent
@@ -2329,4 +2380,5 @@ register_environment(
     storage={"backend": "sqlite"},
     package="calendar-environment",
     rating_adapter=CalendarRatingAdapter(),
+    resolve_config=resolve_config,
 )

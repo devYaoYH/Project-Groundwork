@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import hashlib
 import inspect
+import json
 import os
+import stat
 import threading
 import time
 from collections import OrderedDict
@@ -157,8 +159,22 @@ class ScriptedRuntime:
 def main():
     parser = argparse.ArgumentParser(description="Run an external scripted seat")
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
+    parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
     args = parser.parse_args()
     ticket = os.environ.get("A2A_JOIN_TICKET")
+    if args.join_descriptor:
+        try:
+            fd = os.open(args.join_descriptor, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd) as handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 16384:
+                    raise ValueError()
+                descriptor = json.load(handle)
+                args.join_url, ticket = descriptor["join_url"], descriptor["join_ticket"]
+                if not isinstance(args.join_url, str) or not isinstance(ticket, str):
+                    raise ValueError()
+        except (OSError, ValueError, KeyError, TypeError):
+            parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
     runtime = ScriptedRuntime(ticket)

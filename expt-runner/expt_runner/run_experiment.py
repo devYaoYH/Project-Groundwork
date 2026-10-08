@@ -32,6 +32,7 @@ import logging
 import os
 import sys
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 from a2a_engine import (
@@ -166,6 +167,8 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
     agents = cfg.get("agents", [])
     for i, agent_spec in enumerate(agents):
         spec = agent_spec if isinstance(agent_spec, dict) else agent_spec.model_dump()
+        if spec.get("runtime") == "external":
+            continue
         model = spec.get("model", "")
         if not model:
             continue
@@ -240,6 +243,8 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     if not environment_id:
         raise ValueError("config is missing 'environment_id'")
     spec = get_environment_spec(environment_id)
+    from a2a_engine.remote.seats import validate_runtimes
+    validate_runtimes(cfg, scripted=dry_run)
 
     # The key assertion belongs to --dry-run, whose question is model
     # reachability. A smoke test runs scripted agents to exercise storage, so
@@ -260,7 +265,16 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     ) if persist else None
     sink_token = current_event_sink.set(sink)
     try:
-        return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
+        with ExitStack() as stack:
+            if environment_id == "calendar" and not ctx.get("runtime_manager") and any(
+                agent.get("runtime", "in_process") != "in_process" for agent in cfg.get("agents", [])
+            ):
+                from a2a_engine.remote.server import RuntimeManager
+                from calendar_game.remote import CALENDAR_TOOLS
+                manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=
+                    os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"))
+                ctx = {**ctx, "runtime_manager": manager}
+            return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
     finally:
         if sink is not None:
             sink.close()
@@ -269,7 +283,8 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
 
 def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
           episode_uid: str, persist: bool, dry_run: bool) -> str:
-    environment = spec.cls(config=cfg, dry_run=dry_run)
+    kwargs = {"runtime_manager": ctx["runtime_manager"]} if environment_id == "calendar" and ctx.get("runtime_manager") else {}
+    environment = spec.cls(config=cfg, dry_run=dry_run, **kwargs)
 
     tracer = get_tracer()
     with tracer.start_as_current_span(f"environment {environment_id}") as span:
@@ -295,7 +310,8 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
             context = span.get_span_context()
             if isinstance(trace, EpisodeTrace):
                 if isinstance(release, dict) and release.get("id"):
-                    trace.release = ReleaseReference.model_validate(release)
+                    facts = trace.release.model_dump() if trace.release else {}
+                    trace.release = ReleaseReference.model_validate({**release, **facts})
                 trace.episode = EpisodeReference(
                     id=str(cfg.get("episode_id") or episode_uid),
                     experiment_name=ctx["experiment_name"],
@@ -330,6 +346,19 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
         game_package=spec.package,
         repo_root=Path.cwd(),
     )
+    if trace.release is not None:
+        manifest.adapter_bindings = getattr(trace.release, "adapter_bindings", {})
+        manifest.release_id = trace.release.id
+        manifest.release_version = trace.release.release
+        manifest.release_content_sha256 = trace.release.content_sha256
+    for event in trace.events:
+        if event.type == "agent_registered":
+            seat = event.data.get("agent_id")
+            if isinstance(seat, int) and seat < len(manifest.agents):
+                manifest.agents[seat].protocol_version = event.data.get("protocol_version")
+                manifest.agents[seat].agent_info = event.data.get("agent_info", {})
+                if event.data.get("harness"):
+                    manifest.agents[seat].harness = event.data["harness"]
     uri = store.put_episode(trace, manifest)
     _expire_event_stream(cfg)
 
@@ -348,6 +377,28 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
                 f"events, expected {len(trace.events)}"
             )
     return uri
+
+
+def _run_contexts(contexts, store, results_dir, *, max_workers, on_result, on_error):
+    from a2a_engine.remote.seats import validate_runtimes
+    from a2a_engine.adapters import resolve_bindings
+    remote = False
+    for ctx in contexts:
+        cfg = ctx["config"]
+        specs = validate_runtimes(cfg, scripted=ctx["dry_run"])
+        if cfg.get("environment_id") == "calendar":
+            resolve_bindings(cfg, specs)
+        remote |= any(spec.get("runtime", "in_process") != "in_process" for spec in specs)
+    with ExitStack() as stack:
+        manager = None
+        if remote:
+            from a2a_engine.remote.server import RuntimeManager
+            from calendar_game.remote import CALENDAR_TOOLS
+            directory = os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"
+            manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=directory))
+        items = [{**ctx, **({"runtime_manager": manager} if manager else {})} for ctx in contexts]
+        return run_with_parallelism(fn=lambda ctx: _run_one(ctx, store, results_dir), items=items,
+                                    max_workers=max_workers, on_result=on_result, on_error=on_error)
 
 
 def _expire_event_stream(config: dict) -> None:
@@ -472,9 +523,8 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
     plural = "run" if len(contexts) == 1 else "runs"
     print(f"\n[3/3] End-to-end write/read via {store.name} "
           f"({len(contexts)} {plural}, scripted agents)")
-    results, errors = run_with_parallelism(
-        fn=lambda ctx: _run_one(ctx, store, results_dir),
-        items=contexts,
+    results, errors = _run_contexts(
+        contexts, store, results_dir,
         max_workers=args.max_parallelism,
         on_result=lambda ctx, uri: print(
             f"      OK   {ctx['config']['episode_id']}"
@@ -592,6 +642,16 @@ def main(argv: list[str] | None = None) -> int:
     # A live run reaches real providers. Checking credentials up front turns a
     # per-episode "HTTP Error 401: Unauthorized" from deep inside the client
     # into one message naming the provider, the agent and the model.
+    from a2a_engine.remote.seats import validate_runtimes
+    from a2a_engine.adapters import resolve_bindings
+    try:
+        for ctx in contexts:
+            validate_runtimes(ctx["config"], scripted=args.dry_run)
+            if ctx["config"].get("environment_id") == "calendar":
+                resolve_bindings(ctx["config"], ctx["config"].get("agents", []))
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
     if not args.dry_run:
         try:
             _preflight_credentials(contexts)
@@ -600,9 +660,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     log.info("Launching %d runs (max_parallelism=%d)", len(contexts), args.max_parallelism)
-    results, errors = run_with_parallelism(
-        fn=lambda ctx: _run_one(ctx, store, results_dir),
-        items=contexts,
+    results, errors = _run_contexts(
+        contexts, store, results_dir,
         max_workers=args.max_parallelism,
         on_result=lambda ctx, p: log.info("ok  %s -> %s", ctx["config"]["episode_id"], p),
         on_error=lambda ctx, e: log.error("fail %s: %s", ctx["config"]["episode_id"], e),

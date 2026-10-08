@@ -24,7 +24,7 @@ def scenario():
             "meetings": [{"id": 0, "participants": [0, 1], "speaker_order": [0, 1], "duration": 1, "cost": 1}]}
 
 
-LIFECYCLE_FIELDS = {"runtime", "protocol_version", "agent_info", "turn_id", "deadline", "closed_by", "attempts", "telemetry_source"}
+LIFECYCLE_FIELDS = {"runtime", "protocol_version", "agent_info", "harness", "turn_id", "deadline", "closed_by", "attempts", "telemetry_source"}
 
 
 def normalized_events(trace):
@@ -108,15 +108,18 @@ def test_full_remote_features_are_enabled(remote_harness, overrides):
         assert any(event.type == "reflection_end" and event.data["agent_id"] == 0 for event in trace.events)
 
 
-@pytest.mark.parametrize("runtime", ["local_process", "human", "unknown"])
+@pytest.mark.parametrize("runtime", ["human", "unknown"])
 def test_unimplemented_runtimes_fail_before_build(runtime):
-    with pytest.raises(ValueError, match="not supported in Phase 2"):
+    with pytest.raises(ValueError, match="not yet supported|unknown runtime"):
         CalendarGame(config(agents=[{"type": "scripted", "runtime": runtime}, {"type": "scripted"}]))
 
 
-def test_remote_configuration_requires_private_context():
-    with pytest.raises(ValueError, match="privately provisioned"):
-        CalendarGame(config(agents=[{"type": "scripted", "runtime": "external"}, {"type": "scripted"}]))
+def test_remote_configuration_requires_private_provisioning_output(monkeypatch):
+    monkeypatch.delenv("A2A_PROVISIONING_DIR", raising=False)
+    game = CalendarGame(config(agents=[{"type": "scripted", "runtime": "external"}, {"type": "scripted"}]))
+    with pytest.raises(ValueError, match="private provisioning_dir"):
+        game.run()
+    assert not game.runtime_manager.io.thread.is_alive()
 
 
 def test_remote_nonparticipant_and_teardown(remote_harness):

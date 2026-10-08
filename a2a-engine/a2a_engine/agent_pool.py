@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +32,8 @@ class AgentPoolEntry(BaseModel):
 
     description: str = ""
     type: str = "llm"
+    runtime: Literal["in_process", "local_process", "external"] = "in_process"
+    harness: Literal["scripted", "structured_output"] | None = None
     model: str | None = None
     api_format: str | None = None
     api_base: str | None = None
@@ -49,7 +51,12 @@ class AgentPoolEntry(BaseModel):
         fields = self.model_dump(
             exclude={"description", "credential", "config"}, exclude_none=True,
         )
-        return {**fields, **self.config}
+        if "runtime" not in self.model_fields_set:
+            fields.pop("runtime", None)
+        result = {**fields, **self.config}
+        from .remote.seats import validate_runtime
+        validate_runtime(result)
+        return result
 
 
 class AgentPool(BaseModel):
@@ -72,7 +79,7 @@ class AgentPool(BaseModel):
         missing = {
             entry.credential
             for entry in (self.entry(name) for name in names)
-            if entry.credential and not os.environ.get(entry.credential)
+            if entry.as_agent_config().get("runtime", "in_process") != "external" and entry.credential and not os.environ.get(entry.credential)
         }
         return sorted(missing)
 
