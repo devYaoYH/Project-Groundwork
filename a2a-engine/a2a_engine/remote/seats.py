@@ -34,10 +34,13 @@ def validate_runtimes(config, *, scripted=False):
         if runtime != "in_process" and config.get("environment_id", "calendar") != "calendar":
             raise ValueError("remote runtimes are supported only by calendar")
         if runtime == "local_process" and not scripted:
-            if (spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")) != "scripted":
-                raise ValueError("structured_output local harness requires Phase 5")
-            if spec.get("type", "llm") != "scripted":
+            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
+            if harness == "scripted" and spec.get("type", "llm") != "scripted":
                 raise ValueError("local_process scripted harness requires type: scripted")
+            if harness == "structured_output" and (spec.get("type", "llm") != "llm" or not spec.get("model")):
+                raise ValueError("structured_output requires type: llm and a model")
+            if spec.get("api_key"):
+                raise ValueError("local_process credentials must come from provider environment variables")
     timeout = config.get("join_timeout_s", 10)
     if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("join_timeout_s must be finite and positive")
@@ -45,12 +48,26 @@ def validate_runtimes(config, *, scripted=False):
 
 
 class LocalProcessLauncher:
-    def __init__(self, join_url, ticket):
+    def __init__(self, join_url, ticket, spec=None):
         # Do not inherit the runner environment: it may contain sibling tickets,
         # signing keys, tracing exporters, or unrelated provider credentials.
         env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT") if key in os.environ}
         env.update(A2A_JOIN_URL=join_url, A2A_JOIN_TICKET=ticket)
-        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server"], env=env,
+        spec = spec or {"type": "scripted"}
+        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
+        if harness == "structured_output":
+            from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
+            from a2a_engine.manifest import redact_config
+            provider = detect_provider(spec["model"])
+            credential = env_var_for_provider(provider)
+            required = [credential] if credential else []
+            if provider in ADC_PROVIDERS:
+                required += ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]
+            env.update({key: os.environ[key] for key in required if key in os.environ})
+            fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
+                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra") if key in spec}
+            env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
+        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness], env=env,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def close(self):

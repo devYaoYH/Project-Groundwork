@@ -119,7 +119,8 @@ class RuntimeManager:
                 seat = episode.seats[index]
                 url = f"{self.io.base_url}/episodes/{episode.episode_id}/join"
                 if spec["runtime"] == "local_process":
-                    runtime.children.append(LocalProcessLauncher(url, seat.ticket))
+                    policy = {"type": "scripted", "harness": "scripted"} if scripted else spec
+                    runtime.children.append(LocalProcessLauncher(url, seat.ticket, policy))
                 else:
                     runtime.descriptors.append(write_descriptor(self.provisioning_dir, episode, seat, url))
             return runtime

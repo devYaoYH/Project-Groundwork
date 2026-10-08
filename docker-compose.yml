@@ -17,6 +17,8 @@ services:
   # The default job is fully deterministic: it exercises every packaged environment,
   # writes to the shared SQLite volume, and makes no model or cloud requests.
   runner:
+    # MCP and callback servers bind ephemeral loopback ports inside this
+    # container. Children share its namespace; no remote port is published.
     build:
       context: .
       dockerfile: Dockerfile
@@ -62,6 +64,8 @@ services:
   # publishing the Calendar OpenSkill snapshot. It tolerates an empty database
   # so it can start before the first runner job completes.
   viewer:
+    # Viewer-launched runners use the same installed harness and loopback-only
+    # child transport. Only the existing viewer HTTP port is published.
     image: a2a-comm-local:latest
     build:
       context: .

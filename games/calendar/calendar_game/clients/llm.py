@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 import math
-import re
 from collections.abc import Callable
+from a2a_engine.llm.structured_output import extract_binary_logprobs, parse_actions, parse_reflection_deltas, supports_logprobs
 
 try:
     from json_repair import repair_json as _repair_json
@@ -33,49 +32,8 @@ SystemPromptBuilder = Callable[[dict], str]
 
 
 def _parse_response(text: str) -> tuple[list[dict], str | None]:
-    """Parse model output into (tool_calls, thinking).
-
-    Accepts either the new {"thinking": "...", "actions": [...]} object format
-    or the legacy bare-list format. Falls back through fence-stripping, json_repair,
-    and regex extraction.
-    """
-    if not text:
-        return [], None
-
-    def _extract(parsed: object) -> tuple[list[dict], str | None] | None:
-        if isinstance(parsed, dict) and "actions" in parsed:
-            actions = parsed["actions"]
-            if isinstance(actions, list):
-                return [a for a in actions if isinstance(a, dict)], parsed.get("thinking") or None
-        if isinstance(parsed, list):
-            return [a for a in parsed if isinstance(a, dict)], None
-        return None
-
-    stripped = re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
-    for candidate in (text.strip(), stripped):
-        try:
-            result = _extract(json.loads(candidate))
-            if result is not None:
-                return result
-        except json.JSONDecodeError:
-            pass
-    if _repair_json is not None:
-        try:
-            result = _extract(_repair_json(stripped, return_objects=True))
-            if result is not None:
-                return result
-        except Exception:
-            pass
-    for pattern in (r"\{.*\}", r"\[.*\]"):
-        m = re.search(pattern, stripped, re.DOTALL)
-        if m and _repair_json is not None:
-            try:
-                result = _extract(_repair_json(m.group(), return_objects=True))
-                if result is not None:
-                    return result
-            except Exception:
-                pass
-    return [], None
+    """Compatibility wrapper, including the optional repair hook."""
+    return parse_actions(text, repair=_repair_json)
 
 
 def _make_usage(result: dict) -> TokenUsage | None:
@@ -103,38 +61,7 @@ def _reflection_max_tokens(num_slots: int) -> int:
 
 
 def _parse_reflection_deltas(text: str | None, num_slots: int) -> list[int | None]:
-    deltas: list[int | None] = [None for _ in range(num_slots)]
-    if text is None:
-        return deltas
-    stripped = text.strip()
-    if not stripped:
-        return deltas
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        if _repair_json is not None:
-            try:
-                parsed = _repair_json(stripped, return_objects=True)
-            except Exception:
-                parsed = None
-        else:
-            parsed = None
-    if isinstance(parsed, dict) and isinstance(parsed.get("states"), list):
-        parsed = parsed["states"]
-    if isinstance(parsed, dict) and isinstance(parsed.get("deltas"), list):
-        parsed = parsed["deltas"]
-    if isinstance(parsed, list):
-        for index, value in enumerate(parsed[:num_slots]):
-            try:
-                delta = int(value)
-            except (TypeError, ValueError):
-                continue
-            deltas[index] = max(-_REFLECTION_DELTA_MAX, min(_REFLECTION_DELTA_MAX, delta))
-        return deltas
-    matches = re.findall(r"(?<!\d)-?[0-3](?!\d)", stripped)
-    for index, value in enumerate(matches[:num_slots]):
-        deltas[index] = int(value)
-    return deltas
+    return parse_reflection_deltas(text, num_slots, repair=_repair_json)
 
 
 def _norm_binary_token(token: object) -> str | None:
@@ -146,41 +73,7 @@ def _norm_binary_token(token: object) -> str | None:
 
 def _extract_binary_logprobs_by_slot(raw: object, num_slots: int) -> list[dict[str, float | None]]:
     """Best-effort extraction for 0/1 token logprobs in generated slot order."""
-    found: list[dict[str, float | None]] = []
-
-    def collect(obj: object) -> None:
-        if isinstance(obj, dict):
-            top = obj.get("top_logprobs")
-            if isinstance(top, list):
-                local = {"0": None, "1": None, "_top_logprob_floor": None}
-                token_key = _norm_binary_token(obj.get("token"))
-                if token_key is not None and isinstance(obj.get("logprob"), (int, float)):
-                    local[token_key] = float(obj["logprob"])
-                for entry in top:
-                    if not isinstance(entry, dict):
-                        continue
-                    if isinstance(entry.get("logprob"), (int, float)):
-                        floor = local["_top_logprob_floor"]
-                        entry_logprob = float(entry["logprob"])
-                        local["_top_logprob_floor"] = (
-                            entry_logprob if floor is None else min(float(floor), entry_logprob)
-                        )
-                    key = _norm_binary_token(entry.get("token"))
-                    if key is not None and isinstance(entry.get("logprob"), (int, float)):
-                        local[key] = float(entry["logprob"])
-                if local["0"] is not None or local["1"] is not None:
-                    found.append(local)
-            for value in obj.values():
-                collect(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                collect(item)
-
-    collect(raw)
-    found = found[:num_slots]
-    while len(found) < num_slots:
-        found.append({"0": None, "1": None, "_top_logprob_floor": None})
-    return found
+    return extract_binary_logprobs(raw, num_slots)
 
 
 def _softmax_binary(lp0: float | None, lp1: float | None) -> tuple[float | None, float | None]:
@@ -210,23 +103,7 @@ def _is_logprob_unsupported_error(result: dict) -> bool:
 
 def _llm_supports_logprobs(llm_client: object) -> bool:
     """Return whether the configured provider/model should receive logprob params."""
-    explicit = getattr(llm_client, "supports_logprobs", None)
-    extra = getattr(llm_client, "extra", None)
-    if explicit is None and isinstance(extra, dict):
-        explicit = extra.get("supports_logprobs")
-    if explicit is not None:
-        return bool(explicit)
-
-    api_format = str(getattr(llm_client, "api_format", "") or "").lower()
-    model = str(getattr(llm_client, "model", "") or "").lower()
-
-    if api_format in {"anthropic", "vertexai_anthropic", "vertexai_openai"}:
-        return False
-    if api_format in {"gemini", "vertexai"} or "gemini" in model:
-        return False
-    if api_format == "openai":
-        return True
-    return False
+    return supports_logprobs(llm_client)
 
 
 class LLMClient(BaseClient):

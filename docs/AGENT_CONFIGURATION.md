@@ -108,6 +108,32 @@ optional integrations, not part of the local stack.
 See `docs/ADDING_A_GAME.md` for the environment-side agent contract and
 `docs/LOCAL_STACK.md` for containerised local-model networking.
 
+## Calendar Seat Runtimes
+
+`runtime` is independent of agent kind and defaults to `in_process`. Calendar supports mixed in-process, launched local-process, and independently admitted external seats. Other games retain in-process execution; `human` and unknown runtimes fail before launch. In-process DSM, scripted, DSPy, and LLM clients retain their existing factory and synchronous interface.
+
+```yaml
+defaults:
+  environment_id: calendar
+  num_agents: 3
+  agents:
+    - {id: alice, type: scripted, runtime: in_process}
+    - {id: bob, type: llm, runtime: local_process, harness: structured_output, model: gpt-4o-mini, temperature: 0.0}
+    - {id: carol, type: llm, runtime: external}
+```
+
+Local scripted seats use `harness: scripted`; local model seats use `harness: structured_output` and require `type: llm` and a model. The harness owns the provider client, raw responses and conversation history. Provider keys come from the selected provider's environment variable, never inline YAML; children inherit only required credentials, not sibling tickets, runner signing keys or exporters. External model credentials and implementation belong entirely to the joining runtime. Its bounded model/implementation self-report is not verified model provenance.
+
+External seats require `A2A_PROVISIONING_DIR` naming a dedicated owner-only directory. The runner publishes one private descriptor per seat/attempt; `a2a-agent --join-descriptor PATH` joins through the callback challenge and ready acknowledgement. For external structured models, also pass `--harness structured_output --model-config MODEL.json` with nonsecret provider configuration and credentials in the external owner's environment. All callback/MCP addresses remain literal loopback. See `docs/AGENT_RUNTIME_CONTRACT.md` for signing, limits, admission, schemas, and the independent conformance command.
+
+Smoke substitutes scripted policy but preserves child processes and MCP transport, persists SQLite, and verifies readback. Dry-run preserves existing credential checks and does not persist; it also retains remote transport with scripted policy. Neither mode silently collapses remote seats back in-process. A live provider-backed run is optional research follow-up, not an acceptance test. The ordinary cloud-free mixed-runtime example is:
+
+```bash
+uv run a2a-run games/calendar/experiments/mcp_mixed_smoke.yaml --smoke-test --max-parallelism 2 --results-dir results/mcp-smoke --storage-path results/mcp-smoke/a2a.db
+```
+
+Communication topology can be authored directly in `communication.topology` using complete/ring/star/edges graphs, channel enablement, shared per-agent/per-round budget, and phase overrides. Typed designs use the categorical `communication_topology` factor with named profiles (`complete`, `ring`, `star`, `silent`, `phase_shift`); profile resolution expands before hashing. Do not combine a profile with a direct topology. Explicitly empty override channels mean silence; omitted fields inherit. Legacy `communication_protocol` remains supported when topology is absent. Behavioral runtime/topology changes affect provenance; transient ports, callback addresses, tickets, secrets and capabilities do not.
+
 ## The agent pool
 
 An experiment can name its agents inline, or name **participants** from a pool

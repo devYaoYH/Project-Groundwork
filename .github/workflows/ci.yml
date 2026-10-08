@@ -40,15 +40,20 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv venv
       - run: >-
-          uv pip install -e a2a-engine -e a2a-judge -e expt-runner
+          uv pip install -e a2a-engine -e a2a-agent -e a2a-judge -e expt-runner
           -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
       - run: >-
-          uv run pytest a2a-engine/tests a2a-judge/tests expt-runner/tests
+          uv run pytest a2a-engine/tests a2a-agent/tests a2a-judge/tests expt-runner/tests
           games/buyer-seller/tests games/calendar/calendar_game/tests games/calendar/tests
           games/negotiation/tests games/word-guess/tests local_stack/tests
         env:
           PYTHONPATH: games/negotiation
       - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
+      - run: uv run python scripts/export_turn_contract.py --check
+      - run: >-
+          uv run a2a-run games/calendar/experiments/mcp_mixed_smoke.yaml --smoke-test
+          --max-parallelism 2 --results-dir results/mcp-smoke
+          --storage-path results/mcp-smoke/a2a.db
       - name: Verify every reviewed environment runtime release
         run: |
           for release in games/*/runtime/release.json; do
@@ -59,7 +64,7 @@ jobs:
       - run: python scripts/release_check.py
       - run: docker compose config
       - run: |
-          for package in a2a-engine a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
+          for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
             uv build "$package" --out-dir dist
           done
 
@@ -71,6 +76,36 @@ jobs:
         run: docker compose up --build --detach --wait viewer
       - name: Run all-environment SQLite smoke job
         run: docker compose run --rm runner
+      - name: Run packaged MCP children and inspect persisted viewer readback
+        run: |
+          docker compose run --rm runner \
+            a2a-run games/calendar/experiments/mcp_mixed_smoke.yaml --smoke-test \
+            --max-parallelism 2 --results-dir /data/mcp-smoke --storage-path /data/mcp-smoke/a2a.db
+          # Run a second copy into the shared viewer database so the ordinary
+          # episode/lanes/replay projections exercise exactly the same path.
+          docker compose run --rm runner \
+            a2a-run games/calendar/experiments/mcp_mixed_smoke.yaml --smoke-test \
+            --max-parallelism 2 --results-dir /data/mcp-viewer --storage-path /data/a2a.db
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+          base = "http://127.0.0.1:8080"
+          episodes = json.load(urlopen(base + "/api/episodes?environment_id=calendar"))["episodes"]
+          episodes = [episode for episode in episodes if episode["experiment_name"] == "calendar_mcp_mixed_smoke"]
+          assert episodes
+          for episode in episodes:
+              detail = json.load(urlopen(base + "/api/episodes/" + episode["episode_uid"]))
+              trace = detail["episode"]
+              assert not trace["stopped"] and trace["metrics"]["meetings_scheduled"] == 1
+              assert trace["release"]["adapter_bindings"]["communication"] == "mcp.http"
+              registered = [event["data"] for event in trace["events"] if event["type"] == "agent_registered"]
+              assert [seat["runtime"] for seat in registered] == ["in_process", "local_process", "local_process"]
+              assert [seat["protocol_version"] for seat in registered] == [None, "a2a-turns/1", "a2a-turns/1"]
+              assert detail["cursor_max"] == len(trace["events"])
+              assert [lane["participant_id"] for lane in detail["lanes"]] == ["local", "child_one", "child_two"]
+              encoded = json.dumps(trace)
+              assert all('"' + field + '"' not in encoded for field in ("join_ticket", "seat_secret", "capability"))
+          PY
       - name: Run typed Calendar episode and materialize its post-episode metric
         run: |
           docker compose run --rm runner \

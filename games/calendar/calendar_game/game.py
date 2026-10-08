@@ -462,7 +462,8 @@ class CalendarGame:
                 payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version="a2a-turns/1",
                                agent_info={"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
                 if payload["runtime"] == "local_process":
-                    payload["harness"] = "scripted" if self.dry_run else self._agent_spec_for(agent_id).get("harness") or "scripted"
+                    spec = self._agent_spec_for(agent_id)
+                    payload["harness"] = "scripted" if self.dry_run else spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
         elif event_type == "agent_registered":
             payload.update(runtime="in_process", protocol_version=None)
         if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:

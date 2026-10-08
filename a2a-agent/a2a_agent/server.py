@@ -24,10 +24,10 @@ from .scripted import ScriptedPolicy
 
 
 class ScriptedRuntime:
-    def __init__(self, ticket, *, max_cached=128, max_inflight=16, clock=time.monotonic):
+    def __init__(self, ticket, *, policy=None, max_cached=128, max_inflight=16, clock=time.monotonic):
         self.ticket = ticket
         self.admission = None
-        self.policy = ScriptedPolicy()
+        self.policy = policy if policy is not None else ScriptedPolicy()
         self.registered = False
         self.ended = threading.Event()
         self.lock = asyncio.Lock()
@@ -146,7 +146,8 @@ class ScriptedRuntime:
                 if not invocation.capability:
                     raise ValueError("action capability required")
                 await execute(invocation, calls)
-        completion = TurnCompletion(turn_id=invocation.turn_id, reflection=reflection)
+        completion = TurnCompletion(turn_id=invocation.turn_id, reflection=reflection,
+                                    telemetry=getattr(self.policy, "telemetry", {}))
         if len(completion.model_dump_json().encode()) > MAX_BODY_BYTES:
             raise ValueError("completion exceeds body limit")
         if invocation.kind == "register":
@@ -157,9 +158,12 @@ class ScriptedRuntime:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run an external scripted seat")
+    parser = argparse.ArgumentParser(description="Run an admitted reference seat")
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
     parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
+    parser.add_argument("--harness", default="scripted", choices=["scripted", "structured_output"])
+    parser.add_argument("--model-config", help="Nonsecret model configuration JSON file")
+    parser.add_argument("--port", type=int, default=0, help="Loopback callback port (default: ephemeral)")
     args = parser.parse_args()
     ticket = os.environ.get("A2A_JOIN_TICKET")
     if args.join_descriptor:
@@ -177,8 +181,22 @@ def main():
             parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
-    runtime = ScriptedRuntime(ticket)
-    with LoopbackServer(runtime.app) as server:
+    policy = None
+    if args.harness == "structured_output":
+        from a2a_engine.llm.factory import make_llm_client
+        from .strategies import StructuredOutputStrategy
+        try:
+            config = json.loads(os.environ.get("A2A_MODEL_CONFIG", "{}"))
+            if args.model_config:
+                with open(args.model_config) as handle:
+                    config = json.load(handle)
+            if not isinstance(config, dict) or not config.get("model") or "api_key" in config:
+                raise ValueError()
+            policy = StructuredOutputStrategy(make_llm_client({"temperature": 0.0, **config}))
+        except (OSError, ValueError, TypeError):
+            parser.error("structured_output requires nonsecret model configuration")
+    runtime = ScriptedRuntime(ticket, policy=policy)
+    with LoopbackServer(runtime.app, port=args.port) as server:
         server.run(runtime.join(args.join_url, server.base_url))
         runtime.ended.wait()
 

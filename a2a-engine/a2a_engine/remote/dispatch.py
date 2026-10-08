@@ -131,13 +131,14 @@ async def post_signed(url, model, key, *, timeout=None):
 class LoopbackServer:
     """One lifespan on one I/O loop, usable by a blocked synchronous worker."""
 
-    def __init__(self, app):
+    def __init__(self, app, *, port=0):
         self.app = app
         self.loop = None
+        self.port = port
 
     def __enter__(self):
         self.socket = socket.socket()
-        self.socket.bind(("127.0.0.1", 0))
+        self.socket.bind(("127.0.0.1", self.port))
         self.socket.listen(128)
         self.base_url = f"http://127.0.0.1:{self.socket.getsockname()[1]}"
         async def guarded(scope, receive, send):

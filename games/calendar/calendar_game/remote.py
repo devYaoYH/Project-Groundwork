@@ -14,7 +14,7 @@ from a2a_engine.comm import RoutingContext
 from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocation, WireModel
 from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcher
 from a2a_engine.remote.turns import ToolSpec, TurnRecorder
-from calendar_game.agents import BaseClient, DecideResult, ReflectionResult, TurnResult
+from calendar_game.agents import BaseClient, DecideResult, ReflectionResult, TokenUsage, TurnResult
 from calendar_game.prompts import build_reflection_message, build_round_start_message, build_system_prompt
 from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeting_for_llm
 
@@ -221,7 +221,8 @@ class RemoteSeatClient(BaseClient):
         self.lifecycle.update(closed_by=recorder.closed_by, attempts=recorder.attempts,
                               telemetry_source="agent" if completion else "environment")
         return result_type(tool_calls=[record["action"] for record in records if "action" in record],
-                           text=None, thinking=None, usage=None,
+                           text=None, thinking=None,
+                           usage=TokenUsage(**completion.telemetry.usage.model_dump()) if completion and completion.telemetry.usage else None,
                            latency_ms=completion.telemetry.latency_ms if completion else None, raw=None)
 
     def worker_attempts(self):
@@ -289,7 +290,8 @@ class RemoteSeatClient(BaseClient):
                                               or not math.isfinite(value) or value > 0) for value in logprobs.values()):
                     return None
                 clean.append({"target_agent_id": target_agent_id, "slot": slot, **fields, "logprobs": logprobs})
-            return ReflectionResult(target_agent_id, clean, None, None, completion.telemetry.latency_ms, None)
+            usage = TokenUsage(**completion.telemetry.usage.model_dump()) if completion.telemetry.usage else None
+            return ReflectionResult(target_agent_id, clean, None, usage, completion.telemetry.latency_ms, None)
         finally:
             self.reflection_lock.release()
 

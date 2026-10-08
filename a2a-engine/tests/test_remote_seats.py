@@ -34,11 +34,13 @@ def test_join_deadline_validation(timeout):
         validate_runtimes(config(join_timeout_s=timeout))
 
 
-def test_model_harness_is_explicitly_deferred_but_smoke_keeps_remote():
+def test_model_harness_requires_a_model_but_smoke_keeps_remote():
     cfg = config(agents=[{"type": "llm", "runtime": "local_process", "harness": "structured_output"}])
-    with pytest.raises(ValueError, match="Phase 5"):
+    with pytest.raises(ValueError, match="requires type: llm and a model"):
         validate_runtimes(cfg)
     assert validate_runtimes(cfg, scripted=True)[0]["runtime"] == "local_process"
+    cfg["agents"][0]["model"] = "mock/model"
+    assert validate_runtimes(cfg)[0]["harness"] == "structured_output"
     with pytest.raises(ValueError, match="only by calendar"):
         validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
 

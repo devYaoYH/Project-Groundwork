@@ -73,8 +73,17 @@ class TurnInvocation(WireModel):
         return value.astimezone(timezone.utc)
 
 
+class TokenUsage(WireModel):
+    prompt_tokens: int = Field(default=0, strict=True, ge=0, le=1000000000)
+    completion_tokens: int = Field(default=0, strict=True, ge=0, le=1000000000)
+    total_tokens: int = Field(default=0, strict=True, ge=0, le=1000000000)
+    reasoning_tokens: int | None = Field(default=None, strict=True, ge=0, le=1000000000)
+    cached_prompt_tokens: int | None = Field(default=None, strict=True, ge=0, le=1000000000)
+
+
 class Telemetry(WireModel):
     latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    usage: TokenUsage | None = None
 
 
 class TurnCompletion(WireModel):
