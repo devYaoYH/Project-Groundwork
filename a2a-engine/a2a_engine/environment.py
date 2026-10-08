@@ -310,6 +310,8 @@ class ReleaseDeclaration(_StrictModel):
 class AgentConfig(_StrictModel):
     role: str | None = None
     type: str = "llm"
+    runtime: Literal["in_process", "local_process", "external"] = "in_process"
+    harness: Literal["scripted", "structured_output"] | None = None
     model: str | None = None
     api_format: str | None = None
     temperature: float | None = None
@@ -318,7 +320,12 @@ class AgentConfig(_StrictModel):
 
     def as_game_config(self) -> dict[str, Any]:
         base = self.model_dump(exclude={"role", "config"}, exclude_none=True)
-        return {**base, **self.config}
+        if "runtime" not in self.model_fields_set:
+            base.pop("runtime", None)
+        result = {**base, **self.config}
+        from .remote.seats import validate_runtime
+        validate_runtime(result)
+        return result
 
 
 class EpisodePlanConfig(_StrictModel):

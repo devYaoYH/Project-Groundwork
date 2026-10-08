@@ -16,7 +16,7 @@ export type ClientDesign = {
   release?: string;
   parameters?: Record<string, ClientDisposition>;
   units?: { episodes_per_cell?: number };
-  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null }[];
+  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null; runtime?: string; harness?: string | null }[];
   seed?: { mode?: string; root?: number };
 };
 
@@ -112,7 +112,22 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
     issues.push({ path: "roster", message: `Release requires ${expectedRoleCount} participants.` });
   }
   roster.forEach((participant, index) => {
-    if (participant.kind !== "human" && !participant.binding) {
+    const runtime = participant.runtime === undefined ? "in_process" : participant.runtime;
+    if (!["in_process", "local_process", "external"].includes(runtime)) {
+      issues.push({ path: `roster[${index}].runtime`, message: "Unknown or unsupported runtime." });
+    } else if (runtime !== "in_process" && detail.environment_id !== "calendar") {
+      issues.push({ path: `roster[${index}].runtime`, message: "Remote runtimes are supported only by calendar." });
+    }
+    if (participant.harness !== undefined && participant.harness !== null && !["scripted", "structured_output"].includes(participant.harness)) {
+      issues.push({ path: `roster[${index}].harness`, message: "Unsupported harness." });
+    }
+    if (participant.kind === "human" && detail.environment_id === "calendar") {
+      issues.push({ path: `roster[${index}].kind`, message: "Human is not yet supported." });
+    }
+    if (runtime === "local_process" && participant.kind === "scripted" && participant.binding && participant.binding !== "baseline") {
+      issues.push({ path: `roster[${index}].binding`, message: "Local process supports the baseline scripted binding only." });
+    }
+    if (participant.kind !== "human" && runtime !== "external" && !participant.binding) {
       issues.push({ path: `roster[${index}].binding`, message: "A non-human participant needs a binding." });
     }
     const role = typeof participant.role === "string" ? rolesById.get(participant.role) : undefined;

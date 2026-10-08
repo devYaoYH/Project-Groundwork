@@ -94,3 +94,52 @@ adapters = AdapterRegistry()
 def register_adapter(descriptor: AdapterDescriptor, factory: AdapterFactory) -> None:
     adapters.register(descriptor, factory)
 
+
+def resolve_bindings(config: dict, specs: list[dict]) -> dict:
+    remote = any(spec.get("runtime", "in_process") != "in_process" for spec in specs)
+    communication = "mcp.http" if remote else "local.in_process"
+    explicit = config.get("adapter_bindings") or {}
+    if not isinstance(explicit, dict):
+        raise ValueError("adapter_bindings must be a mapping")
+    if explicit.get("communication", communication) != communication:
+        raise ValueError(f"incompatible communication binding: expected {communication}")
+    models = {}
+    for seat, spec in enumerate(specs):
+        expected = "remote" if spec.get("runtime", "in_process") != "in_process" else "engine.llm"
+        selected = spec.get("model_adapter", explicit.get("model", expected))
+        if selected != expected:
+            raise ValueError(f"incompatible model binding for seat {seat}: expected {expected}")
+        adapters.descriptor("model", selected)
+        models[str(seat)] = selected
+    adapters.descriptor("communication", communication)
+    return {"communication": communication, "models": models,
+            "resources": explicit.get("resources", {})}
+
+
+def _local_model(config):
+    from .llm.factory import make_llm_client
+    return make_llm_client(config)
+
+
+def _communication(config):
+    from .comm import CommRouter
+    return CommRouter(config["topology"])
+
+
+def _mcp_communication(config):
+    if config.get("runtime_context") is None:
+        raise ValueError("mcp.http requires a live runtime context")
+    return _communication(config)
+
+
+def _remote_model(config):
+    if config.get("runtime_context") is None:
+        raise ValueError("remote requires a live runtime context")
+    return config["client_factory"]()
+
+
+for _name, _kind, _factory in (
+    ("engine.llm", "model", _local_model), ("remote", "model", _remote_model),
+    ("local.in_process", "communication", _communication), ("mcp.http", "communication", _mcp_communication),
+):
+    register_adapter(AdapterDescriptor(name=_name, kind=_kind), _factory)

@@ -11,7 +11,12 @@ import uuid
 from pathlib import Path
 
 from a2a_engine import EventLog, EpisodeConfigBase, EpisodeTrace, register_environment
-from pydantic import Field
+from a2a_engine.comm import CHANNELS, CommRouter, RoutingContext, Topology, canonical_channel
+from a2a_engine.remote.seats import validate_runtime
+from a2a_engine.adapters import adapters, resolve_bindings
+from a2a_engine.manifest import redact_config
+from calendar_game.resolve import resolve_config
+from pydantic import Field, field_validator
 
 from calendar_game.agents import Agent, BaseClient, GameConfig
 from calendar_game.clients import (
@@ -25,11 +30,12 @@ from calendar_game.clients import (
     ScriptedClient,
 )
 from calendar_game.prompts import (
+    append_phase_inbox,
+    build_cheap_talk_prompt,
     build_decision_message,
     build_reflection_message,
-    build_round_start_message,
+    build_retry_message,
     build_system_prompt,
-    build_turn_message,
     build_voluntary_reschedule_message,
 )
 from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeting_for_llm
@@ -41,7 +47,6 @@ from calendar_game.calendar import Calendar, apply_cell, validate_cell
 from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible, find_fallback_slot
 from calendar_game.scenario import generate_scenario
 from calendar_game.solver import cost_by_agent_for_assignments, solve_greedy, solve_optimal
-from a2a_engine.llm.factory import make_llm_client
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +73,7 @@ class CalendarGameConfig(EpisodeConfigBase):
     enable_fallback: bool = True
     fallback_max_depth: int = 3
     communication_protocol: str | dict[str, bool] = "dm"
+    communication_topology: str | None = None
     enable_reflection: bool = True
     reflection_frequency: str = "round"
     reflection_max_parallelism: int | None = 20
@@ -89,6 +95,23 @@ class CalendarGameConfig(EpisodeConfigBase):
     sd_model: dict[int, float] = Field(default_factory=dict)
     representation_elo_base: float = 1500.0
     representation_elo_scale: float = 400.0
+    turn_timeout_s: float | dict[str, float] = 120.0
+    join_timeout_s: float = Field(default=10, gt=0, allow_inf_nan=False)
+
+    @field_validator("turn_timeout_s")
+    @classmethod
+    def valid_turn_timeouts(cls, value):
+        if isinstance(value, dict):
+            allowed = {"CHEAP_TALK", "VOLUNTARY", "DECISION", "DECISION_RETRY", "REFLECTION",
+                       "register", "round_start", "episode_end"}
+            if set(value) - allowed:
+                raise ValueError("unknown turn timeout phase")
+            values = value.values()
+        else:
+            values = [value]
+        if any(not math.isfinite(timeout) or timeout <= 0 for timeout in values):
+            raise ValueError("turn timeouts must be finite and positive")
+        return value
 
 
 def _as_float(value: object, default: float = 0.0) -> float:
@@ -356,10 +379,66 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 class CalendarGame:
     """Calendar scheduling benchmark environment."""
 
-    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False) -> None:
-        self.config = config if isinstance(config, CalendarGameConfig) else CalendarGameConfig(**config)
+    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None, runtime_manager=None) -> None:
+        authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
+        self.config = CalendarGameConfig(**resolve_config(authored))
+        from a2a_engine.remote.seats import validate_runtimes
+        validate_runtimes(self.config.model_dump(), scripted=dry_run)
+        self.topology = Topology.from_communication(
+            getattr(self.config, "communication", None),
+            seats=list(range(self.config.num_agents)),
+            phases={"CHEAP_TALK", "VOLUNTARY", "DECISION", "RESOLUTION", "FALLBACK", "REFLECTION"},
+            default_send_phases={"CHEAP_TALK"},
+            communication_protocol=self.config.communication_protocol,
+            dm_cap=self.config.dm_cap,
+        )
+        self.adapter_bindings = resolve_bindings(authored, [self._agent_spec_for(seat) for seat in range(self.config.num_agents)])
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
+        self.runtime_context = runtime_context
+        self.runtime_manager = runtime_manager
+        self._owned_manager = None
+        self._remote_clients = {}
+        self._remote_budget_usage = {}
+        external = {
+            seat for seat in range(self.config.num_agents)
+            if validate_runtime(self._agent_spec_for(seat)) != "in_process"
+        }
+        if runtime_context is not None and set(runtime_context.episode.seats) != external:
+            raise ValueError("provisioned external seats do not match configured seats")
+        if external:
+            if runtime_context is not None and not runtime_context.episode.active:
+                raise ValueError("provisioned episode attempt has been closed")
+        self.router = (CommRouter(self.topology) if external and runtime_context is None else
+                       adapters.create("communication", self.adapter_bindings["communication"],
+                                       {"topology": self.topology, "runtime_context": runtime_context}))
+
+    def _ensure_runtime(self):
+        if self.runtime_context is not None or self.adapter_bindings["communication"] != "mcp.http":
+            return
+        if self.runtime_manager is None:
+            from a2a_engine.remote.server import RuntimeManager
+            from calendar_game.remote import CALENDAR_TOOLS
+            import os
+            self._owned_manager = RuntimeManager(CALENDAR_TOOLS, provisioning_dir=os.environ.get("A2A_PROVISIONING_DIR"))
+            self.runtime_manager = self._owned_manager.__enter__()
+        self.runtime_context = self.runtime_manager.provision(self.config.model_dump(), scripted=self.dry_run)
+        self.router = adapters.create("communication", "mcp.http",
+                                      {"topology": self.topology, "runtime_context": self.runtime_context})
+
+    def _runtime_trace(self, trace):
+        from a2a_engine.schemas import ReleaseReference
+        release = getattr(self.config, "release", None)
+        release = release.model_dump() if hasattr(release, "model_dump") else dict(release or {})
+        if not release:
+            release = {"id": DECLARATION.id, "release": DECLARATION.version,
+                       "content_sha256": DECLARATION.content_sha256(),
+                       "declared_adapter_bindings": DECLARATION.adapter_bindings.model_dump()}
+        if "adapter_bindings" in release:
+            release.setdefault("declared_adapter_bindings", release["adapter_bindings"])
+        release.update(adapter_bindings=self.adapter_bindings)
+        trace.release = ReleaseReference.model_validate(release)
+        return trace
 
     def _participant_id_for_agent(self, agent_id: int) -> str:
         """Use the same seat-to-identity mapping the pinned roster records."""
@@ -373,12 +452,39 @@ class CalendarGame:
         """Emit Calendar data with stable participant and chat aliases."""
         payload = dict(data)
         agent_id = payload.get("agent_id")
+        remote = self._remote_clients.get(agent_id)
+        if remote is not None:
+            if event_type in {"turn_start", "decide_start"}:
+                payload.update(remote.prepare(payload, self._remote_budget_usage.get(agent_id, 0)))
+            elif event_type in {"turn_end", "decide_end"}:
+                payload.update(remote.lifecycle)
+            elif event_type == "agent_registered":
+                payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version="a2a-turns/1",
+                               agent_info={"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
+                if payload["runtime"] == "local_process":
+                    spec = self._agent_spec_for(agent_id)
+                    payload["harness"] = "scripted" if self.dry_run else spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
+        elif event_type == "agent_registered":
+            payload.update(runtime="in_process", protocol_version=None)
         if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
             payload.setdefault("participant_id", self._participant_id_for_agent(agent_id))
             if event_type.endswith("_sent"):
                 payload.setdefault("speaker", payload["participant_id"])
                 payload.setdefault("text", payload.get("content", ""))
         self.events.append(event_type, data=payload)
+
+    def _worker_attempts(self, agent_id: int, tool_calls: list) -> list:
+        remote = self._remote_clients.get(agent_id)
+        return remote.worker_attempts() if remote is not None else tool_calls
+
+    def _remote_rejection(self, tool, *, agent_id, round_num, turn, phase) -> bool:
+        if agent_id in self._remote_clients and isinstance(tool, dict) and "_remote_rejection" in tool:
+            rejection = tool["_remote_rejection"]
+            self._invalid_tool_call(round_num=round_num, turn=turn, phase=phase, agent_id=agent_id,
+                                    tool={"type": "remote_rejected_call", "code": rejection["code"]},
+                                    reason=rejection["reason"])
+            return True
+        return False
 
     @staticmethod
     def _meeting_participants(scenario: dict) -> dict[int, list[int]]:
@@ -404,7 +510,8 @@ class CalendarGame:
             agent.calendar.meeting_participants = meeting_participants
 
     def _prompt_meeting_for_agent(self, agent: Agent, meeting: dict, round_num: int) -> dict:
-        if isinstance(agent.client, LLMClient):
+        client = getattr(agent.client, "delegate", agent.client)
+        if isinstance(client, LLMClient) or getattr(client, "private_prompts", False):
             return hydrate_meeting_for_llm(
                 meeting,
                 stable_key=f"agent:{agent.agent_id}:round:{round_num}",
@@ -412,7 +519,8 @@ class CalendarGame:
         return meeting
 
     def _prompt_calendar_for_agent(self, agent: Agent, calendar_render: str, round_num: int) -> str:
-        if isinstance(agent.client, LLMClient):
+        client = getattr(agent.client, "delegate", agent.client)
+        if isinstance(client, LLMClient) or getattr(client, "private_prompts", False):
             return hydrate_calendar_render_for_llm(
                 calendar_render,
                 stable_key=f"agent:{agent.agent_id}:round:{round_num}",
@@ -577,6 +685,9 @@ class CalendarGame:
         """
         actions: list[dict] = []
         for tool in tool_calls:
+            if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                      turn=turn_index, phase="DECISION"):
+                continue
             reason: str | None = None
             if not isinstance(tool, dict):
                 reason = "tool call is not an object"
@@ -604,50 +715,10 @@ class CalendarGame:
         return actions
 
     def _communication_channels(self) -> set[str]:
-        raw_protocol = self.config.communication_protocol or "dm"
-        aliases = {
-            "direct": {"dm"},
-            "direct_message": {"dm"},
-            "private": {"dm"},
-            "participant_groupchat": {"participant_groupchat"},
-            "participant_chat": {"participant_groupchat"},
-            "meeting_groupchat": {"participant_groupchat"},
-            "meeting_chat": {"participant_groupchat"},
-            "group": {"all_groupchat"},
-            "groupchat": {"all_groupchat"},
-            "group_chat": {"all_groupchat"},
-            "all_groupchat": {"all_groupchat"},
-            "all_agent_groupchat": {"all_groupchat"},
-            "all_agent_chat": {"all_groupchat"},
-            "dm_and_groupchat": {"dm", "all_groupchat"},
-            "dm_and_all_groupchat": {"dm", "all_groupchat"},
-            "dm_and_participant_groupchat": {"dm", "participant_groupchat"},
-            "both": {"dm", "all_groupchat"},
-            "mixed": {"dm", "all_groupchat"},
-            "all": {"dm", "participant_groupchat", "all_groupchat"},
-        }
-        valid = {"dm", "participant_groupchat", "all_groupchat"}
-        if isinstance(raw_protocol, dict):
-            channels: set[str] = set()
-            for key, enabled in raw_protocol.items():
-                if not enabled:
-                    continue
-                normalized = str(key).lower()
-                channels.update(aliases.get(normalized, {normalized}))
-        else:
-            protocol = str(raw_protocol).lower()
-            channels = set(aliases.get(protocol, {protocol}))
-        if not channels or any(channel not in valid for channel in channels):
-            raise ValueError(
-                "communication_protocol must enable one or more of: "
-                "dm, participant_groupchat, all_groupchat"
-            )
-        return channels
+        return set(self.topology.effective(phase="CHEAP_TALK", round=0).channels)
 
     def _communication_protocol(self) -> str:
-        channels = self._communication_channels()
-        order = ["dm", "participant_groupchat", "all_groupchat"]
-        return "+".join(channel for channel in order if channel in channels)
+        return self.topology.effective(phase="CHEAP_TALK", round=0).protocol
 
     def _allows_channel(self, channel: str) -> bool:
         return channel in self._communication_channels()
@@ -665,18 +736,7 @@ class CalendarGame:
         return self._allows_participant_groupchat() or self._allows_all_groupchat()
 
     def _canonical_tool_type(self, tool_type: object) -> str:
-        protocol = str(tool_type or "").lower()
-        aliases = {
-            "groupchat": "all_groupchat",
-            "group_chat": "all_groupchat",
-            "group": "all_groupchat",
-            "all_agent_groupchat": "all_groupchat",
-            "all_agent_chat": "all_groupchat",
-            "participant_chat": "participant_groupchat",
-            "meeting_groupchat": "participant_groupchat",
-            "meeting_chat": "participant_groupchat",
-        }
-        return aliases.get(protocol, protocol)
+        return canonical_channel(tool_type)
 
     def _agent_spec_for(self, agent_id: int) -> dict:
         if agent_id < len(self.config.agents):
@@ -819,16 +879,46 @@ class CalendarGame:
         raise ValueError(f"task_id {self.config.task_id!r} not found in {task_path}")
 
     def run(self) -> EpisodeTrace:
-        return self.run_with_scenario(self.generate_scenario())
+        try:
+            return self.run_with_scenario(self.generate_scenario())
+        finally:
+            self._close_remote()
 
     def run_with_scenario(self, scenario: dict) -> EpisodeTrace:
-        return asyncio.run(self._run_async(scenario))
+        try:
+            self._ensure_runtime()
+            return self._runtime_trace(asyncio.run(self._run_async(scenario)))
+        finally:
+            self._close_remote()
+
+    def _close_remote(self) -> None:
+        try:
+            if self.runtime_context is not None:
+                try:
+                    for client in self._remote_clients.values():
+                        client.episode_end()
+                finally:
+                    self.runtime_context.close()
+        finally:
+            if self._owned_manager is not None:
+                manager, self._owned_manager = self._owned_manager, None
+                manager.__exit__(None, None, None)
 
     def _build_agents(self, scenario: dict) -> list[Agent]:
         """Construct and calendar-initialize agents from scenario. Separated for testability."""
         agents: list[Agent] = []
+        external = set(self.runtime_context.episode.seats) if self.runtime_context else set()
         for agent_id in range(self.config.num_agents):
-            if self.dry_run:
+            if agent_id in external:
+                from calendar_game.remote import RemoteSeatClient
+                client = adapters.create("model", "remote", {
+                    "runtime_context": self.runtime_context,
+                    "client_factory": lambda: RemoteSeatClient(self.runtime_context, agent_id, self.router,
+                        turn_timeout_s=self.config.turn_timeout_s,
+                        private_prompts=self._agent_spec_for(agent_id).get("type", "llm") in {"llm", "dspy"}),
+                })
+                self._remote_clients[agent_id] = client
+            elif self.dry_run:
                 client: BaseClient = ScriptedClient()
             else:
                 cfg = self._agent_spec_for(agent_id)
@@ -850,13 +940,13 @@ class CalendarGame:
                     prompt_variant = cfg.get("prompt_variant") or cfg.get("extra", {}).get("prompt_variant")
                     prompt_variant_dir = cfg.get("prompt_variant_dir") or cfg.get("extra", {}).get("prompt_variant_dir")
                     client = DSPyClient(
-                        make_llm_client(cfg),
+                        adapters.create("model", "engine.llm", cfg),
                         prompt_variant=prompt_variant,
                         prompt_variant_dir=prompt_variant_dir,
                     )
                 else:
                     cfg = self._llm_spec_with_defaults(cfg)
-                    client = LLMClient(make_llm_client(cfg))
+                    client = LLMClient(adapters.create("model", "engine.llm", cfg))
             # Calendar's long-standing BaseClient protocol remains the domain
             # seam.  The adapter adds lifecycle spans around it rather than
             # changing client behavior or making the environment depend on one agent
@@ -1008,7 +1098,10 @@ class CalendarGame:
 
     def _run_with_agents(self, agents: list[Agent], scenario: dict) -> EpisodeTrace:
         """Run the full environment loop with a pre-built agent list. Exposed for testing."""
-        return asyncio.run(self._run_async(scenario, agents=agents))
+        try:
+            return asyncio.run(self._run_async(scenario, agents=agents))
+        finally:
+            self._close_remote()
 
     async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> EpisodeTrace:
         self._ensure_speaker_orders(scenario)
@@ -1057,7 +1150,25 @@ class CalendarGame:
         })
 
         # 4. Register all agents
+        def stopped():
+            self._append_event("game_stopped", data={"reason": "seat_unavailable", "phase": "GAME_START"})
+            return EpisodeTrace(episode_uid=str(uuid.uuid4()), config=self.config,
+                                events=self.events.all(), stopped=True,
+                                final_state={"calendars": [agent.calendar.slots for agent in agents],
+                                             "rating_context": build_calendar_rating_context(scenario)}, metrics={})
+
+        if self.runtime_context:
+            try:
+                for seat in self.runtime_context.episode.seats:
+                    self.runtime_context.episode.wait_ready(seat)
+            except TimeoutError:
+                return stopped()
         all_agent_ids = list(range(self.config.num_agents))
+        communication_policy_by_phase = (
+            {phase: self.topology.effective(phase=phase, round=0).as_dict()
+             for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
+            if not self.topology.legacy else {}
+        )
         for agent_id, agent in enumerate(agents):
             dsm_prior_meetings = [
                 {
@@ -1090,8 +1201,19 @@ class CalendarGame:
                 dsm_initial_budget=self.config.dsm_initial_budget,
                 sd_model={int(k): float(v) for k, v in self.config.sd_model.items()},
                 communication_protocol=communication_protocol,
+                communication_by_phase=(
+                    {phase: self.topology.effective(phase=phase, round=0).protocol
+                     for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
+                    if not self.topology.legacy else {}
+                ),
+                communication_policy_by_phase=communication_policy_by_phase,
             )
-            agent.register(agent_id, game_config)
+            try:
+                agent.register(agent_id, game_config)
+            except TimeoutError:
+                if agent_id in self._remote_clients:
+                    return stopped()
+                raise
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
                 dataclasses.asdict(game_config)
             )
@@ -1159,6 +1281,7 @@ class CalendarGame:
             round_num: int,
             turn_index: int,
             already_queued: set[int],
+            phase: str = "CHEAP_TALK",
         ) -> bool:
             nonlocal total_dms_sent
             nonlocal total_participant_groupchat_messages_sent
@@ -1170,44 +1293,28 @@ class CalendarGame:
             nonlocal max_participant_groupchat_chars
             nonlocal max_all_groupchat_chars
 
+            if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                      turn=turn_index, phase=phase):
+                return False
             tool_type = self._canonical_tool_type(tool.get("type"))
-            if (
-                tool_type in {"dm", "participant_groupchat", "all_groupchat"}
-                and self.config.dm_cap >= 0
-                and round_messaging_tools_invoked_by_agent[agent_id] >= self.config.dm_cap
-            ):
+            decision = self.router.authorize(
+                agent_id, tool_type, tool.get("to"), phase=phase, round=round_num,
+                context=RoutingContext(tuple(all_agent_ids), meeting["id"], tuple(meeting["participants"])),
+                attempted_this_round=round_messaging_tools_invoked_by_agent[agent_id],
+            )
+            if decision.charge_attempt:
+                round_messaging_tools_invoked_by_agent[agent_id] += 1
+            if not decision.allowed:
+                if decision.reason is None:
+                    return False
                 self._invalid_tool_call(
-                    round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
+                    round_num=round_num, turn=turn_index, phase=phase,
                     agent_id=agent_id, tool=tool,
-                    reason=(
-                        "per-agent cheap-talk messaging-tool budget exhausted "
-                        f"(dm_cap={self.config.dm_cap})"
-                    ),
+                    reason=decision.reason,
                 )
                 return False
-            if tool_type in {"dm", "participant_groupchat", "all_groupchat"}:
-                round_messaging_tools_invoked_by_agent[agent_id] += 1
             if tool_type == "dm":
-                if not self._allows_dm():
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm tool is disabled by communication_protocol",
-                    )
-                    return False
-                try:
-                    to = int(tool["to"])
-                except (KeyError, TypeError, ValueError):
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm tool missing integer 'to'",
-                    )
-                    return False
-                if to < 0 or to >= self.config.num_agents:
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool, reason="dm recipient is out of range",
-                    )
-                    return False
+                to = decision.recipients[0]
                 msg = {
                     "from": agent_id,
                     "to": to,
@@ -1224,7 +1331,7 @@ class CalendarGame:
                 total_dm_chars += dm_chars
                 max_dm_chars = max(max_dm_chars, dm_chars)
                 self._append_event("dm_sent", data={
-                    "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
+                    "round": round_num, "turn": turn_index, "phase": phase,
                     "agent_id": agent_id,
                     "from_agent": agent_id, "to_agent": to,
                     "meeting_id": msg["meeting_id"], "content": msg["content"],
@@ -1236,24 +1343,10 @@ class CalendarGame:
                 return True
 
             if tool_type in {"participant_groupchat", "all_groupchat"}:
-                if not self._allows_channel(tool_type):
-                    self._invalid_tool_call(
-                        round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                        agent_id=agent_id, tool=tool,
-                        reason=f"{tool_type} tool is disabled by communication_protocol",
-                    )
-                    return False
                 content = str(tool.get("content", ""))
                 msg_chars = len(content)
-                if tool_type == "participant_groupchat":
-                    recipients = [
-                        to for to in meeting["participants"]
-                        if to != agent_id
-                    ]
-                    event_type = "participant_groupchat_sent"
-                else:
-                    recipients = [to for to in all_agent_ids if to != agent_id]
-                    event_type = "all_groupchat_sent"
+                recipients = list(decision.recipients)
+                event_type = f"{tool_type}_sent"
                 for to in recipients:
                     agents[to].inbox_queue.append({
                         "from": agent_id,
@@ -1277,7 +1370,7 @@ class CalendarGame:
                     total_all_groupchat_chars += msg_chars
                     max_all_groupchat_chars = max(max_all_groupchat_chars, msg_chars)
                 self._append_event(event_type, data={
-                    "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
+                    "round": round_num, "turn": turn_index, "phase": phase,
                     "agent_id": agent_id,
                     "from_agent": agent_id,
                     "to_agents": recipients,
@@ -1289,6 +1382,74 @@ class CalendarGame:
                 return True
 
             return False
+
+        effective_policy = None
+
+        def enter_phase(phase: str, round_num: int) -> str:
+            nonlocal effective_policy
+            policy = self.topology.effective(phase=phase, round=round_num)
+            if policy != effective_policy:
+                self._append_event("topology_changed", data={
+                    "phase": phase, "round": round_num, **policy.as_dict(),
+                })
+                effective_policy = policy
+            return policy.protocol
+
+        def separate_messages(tool_calls: list, *, agent_id: int, phase: str) -> list:
+            tool_calls = self._worker_attempts(agent_id, tool_calls)
+            if self.topology.legacy and agent_id not in self._remote_clients:
+                return tool_calls
+            actions = []
+            for tool in tool_calls:
+                if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
+                                          turn=turn_index, phase=phase):
+                    continue
+                if isinstance(tool, dict) and self._canonical_tool_type(tool.get("type")) in CHANNELS:
+                    deliver_cheap_talk_tool(
+                        tool=tool, agent_id=agent_id, meeting=meeting,
+                        round_num=round_num, turn_index=turn_index,
+                        already_queued=already_queued, phase=phase,
+                    )
+                else:
+                    actions.append(tool)
+            return actions
+
+        def decision_inbox(agent: Agent) -> dict:
+            if self.topology.legacy:
+                return {}
+            messages = list(agent.inbox_queue)
+            agent.inbox_queue.clear()
+            agent.client.observe_messages(messages)
+            return {"inbox_drained": messages}
+
+        def retry_decision(agent_id, parent_phase, attempt, conflict):
+            agent = agents[agent_id]
+            inbox_data = decision_inbox(agent)
+            remote = self._remote_clients.get(agent_id)
+            data = {
+                "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
+                "parent_phase": parent_phase, "attempt": attempt,
+                "max_attempts": self.config.decision_retries, "conflict": conflict,
+                "agent_id": agent_id,
+                "calendar_snapshot_render": self._prompt_calendar_for_agent(agent, agent.calendar.snapshot().render(), round_num),
+                "prompt_sent": append_phase_inbox(build_retry_message(attempt, self.config.decision_retries, conflict,
+                                                                        parent_phase=parent_phase),
+                                                   inbox_data.get("inbox_drained", [])),
+                **inbox_data,
+            }
+            if remote:
+                self._append_event("decide_start", data=data)
+            result = agent.client.retry_decide(attempt, self.config.decision_retries, conflict)
+            if remote:
+                self._append_event("decide_end", data={
+                    "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
+                    "parent_phase": parent_phase, "attempt": attempt, "agent_id": agent_id,
+                    "tool_calls": result.tool_calls, "text": result.text, "thinking": result.thinking,
+                    "usage": result.usage.__dict__ if result.usage else None,
+                    "latency_ms": result.latency_ms, "raw_api_response": result.raw,
+                    "retry_count": result.retry_count, "status": "pending",
+                })
+            return result
 
         # 6. Main loop — one round per meeting
         for round_num, meeting in enumerate(scenario["meetings"]):
@@ -1304,6 +1465,7 @@ class CalendarGame:
                     })
 
             speaker_order = self._speaker_order(meeting)
+            communication_protocol = enter_phase("CHEAP_TALK", round_num)
             self._append_event("round_start", data={
                 "round": round_num, "turn": 0, "phase": "CHEAP_TALK", "agent_id": None,
                 "meeting": meeting,
@@ -1324,6 +1486,7 @@ class CalendarGame:
             round_messaging_tools_invoked_by_agent: dict[int, int] = {
                 i: 0 for i in range(self.config.num_agents)
             }
+            self._remote_budget_usage = round_messaging_tools_invoked_by_agent
             turn_index = 0
             blocked_slot_violations: list[dict] = []
 
@@ -1339,23 +1502,13 @@ class CalendarGame:
                     calendar_render = agents[agent_id].calendar.render()
                     prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                     prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                    turn_prompt = (
-                        build_round_start_message(
-                            prompt_meeting,
-                            prompt_calendar_render,
-                            round_num,
-                            incurred_penalty=displacement_cost[agent_id],
-                            turn_index=turn_index,
-                            max_turns_per_round=self.config.max_turns_per_round,
-                            communication_protocol=communication_protocol,
-                        )
-                        if turn_index == 0
-                        else build_turn_message(
-                            inbox_snapshot,
-                            turn_index,
-                            self.config.max_turns_per_round,
-                            communication_protocol=communication_protocol,
-                        )
+                    turn_prompt = build_cheap_talk_prompt(
+                        prompt_meeting, prompt_calendar_render, round_num, inbox_snapshot,
+                        first_turn=agent_id not in round_turn_agent_ids,
+                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
+                        max_turns_per_round=self.config.max_turns_per_round,
+                        communication_protocol=communication_protocol,
+                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                     )
                     self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
@@ -1378,7 +1531,7 @@ class CalendarGame:
                         "raw_api_response": result.raw,
                     })
 
-                    for tool in result.tool_calls:
+                    for tool in self._worker_attempts(agent_id, result.tool_calls):
                         if not isinstance(tool, dict):
                             self._invalid_tool_call(
                                 round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
@@ -1409,11 +1562,13 @@ class CalendarGame:
                     inbox_snapshot = list(agents[agent_id].inbox_queue)
                     calendar_render = agents[agent_id].calendar.render()
                     prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
-                    turn_prompt = build_turn_message(
-                        inbox_snapshot,
-                        turn_index,
-                        self.config.max_turns_per_round,
+                    turn_prompt = build_cheap_talk_prompt(
+                        self._prompt_meeting_for_agent(agent, meeting, round_num),
+                        prompt_calendar_render, round_num, inbox_snapshot, first_turn=True,
+                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
+                        max_turns_per_round=self.config.max_turns_per_round,
                         communication_protocol=communication_protocol,
+                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
                     )
                     self._append_event("turn_start", data={
                         "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
@@ -1433,7 +1588,7 @@ class CalendarGame:
                         "usage": result.usage.__dict__ if result.usage else None,
                         "latency_ms": result.latency_ms, "raw_api_response": result.raw,
                     })
-                    for tool in result.tool_calls:
+                    for tool in self._worker_attempts(agent_id, result.tool_calls):
                         if not isinstance(tool, dict):
                             self._invalid_tool_call(
                                 round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
@@ -1453,8 +1608,10 @@ class CalendarGame:
                 turn_index += 1
 
             # --- VOLUNTARY RESCHEDULE PHASE (non-participants who received DMs) ---
+            voluntary_protocol = enter_phase("VOLUNTARY", round_num)
             for agent_id in sorted(already_queued - set(meeting["participants"])):
                 agent = agents[agent_id]
+                inbox_data = decision_inbox(agent)
                 calendar_render = agents[agent_id].calendar.render()
                 prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
@@ -1462,7 +1619,14 @@ class CalendarGame:
                     "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
                     "agent_id": agent_id,
                     "calendar_render": prompt_calendar_render,
-                    "prompt_sent": build_voluntary_reschedule_message(prompt_meeting, prompt_calendar_render),
+                    "prompt_sent": append_phase_inbox(
+                        build_voluntary_reschedule_message(
+                            prompt_meeting, prompt_calendar_render, voluntary_protocol,
+                            communication_policy=communication_policy_by_phase.get("VOLUNTARY"),
+                        ),
+                        inbox_data.get("inbox_drained", []),
+                    ),
+                    **inbox_data,
                 })
                 result = agents[agent_id].voluntary_decide(meeting)
                 total_client_calls[agent_id] += 1
@@ -1475,7 +1639,7 @@ class CalendarGame:
                     "latency_ms": result.latency_ms, "raw_api_response": result.raw,
                 })
                 actions = [
-                    a for a in result.tool_calls
+                    a for a in separate_messages(result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
                     if isinstance(a, dict) and a.get("type") == "reschedule"
                 ]
                 for attempt in range(self.config.decision_retries + 1):
@@ -1508,29 +1672,38 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            retry_result = retry_decision(agent_id, "VOLUNTARY", attempt + 1, conflict)
                             total_client_calls[agent_id] += 1
                             actions = [
-                                a for a in retry_result.tool_calls
+                                a for a in separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
                                 if isinstance(a, dict) and a.get("type") == "reschedule"
                             ]
                         else:
                             break
 
             # --- DECISION PHASE ---
+            decision_protocol = enter_phase("DECISION", round_num)
             staged_decisions: dict[int, tuple[Calendar, list[dict], int]] = {}
             decision_phase_failed = False
             for agent_id in speaker_order:
                 agent = agents[agent_id]
+                inbox_data = decision_inbox(agent)
                 snapshot_render = agents[agent_id].calendar.snapshot().render()
                 prompt_snapshot_render = self._prompt_calendar_for_agent(agent, snapshot_render, round_num)
                 prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                decision_prompt = build_decision_message(prompt_meeting, prompt_snapshot_render)
+                decision_prompt = append_phase_inbox(
+                    build_decision_message(
+                        prompt_meeting, prompt_snapshot_render, decision_protocol,
+                        communication_policy=communication_policy_by_phase.get("DECISION"),
+                    ),
+                    inbox_data.get("inbox_drained", []),
+                )
                 self._append_event("decide_start", data={
                     "round": round_num, "turn": turn_index, "phase": "DECISION",
                     "agent_id": agent_id,
                     "calendar_snapshot_render": prompt_snapshot_render,
                     "prompt_sent": decision_prompt,
+                    **inbox_data,
                 })
                 result = agents[agent_id].decide(meeting)
                 total_client_calls[agent_id] += 1
@@ -1547,7 +1720,7 @@ class CalendarGame:
                 # validate and apply cell with retries
                 # Inject meeting cost into schedule actions so apply_cell can store it
                 actions = self._decision_actions(
-                    result.tool_calls, meeting,
+                    separate_messages(result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
                     round_num=round_num, turn_index=turn_index,
                     agent_id=agent_id, attempt=0,
                 )
@@ -1583,10 +1756,10 @@ class CalendarGame:
                             "attempt": attempt, "conflict_description": conflict, "actions": actions,
                         })
                         if attempt < self.config.decision_retries:
-                            retry_result = agents[agent_id].client.retry_decide(attempt + 1, self.config.decision_retries, conflict)
+                            retry_result = retry_decision(agent_id, "DECISION", attempt + 1, conflict)
                             total_client_calls[agent_id] += 1
                             actions = self._decision_actions(
-                                retry_result.tool_calls, meeting,
+                                separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
                                 round_num=round_num, turn_index=turn_index,
                                 agent_id=agent_id, attempt=attempt + 1,
                             )
@@ -1631,6 +1804,7 @@ class CalendarGame:
                     })
 
             # --- RESOLUTION PHASE ---
+            enter_phase("RESOLUTION", round_num)
             per_agent_slot: dict[str, int | None] = {}
             for agent_id in meeting["participants"]:
                 found_slot = None
@@ -1729,6 +1903,7 @@ class CalendarGame:
 
             # --- FALLBACK PHASE ---
             if not coordinated and not blocked_slot_violations and self.config.enable_fallback and not self.dry_run:
+                enter_phase("FALLBACK", round_num)
                 self._append_event("fallback_start", data={
                     "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                     "agent_id": None,
@@ -1822,6 +1997,8 @@ class CalendarGame:
             })
 
             if reflection_frequency == "round":
+                if self.config.enable_reflection:
+                    enter_phase("REFLECTION", round_num)
                 round_reflections, reflection_call_counts = await self._run_reflection_measurement(
                     agents=agents,
                     all_agent_ids=all_agent_ids,
@@ -1834,6 +2011,8 @@ class CalendarGame:
                     total_client_calls[agent_id] += count
 
         if reflection_frequency == "environment":
+            if self.config.enable_reflection:
+                enter_phase("REFLECTION", len(scenario["meetings"]))
             game_reflections, reflection_call_counts = await self._run_reflection_measurement(
                 agents=agents,
                 all_agent_ids=all_agent_ids,
@@ -2202,4 +2381,5 @@ register_environment(
     storage={"backend": "sqlite"},
     package="calendar-environment",
     rating_adapter=CalendarRatingAdapter(),
+    resolve_config=resolve_config,
 )

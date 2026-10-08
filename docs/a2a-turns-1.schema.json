@@ -1,0 +1,517 @@
+{
+  "CapabilityClaims": {
+    "additionalProperties": false,
+    "properties": {
+      "allowed_tools": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Allowed Tools",
+        "type": "array"
+      },
+      "attempt_id": {
+        "title": "Attempt Id",
+        "type": "string"
+      },
+      "episode_id": {
+        "title": "Episode Id",
+        "type": "string"
+      },
+      "exp": {
+        "title": "Exp",
+        "type": "number"
+      },
+      "phase": {
+        "title": "Phase",
+        "type": "string"
+      },
+      "seat": {
+        "title": "Seat",
+        "type": "integer"
+      },
+      "turn_id": {
+        "title": "Turn Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "episode_id",
+      "attempt_id",
+      "seat",
+      "turn_id",
+      "phase",
+      "allowed_tools",
+      "exp"
+    ],
+    "title": "CapabilityClaims",
+    "type": "object"
+  },
+  "Hello": {
+    "additionalProperties": false,
+    "properties": {
+      "deadline": {
+        "format": "date-time",
+        "title": "Deadline",
+        "type": "string"
+      },
+      "episode_id": {
+        "title": "Episode Id",
+        "type": "string"
+      },
+      "nonce": {
+        "title": "Nonce",
+        "type": "string"
+      },
+      "protocol_version": {
+        "const": "a2a-turns/1",
+        "default": "a2a-turns/1",
+        "title": "Protocol Version",
+        "type": "string"
+      },
+      "seat": {
+        "title": "Seat",
+        "type": "integer"
+      },
+      "turn_id": {
+        "title": "Turn Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "episode_id",
+      "seat",
+      "turn_id",
+      "deadline",
+      "nonce"
+    ],
+    "title": "Hello",
+    "type": "object"
+  },
+  "HelloAcceptance": {
+    "additionalProperties": false,
+    "properties": {
+      "accept": {
+        "title": "Accept",
+        "type": "boolean"
+      },
+      "nonce": {
+        "title": "Nonce",
+        "type": "string"
+      }
+    },
+    "required": [
+      "nonce",
+      "accept"
+    ],
+    "title": "HelloAcceptance",
+    "type": "object"
+  },
+  "JoinRequest": {
+    "additionalProperties": false,
+    "properties": {
+      "agent_info": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "maxProperties": 16,
+        "title": "Agent Info",
+        "type": "object"
+      },
+      "callback_url": {
+        "maxLength": 2048,
+        "title": "Callback Url",
+        "type": "string"
+      },
+      "join_ticket": {
+        "maxLength": 256,
+        "minLength": 32,
+        "title": "Join Ticket",
+        "type": "string"
+      },
+      "protocol_versions": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 16,
+        "minItems": 1,
+        "title": "Protocol Versions",
+        "type": "array"
+      }
+    },
+    "required": [
+      "join_ticket",
+      "callback_url",
+      "protocol_versions"
+    ],
+    "title": "JoinRequest",
+    "type": "object"
+  },
+  "JoinResponse": {
+    "additionalProperties": false,
+    "properties": {
+      "episode_id": {
+        "title": "Episode Id",
+        "type": "string"
+      },
+      "mcp": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Mcp",
+        "type": "object"
+      },
+      "protocol_version": {
+        "const": "a2a-turns/1",
+        "default": "a2a-turns/1",
+        "title": "Protocol Version",
+        "type": "string"
+      },
+      "ready_url": {
+        "title": "Ready Url",
+        "type": "string"
+      },
+      "seat": {
+        "title": "Seat",
+        "type": "integer"
+      },
+      "seat_secret": {
+        "title": "Seat Secret",
+        "type": "string"
+      }
+    },
+    "required": [
+      "episode_id",
+      "seat",
+      "seat_secret",
+      "mcp",
+      "ready_url"
+    ],
+    "title": "JoinResponse",
+    "type": "object"
+  },
+  "ProtocolError": {
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "title": "ProtocolError",
+    "type": "object"
+  },
+  "ToolOutcome": {
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Code"
+      },
+      "data": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Data"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reason"
+      },
+      "resolves": {
+        "enum": [
+          "read_only",
+          "immediate",
+          "end_of_turn",
+          "end_of_phase"
+        ],
+        "title": "Resolves",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "accepted",
+          "rejected",
+          "ok"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "resolves"
+    ],
+    "title": "ToolOutcome",
+    "type": "object"
+  },
+  "TurnCompletion": {
+    "$defs": {
+      "Telemetry": {
+        "additionalProperties": false,
+        "properties": {
+          "latency_ms": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Latency Ms"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "Telemetry",
+        "type": "object"
+      },
+      "TokenUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "cached_prompt_tokens": {
+            "anyOf": [
+              {
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cached Prompt Tokens"
+          },
+          "completion_tokens": {
+            "default": 0,
+            "maximum": 1000000000,
+            "minimum": 0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "default": 0,
+            "maximum": 1000000000,
+            "minimum": 0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "anyOf": [
+              {
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Tokens"
+          },
+          "total_tokens": {
+            "default": 0,
+            "maximum": 1000000000,
+            "minimum": 0,
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "TokenUsage",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "reflection": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reflection"
+      },
+      "telemetry": {
+        "$ref": "#/$defs/Telemetry"
+      },
+      "turn_id": {
+        "title": "Turn Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "turn_id"
+    ],
+    "title": "TurnCompletion",
+    "type": "object"
+  },
+  "TurnInvocation": {
+    "additionalProperties": false,
+    "properties": {
+      "capability": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Capability"
+      },
+      "deadline": {
+        "format": "date-time",
+        "title": "Deadline",
+        "type": "string"
+      },
+      "episode_id": {
+        "title": "Episode Id",
+        "type": "string"
+      },
+      "inbox": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Inbox",
+        "type": "array"
+      },
+      "kind": {
+        "enum": [
+          "register",
+          "round_start",
+          "turn",
+          "reflect",
+          "episode_end"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "mcp": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Mcp",
+        "type": "object"
+      },
+      "observation": {
+        "additionalProperties": true,
+        "title": "Observation",
+        "type": "object"
+      },
+      "parent_phase": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Parent Phase"
+      },
+      "phase": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Phase"
+      },
+      "prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Prompt"
+      },
+      "protocol_version": {
+        "const": "a2a-turns/1",
+        "default": "a2a-turns/1",
+        "title": "Protocol Version",
+        "type": "string"
+      },
+      "seat": {
+        "title": "Seat",
+        "type": "integer"
+      },
+      "turn_id": {
+        "title": "Turn Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "episode_id",
+      "seat",
+      "turn_id",
+      "kind",
+      "deadline"
+    ],
+    "title": "TurnInvocation",
+    "type": "object"
+  }
+}

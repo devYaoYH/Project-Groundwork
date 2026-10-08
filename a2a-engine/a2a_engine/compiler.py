@@ -83,6 +83,9 @@ def validate(
     _validate_release_reference(design, declaration, release_id, issues)
     _validate_dispositions(design, parameters, bank, issues)
     _validate_roster(design, declaration, issues)
+    communication = declaration.engine.defaults.get("communication", {}) if declaration.engine else {}
+    if "communication_topology" in design.parameters and "topology" in communication:
+        issues.append(ValidationIssue("parameters.communication_topology", "profile conflicts with direct communication.topology"))
 
     if declaration.item_policy is None:
         issues.append(ValidationIssue("release", "the selected release has no item policy"))
@@ -167,6 +170,13 @@ def compile(
             config["root_seed"] = design.seed.root
             config["seed_mode"] = design.seed.mode
             config["release"] = _trace_release(declaration, release_id)
+            from .registry import get_environment_spec
+            try:
+                hook = get_environment_spec(str(declaration.environment_id)).resolve_config
+            except KeyError:
+                hook = None
+            if hook is not None and declaration.environment_id == "calendar":
+                config = hook(config)
             config["provenance"] = build_provenance(
                 config=config,
                 experiment_name=experiment_name,
@@ -263,10 +273,16 @@ def _validate_roster(
     if len(ids) != len(set(ids)):
         issues.append(ValidationIssue("roster", "participant ids must be unique"))
     for index, participant in enumerate(design.roster):
-        if participant.kind != "human" and not participant.binding:
+        if participant.kind != "human" and participant.runtime != "external" and not participant.binding:
             issues.append(ValidationIssue(
                 f"roster[{index}].binding", "a non-human participant needs a binding"
             ))
+        if participant.runtime != "in_process" and declaration.environment_id != "calendar":
+            issues.append(ValidationIssue(f"roster[{index}].runtime", "remote runtimes are supported only by calendar"))
+        if declaration.environment_id == "calendar" and participant.kind == "human":
+            issues.append(ValidationIssue(f"roster[{index}].kind", "human is not yet supported"))
+        if participant.runtime == "local_process" and participant.kind == "scripted" and participant.binding not in {None, "baseline"}:
+            issues.append(ValidationIssue(f"roster[{index}].binding", "local_process supports the baseline scripted binding only"))
     declared_roles = {role.id: role for role in declaration.roles}
     required_counts = Counter({role.id: role.count for role in declaration.roles})
     expected_count = sum(required_counts.values())
@@ -293,6 +309,7 @@ def _validate_roster(
             ))
         if (
             participant.kind == "scripted"
+            and participant.runtime != "external"
             and participant.binding
             and role.scripted_bindings
             and participant.binding not in role.scripted_bindings
@@ -415,6 +432,8 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
         {
             "id": participant.id,
             "type": _runtime_agent_type(participant, declaration),
+            **({"runtime": participant.runtime} if "runtime" in participant.model_fields_set else {}),
+            **({"harness": participant.harness} if participant.harness else {}),
             **(
                 {"model": participant.binding}
                 if participant.kind == "llm" and participant.binding
@@ -442,6 +461,7 @@ def _trace_release(declaration: ReleaseDeclaration, release_id: str) -> dict[str
         "release": declaration.version,
         "content_sha256": declaration.content_sha256(),
         "inputs": [item.model_dump(mode="json") for item in declaration.inputs],
+        "declared_adapter_bindings": declaration.adapter_bindings.model_dump(mode="json"),
     }
 
 

@@ -30,6 +30,7 @@ COPY --from=web /web/out /opt/groundwork-web
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
        -e a2a-engine \
+       -e a2a-agent \
        -e a2a-judge \
        -e expt-runner \
        -e games/buyer-seller \

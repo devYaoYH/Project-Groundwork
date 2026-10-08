@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 import math
-import re
 from collections.abc import Callable
+from a2a_engine.llm.structured_output import extract_binary_logprobs, parse_actions, parse_reflection_deltas, supports_logprobs
 
 try:
     from json_repair import repair_json as _repair_json
@@ -17,6 +16,8 @@ except ImportError:  # pragma: no cover
 from calendar_game.agents import BaseClient, DecideResult, GameConfig, TokenUsage, TurnResult
 from calendar_game.agents import ReflectionResult
 from calendar_game.prompts import (
+    append_phase_inbox,
+    build_cheap_talk_prompt,
     build_decision_message,
     build_reflection_message,
     build_retry_message,
@@ -31,49 +32,8 @@ SystemPromptBuilder = Callable[[dict], str]
 
 
 def _parse_response(text: str) -> tuple[list[dict], str | None]:
-    """Parse model output into (tool_calls, thinking).
-
-    Accepts either the new {"thinking": "...", "actions": [...]} object format
-    or the legacy bare-list format. Falls back through fence-stripping, json_repair,
-    and regex extraction.
-    """
-    if not text:
-        return [], None
-
-    def _extract(parsed: object) -> tuple[list[dict], str | None] | None:
-        if isinstance(parsed, dict) and "actions" in parsed:
-            actions = parsed["actions"]
-            if isinstance(actions, list):
-                return [a for a in actions if isinstance(a, dict)], parsed.get("thinking") or None
-        if isinstance(parsed, list):
-            return [a for a in parsed if isinstance(a, dict)], None
-        return None
-
-    stripped = re.sub(r"```(?:json)?\s*\n?(.*?)\n?\s*```", r"\1", text, flags=re.DOTALL).strip()
-    for candidate in (text.strip(), stripped):
-        try:
-            result = _extract(json.loads(candidate))
-            if result is not None:
-                return result
-        except json.JSONDecodeError:
-            pass
-    if _repair_json is not None:
-        try:
-            result = _extract(_repair_json(stripped, return_objects=True))
-            if result is not None:
-                return result
-        except Exception:
-            pass
-    for pattern in (r"\{.*\}", r"\[.*\]"):
-        m = re.search(pattern, stripped, re.DOTALL)
-        if m and _repair_json is not None:
-            try:
-                result = _extract(_repair_json(m.group(), return_objects=True))
-                if result is not None:
-                    return result
-            except Exception:
-                pass
-    return [], None
+    """Compatibility wrapper, including the optional repair hook."""
+    return parse_actions(text, repair=_repair_json)
 
 
 def _make_usage(result: dict) -> TokenUsage | None:
@@ -101,38 +61,7 @@ def _reflection_max_tokens(num_slots: int) -> int:
 
 
 def _parse_reflection_deltas(text: str | None, num_slots: int) -> list[int | None]:
-    deltas: list[int | None] = [None for _ in range(num_slots)]
-    if text is None:
-        return deltas
-    stripped = text.strip()
-    if not stripped:
-        return deltas
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        if _repair_json is not None:
-            try:
-                parsed = _repair_json(stripped, return_objects=True)
-            except Exception:
-                parsed = None
-        else:
-            parsed = None
-    if isinstance(parsed, dict) and isinstance(parsed.get("states"), list):
-        parsed = parsed["states"]
-    if isinstance(parsed, dict) and isinstance(parsed.get("deltas"), list):
-        parsed = parsed["deltas"]
-    if isinstance(parsed, list):
-        for index, value in enumerate(parsed[:num_slots]):
-            try:
-                delta = int(value)
-            except (TypeError, ValueError):
-                continue
-            deltas[index] = max(-_REFLECTION_DELTA_MAX, min(_REFLECTION_DELTA_MAX, delta))
-        return deltas
-    matches = re.findall(r"(?<!\d)-?[0-3](?!\d)", stripped)
-    for index, value in enumerate(matches[:num_slots]):
-        deltas[index] = int(value)
-    return deltas
+    return parse_reflection_deltas(text, num_slots, repair=_repair_json)
 
 
 def _norm_binary_token(token: object) -> str | None:
@@ -144,41 +73,7 @@ def _norm_binary_token(token: object) -> str | None:
 
 def _extract_binary_logprobs_by_slot(raw: object, num_slots: int) -> list[dict[str, float | None]]:
     """Best-effort extraction for 0/1 token logprobs in generated slot order."""
-    found: list[dict[str, float | None]] = []
-
-    def collect(obj: object) -> None:
-        if isinstance(obj, dict):
-            top = obj.get("top_logprobs")
-            if isinstance(top, list):
-                local = {"0": None, "1": None, "_top_logprob_floor": None}
-                token_key = _norm_binary_token(obj.get("token"))
-                if token_key is not None and isinstance(obj.get("logprob"), (int, float)):
-                    local[token_key] = float(obj["logprob"])
-                for entry in top:
-                    if not isinstance(entry, dict):
-                        continue
-                    if isinstance(entry.get("logprob"), (int, float)):
-                        floor = local["_top_logprob_floor"]
-                        entry_logprob = float(entry["logprob"])
-                        local["_top_logprob_floor"] = (
-                            entry_logprob if floor is None else min(float(floor), entry_logprob)
-                        )
-                    key = _norm_binary_token(entry.get("token"))
-                    if key is not None and isinstance(entry.get("logprob"), (int, float)):
-                        local[key] = float(entry["logprob"])
-                if local["0"] is not None or local["1"] is not None:
-                    found.append(local)
-            for value in obj.values():
-                collect(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                collect(item)
-
-    collect(raw)
-    found = found[:num_slots]
-    while len(found) < num_slots:
-        found.append({"0": None, "1": None, "_top_logprob_floor": None})
-    return found
+    return extract_binary_logprobs(raw, num_slots)
 
 
 def _softmax_binary(lp0: float | None, lp1: float | None) -> tuple[float | None, float | None]:
@@ -208,23 +103,7 @@ def _is_logprob_unsupported_error(result: dict) -> bool:
 
 def _llm_supports_logprobs(llm_client: object) -> bool:
     """Return whether the configured provider/model should receive logprob params."""
-    explicit = getattr(llm_client, "supports_logprobs", None)
-    extra = getattr(llm_client, "extra", None)
-    if explicit is None and isinstance(extra, dict):
-        explicit = extra.get("supports_logprobs")
-    if explicit is not None:
-        return bool(explicit)
-
-    api_format = str(getattr(llm_client, "api_format", "") or "").lower()
-    model = str(getattr(llm_client, "model", "") or "").lower()
-
-    if api_format in {"anthropic", "vertexai_anthropic", "vertexai_openai"}:
-        return False
-    if api_format in {"gemini", "vertexai"} or "gemini" in model:
-        return False
-    if api_format == "openai":
-        return True
-    return False
+    return supports_logprobs(llm_client)
 
 
 class LLMClient(BaseClient):
@@ -284,9 +163,20 @@ class LLMClient(BaseClient):
         self._incurred_penalty: int = 0
         self._first_turn: bool = True
         self._communication_protocol = game_config.communication_protocol
+        self._communication_by_phase = game_config.communication_by_phase
+        self._communication_policy_by_phase = game_config.communication_policy_by_phase
+        self._phase_inbox: list[dict] = []
 
     def observe_penalty(self, incurred_penalty: int) -> None:
         self._incurred_penalty = incurred_penalty
+
+    def observe_messages(self, messages: list[dict]) -> None:
+        self._phase_inbox = list(messages)
+
+    def _with_phase_inbox(self, prompt: str) -> str:
+        prompt = append_phase_inbox(prompt, self._phase_inbox)
+        self._phase_inbox = []
+        return prompt
 
     def start_round(self, meeting: dict, calendar_render: str, round_num: int) -> None:
         self._round_meeting = hydrate_meeting_for_llm(
@@ -313,41 +203,19 @@ class LLMClient(BaseClient):
         turn_index: int | None = None,
         max_turns_per_round: int | None = None,
     ) -> TurnResult:
-        if self._first_turn:
-            self._first_turn = False
-            if self._round_meeting is None:
-                user_msg = (
-                    f"=== YOUR CALENDAR ===\n{self._round_calendar}\n\n"
-                    f"{build_turn_message(messages, turn_index, max_turns_per_round, self._communication_protocol)}"
-                )
-            else:
-                user_msg = build_round_start_message(
-                    self._round_meeting,
-                    self._round_calendar,
-                    self._round_num,
-                    incurred_penalty=self._incurred_penalty,
-                    turn_index=turn_index,
-                    max_turns_per_round=max_turns_per_round,
-                    communication_protocol=self._communication_protocol,
-                )
-                if messages:
-                    user_msg += "\n\n" + build_turn_message(
-                        messages,
-                        turn_index,
-                        max_turns_per_round,
-                        self._communication_protocol,
-                    )
-        else:
-            user_msg = build_turn_message(
-                messages,
-                turn_index,
-                max_turns_per_round,
-                self._communication_protocol,
-            )
+        communication_policy = self._communication_policy_by_phase.get("CHEAP_TALK")
+        user_msg = build_cheap_talk_prompt(
+            self._round_meeting, self._round_calendar, self._round_num, messages,
+            first_turn=self._first_turn, incurred_penalty=self._incurred_penalty,
+            turn_index=turn_index, max_turns_per_round=max_turns_per_round,
+            communication_protocol=self._communication_protocol, communication_policy=communication_policy,
+        )
+        self._first_turn = False
         result = self._call(user_msg)
         return self._make_turn_result(result)
 
     def decide(self, meeting: dict, calendar_render: str) -> DecideResult:
+        self._parent_phase = "DECISION"
         hydrated_meeting = hydrate_meeting_for_llm(
             meeting,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
@@ -356,8 +224,11 @@ class LLMClient(BaseClient):
             calendar_render,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
         )
-        msg = build_decision_message(hydrated_meeting, hydrated_calendar)
-        result = self._call(msg)
+        msg = build_decision_message(
+            hydrated_meeting, hydrated_calendar, self._communication_by_phase.get("DECISION", "none"),
+            communication_policy=self._communication_policy_by_phase.get("DECISION"),
+        )
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,
@@ -365,8 +236,8 @@ class LLMClient(BaseClient):
         )
 
     def retry_decide(self, attempt: int, max_attempts: int, conflict: str) -> DecideResult:
-        msg = build_retry_message(attempt, max_attempts, conflict)
-        result = self._call(msg)
+        msg = build_retry_message(attempt, max_attempts, conflict, parent_phase=getattr(self, "_parent_phase", "DECISION"))
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,
@@ -374,6 +245,7 @@ class LLMClient(BaseClient):
         )
 
     def voluntary_decide(self, meeting: dict, calendar_render: str) -> DecideResult:
+        self._parent_phase = "VOLUNTARY"
         hydrated_meeting = hydrate_meeting_for_llm(
             meeting,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
@@ -382,8 +254,11 @@ class LLMClient(BaseClient):
             calendar_render,
             stable_key=f"agent:{self.agent_id}:round:{self._round_num}",
         )
-        msg = build_voluntary_reschedule_message(hydrated_meeting, hydrated_calendar)
-        result = self._call(msg)
+        msg = build_voluntary_reschedule_message(
+            hydrated_meeting, hydrated_calendar, self._communication_by_phase.get("VOLUNTARY", "none"),
+            communication_policy=self._communication_policy_by_phase.get("VOLUNTARY"),
+        )
+        result = self._call(self._with_phase_inbox(msg))
         tr = self._make_turn_result(result)
         return DecideResult(
             tool_calls=tr.tool_calls, text=tr.text, thinking=tr.thinking,

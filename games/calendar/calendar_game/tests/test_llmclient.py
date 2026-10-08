@@ -641,3 +641,81 @@ def test_reflection_missing_binary_alternative_uses_top_logprob_floor():
     assert estimate["logprobs"]["0"] == -0.01
     assert estimate["logprobs"]["1"] is None
     assert estimate["logprobs"]["_top_logprob_floor"] == -6.0
+
+
+def test_logged_and_remote_prompts_match_private_model_payloads_including_activation_and_retry(remote_harness, monkeypatch):
+    import copy
+    import json
+    from calendar_game.game import CalendarGame
+
+    models = {}
+
+    def actions(seat, prompt):
+        if "REFLECTION" in prompt:
+            return []
+        if "[RETRY" in prompt:
+            if "VOLUNTARY retry" in prompt:
+                return [{"type": "reschedule", "item_id": 33, "from_slot": 0, "to_slot": 1, "justification": "help"}]
+            return [{"type": "schedule", "meeting_id": 0, "slot": 0}]
+        if "VOLUNTARY RESCHEDULE" in prompt:
+            return [{"type": "reschedule", "item_id": 33, "from_slot": 2, "to_slot": 1, "justification": "help"}]
+        if "DECISION PHASE" in prompt:
+            return []
+        if seat == 0:
+            return [{"type": "dm", "to": other, "content": "first inbox coordination"} for other in (1, 2)]
+        return []
+
+    class Model(MockLLM):
+        def __init__(self, seat):
+            super().__init__()
+            self.seat = seat
+
+        def streaming(self, messages, **kwargs):
+            self.text = json.dumps({"actions": actions(self.seat, messages[-1]["content"])})
+            return super().streaming(copy.deepcopy(messages), **kwargs)
+
+    def factory(cfg):
+        seat = int(cfg["model"][-1])
+        models[seat] = Model(seat)
+        return models[seat]
+
+    monkeypatch.setattr("a2a_engine.llm.factory.make_llm_client", factory)
+    cfg = {"num_agents": 3, "num_slots": 3, "decision_retries": 1, "max_turns_per_round": 1,
+           "enable_reflection": False, "enable_fallback": False,
+           "agents": [{"type": "llm", "model": f"fake-{seat}"} for seat in range(3)]}
+    task = {"calendars": [[None, {"errand_id": 1, "cost": 2}, None], [None] * 3,
+                           [{"errand_id": 33, "cost": 2}, None, None]],
+            "meetings": [{"id": 0, "participants": [0, 1], "speaker_order": [0, 1], "duration": 1, "cost": 1}]}
+    local = CalendarGame(cfg).run_with_scenario(copy.deepcopy(task))
+    local_models = dict(models)
+    for seat in range(3):
+        starts = [event for event in local.events if event.type in {"turn_start", "decide_start"} and event.data["agent_id"] == seat]
+        payloads = [call[-1]["content"] for call in local_models[seat].calls]
+        assert all(event.data["prompt_sent"] in payloads for event in starts)
+        assert all("private_label=" in event.data.get("calendar_render", event.data.get("calendar_snapshot_render", ""))
+                   for event in starts if seat in {0, 2})
+
+    harness = remote_harness(seats=(2,))
+    original = harness.runtimes[2].policy.calls
+
+    def calls(invocation):
+        if invocation.kind != "turn":
+            return original(invocation)
+        harness.invocations.append(invocation)
+        result = []
+        for tool in actions(2, invocation.prompt):
+            result.append(("env", tool["type"], {key: value for key, value in tool.items() if key != "type"}))
+        return result
+
+    harness.runtimes[2].policy.calls = calls
+    mixed = copy.deepcopy(cfg)
+    mixed["agents"][2]["runtime"] = "external"
+    remote = CalendarGame(mixed, runtime_context=harness.context).run_with_scenario(copy.deepcopy(task))
+    pushes = [invocation for invocation in harness.invocations if invocation.kind == "turn"]
+    assert [invocation.prompt for invocation in pushes] == [call[-1]["content"] for call in local_models[2].calls]
+    starts = [event for event in remote.events if event.type in {"turn_start", "decide_start"} and event.data["agent_id"] == 2]
+    assert [event.data["prompt_sent"] for event in starts] == [invocation.prompt for invocation in pushes]
+    assert "ROUND 0 START" in pushes[0].prompt and "first inbox coordination" in pushes[0].prompt
+    assert "Errand #1 " not in pushes[0].prompt
+    assert all("calendars" not in invocation.observation for invocation in pushes)
+    assert remote.final_state["calendars"] == local.final_state["calendars"]

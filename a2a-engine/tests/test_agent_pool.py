@@ -129,3 +129,20 @@ def test_one_logical_agent_can_be_reached_by_two_routes():
     assert direct.api_format == "anthropic" and routed.api_format == "openai"
     assert direct.credential != routed.credential
     assert direct.api_base is None and routed.api_base
+
+
+def test_runtime_harness_survive_pool_hydration_and_external_needs_no_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    pool = AgentPool(agents={
+        "external": AgentPoolEntry(runtime="external", type="llm", credential="OPENAI_API_KEY"),
+        "local": AgentPoolEntry(runtime="local_process", type="scripted", harness="scripted"),
+        "flattened": AgentPoolEntry(credential="OPENAI_API_KEY", config={"runtime": "external"}),
+    })
+    hydrated = hydrate_participants(["external", "local", "flattened"], pool)
+    assert [spec["runtime"] for spec in hydrated] == ["external", "local_process", "external"]
+    assert hydrated[1]["harness"] == "scripted"
+    assert pool.missing_credentials(["external", "flattened"]) == []
+    hydrated[1]["harness"] = "changed"
+    assert pool.entry("local").harness == "scripted"
+    with pytest.raises(ValueError):
+        AgentPoolEntry(config={"runtime": "unknown"}).as_agent_config()

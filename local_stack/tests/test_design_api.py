@@ -19,6 +19,61 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 DESIGN = (Path(__file__).parent / "buyer_seller_design_smoke.yaml").read_text()
 
 
+def test_calendar_mixed_runtime_validate_lock_and_plan_preserve_options(tmp_path):
+    import sqlite3
+    import yaml
+
+    design = {
+        "schema_version": 1, "release": "calendar@v1",
+        "parameters": {"density": {"randomize": True}, "num_slots": {"randomize": True},
+                       "num_meetings": {"randomize": True}, "communication_topology": {"factor": ["ring", "phase_shift"]}},
+        "units": {"episodes_per_cell": 1}, "seed": {"root": 42},
+        "roster": [
+            {"id": "local", "role": "calendar-agent", "kind": "scripted", "binding": "dsm"},
+            {"id": "child", "role": "calendar-agent", "kind": "scripted", "binding": "baseline", "runtime": "local_process", "harness": "scripted"},
+            {"id": "external", "role": "calendar-agent", "kind": "llm", "runtime": "external"},
+            {"id": "other-1", "role": "calendar-agent", "kind": "scripted", "binding": "baseline"},
+            {"id": "other-2", "role": "calendar-agent", "kind": "scripted", "binding": "baseline"},
+        ],
+    }
+    previous = LocalStackHandler.database, LocalStackHandler.workspace, LocalStackHandler._control_plane
+    LocalStackHandler.database = tmp_path / "mixed.db"
+    LocalStackHandler.workspace = WORKSPACE
+    LocalStackHandler._control_plane = None
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LocalStackHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        text = yaml.safe_dump(design)
+        status, validation = _request(base, "/api/designs/validate", {"release_id": "calendar", "design_text": text})
+        assert status == 200 and validation["valid"]
+        preview = validation["plan"]["preview_episode_config"]
+        assert preview["agents"][1]["runtime"] == "local_process" and preview["agents"][1]["harness"] == "scripted"
+        assert preview["agents"][2] == {"id": "external", "type": "llm", "runtime": "external"}
+        assert "communication" in preview and "communication_topology" not in preview
+        status, experiment = _request(base, "/api/experiments", {"name": "mixed runtime design", "release_id": "calendar", "design_text": text})
+        assert status == 201
+        status, locked = _request(base, f"/api/experiments/{experiment['id']}/lock", {"design_sha256": experiment["design_sha256"]})
+        assert status == 200 and locked["locked_at"]
+        with sqlite3.connect(LocalStackHandler.database) as connection:
+            rows = connection.execute("SELECT episode_configs FROM cells WHERE experiment_id = ?", (experiment["id"],)).fetchall()
+        assert len(rows) == 2
+        for row in rows:
+            cfg = json.loads(row[0])[0]
+            assert cfg["agents"][1]["runtime"] == "local_process"
+            assert cfg["agents"][2]["runtime"] == "external"
+            assert cfg["communication"]["topology"]["default"]["graph"] == "ring"
+        invalid = {**design, "roster": [{**participant, "runtime": "human"} for participant in design["roster"]]}
+        status, rejected = _request(base, "/api/designs/validate", {"release_id": "calendar", "design_text": yaml.safe_dump(invalid)})
+        assert not rejected.get("valid", False)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        LocalStackHandler.database, LocalStackHandler.workspace, LocalStackHandler._control_plane = previous
+
+
 def _request(base: str, path: str, body: dict | None = None):
     request = Request(
         base + path,

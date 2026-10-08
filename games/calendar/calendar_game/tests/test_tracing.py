@@ -262,3 +262,49 @@ def test_decide_start_has_snapshot_render():
         assert "Slot" in render, (
             f"calendar_snapshot_render should contain 'Slot':\n{render}"
         )
+
+
+def test_topology_changed_payload_and_phase_boundary_order():
+    from calendar_game.tests.test_topology import PolicyClient, run_episode
+
+    trace, _ = run_episode([PolicyClient(), PolicyClient()], {
+        "default": {"graph": "ring", "budget": {"per_agent_per_round": 5}},
+        "phases": {"VOLUNTARY": {"graph": "star", "hub": 0}, "DECISION": {"channels": {}}},
+    })
+    changes = data_of_type(trace, "topology_changed")
+    assert [change["phase"] for change in changes] == ["CHEAP_TALK", "VOLUNTARY", "DECISION"]
+    assert changes[0] == {
+        "phase": "CHEAP_TALK", "round": 0, "graph": "ring",
+        "channels": {
+            "dm": {"enabled": True, "scope": "graph"},
+            "participant_groupchat": {"enabled": False, "scope": "graph"},
+            "all_groupchat": {"enabled": False, "scope": "graph"},
+        },
+        "budget": {"per_agent_per_round": 5}, "legacy_routing": False,
+    }
+    assert changes[1]["hub"] == 0
+    assert not any(rule["enabled"] for rule in changes[2]["channels"].values())
+    kinds = [event.type for event in trace.events]
+    assert kinds[0] == "game_start"
+    assert kinds.index("topology_changed") < kinds.index("turn_start")
+    decision_change = next(i for i, event in enumerate(trace.events) if event.type == "topology_changed" and event.data["phase"] == "DECISION")
+    assert decision_change < kinds.index("decide_start")
+
+
+def test_topology_events_only_when_effective_policy_changes_not_on_each_round():
+    from calendar_game.tests.test_topology import PolicyClient, run_episode
+
+    same = {"graph": "edges", "edges": [[0, 1]], "channels": {}, "budget": {"per_agent_per_round": 3}}
+    trace, _ = run_episode([PolicyClient(), PolicyClient()], {
+        "default": same,
+        "phases": {"VOLUNTARY": {"edges": [[1, 0], [0, 1]]}, "DECISION": {}},
+    }, meetings=2)
+    assert len(data_of_type(trace, "topology_changed")) == 1
+
+
+def test_legacy_topology_events_describe_cheap_talk_and_silence():
+    trace = run_dry(num_meetings=2, enable_reflection=False)
+    changes = data_of_type(trace, "topology_changed")
+    assert [change["phase"] for change in changes] == ["CHEAP_TALK", "VOLUNTARY", "CHEAP_TALK", "VOLUNTARY"]
+    assert all(change["legacy_routing"] and change["graph"] == "complete" for change in changes)
+    assert all(change["budget"]["per_agent_per_round"] == 1_000_000 for change in changes)

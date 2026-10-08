@@ -2353,3 +2353,46 @@ def test_voluntary_meeting_reschedule_satisfies_consistency():
     assert agents_list[1].calendar.get(M1_NEW_SLOT) == {"meeting_id": 1, "cost": 1}
     assert agents_list[0].calendar.get(M1_SLOT) is None
     assert agents_list[1].calendar.get(M1_SLOT) is None
+
+
+@pytest.mark.parametrize("protocol, first, reason", [
+    ("dm", {"type": "groupchat"}, "all_groupchat tool is disabled by communication_protocol"),
+    ("dm", {"type": "dm"}, "dm tool missing integer 'to'"),
+    ("dm", {"type": "dm", "to": 99}, "dm recipient is out of range"),
+])
+def test_legacy_invalid_messaging_attempts_charge_before_validation(protocol, first, reason):
+    from calendar_game.tests.test_topology import PolicyClient, data, run_episode
+
+    trace, _ = run_episode([PolicyClient(cheap=[first, {"type": "dm", "to": 1}]), PolicyClient()], communication_protocol=protocol, dm_cap=1)
+    assert data(trace, "dm_sent") == []
+    assert [call["reason"] for call in data(trace, "invalid_tool_call")] == [
+        reason, "per-agent cheap-talk messaging-tool budget exhausted (dm_cap=1)",
+    ]
+    assert trace.metrics["meetings_scheduled"] == 1
+
+
+def test_legacy_aliases_self_dm_empty_group_and_message_cell_sequence():
+    from calendar_game.tests.test_topology import PolicyClient, data, run_episode
+
+    calls = [
+        {"type": "dm", "to": "0", "content": "self"},
+        {"type": "meeting_chat", "content": "empty"},
+        {"type": "group_chat", "content": "all"},
+        {"type": "noop"},
+    ]
+    trace, _ = run_episode([PolicyClient(cheap=calls), PolicyClient(), PolicyClient()], participants=[0], communication_protocol="all", dm_cap=3)
+    assert data(trace, "invalid_tool_call") == []
+    messages_and_cells = [event for event in trace.events if event.type.endswith("_sent") or event.type == "cell_applied"]
+    assert [event.type for event in messages_and_cells] == [
+        "dm_sent", "participant_groupchat_sent", "all_groupchat_sent", "cell_applied", "cell_applied", "cell_applied",
+    ]
+    assert messages_and_cells[0].data == {
+        "round": 0, "turn": 0, "phase": "CHEAP_TALK", "agent_id": 0,
+        "from_agent": 0, "to_agent": 0, "meeting_id": 1, "content": "self",
+        "content_chars": 4, "channel": "dm", "participant_id": "participant_0", "speaker": "participant_0", "text": "self",
+    }
+    assert messages_and_cells[1].data["to_agents"] == []
+    assert messages_and_cells[2].data["to_agents"] == [1, 2]
+    assert [event.data["phase"] for event in messages_and_cells[3:]] == ["VOLUNTARY", "VOLUNTARY", "DECISION"]
+    assert messages_and_cells[-1].data["actions"] == [{"type": "schedule", "meeting_id": 1, "slot": 0, "cost": 1}]
+    assert trace.final_state["per_agent_messages_received"] == [1, 1, 1]

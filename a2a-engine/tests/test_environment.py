@@ -144,3 +144,18 @@ def test_participants_and_agents_cannot_both_be_declared():
             participants=["gpt-mini"],
             episodes=[{"label": "a", "count": 1, "seeds": [1]}],
         )
+
+
+def test_agent_runtime_options_survive_flattening_and_unknown_values_fail():
+    from a2a_engine.environment import AgentConfig
+    assert AgentConfig(type="scripted", runtime="local_process", harness="scripted").as_game_config() == {
+        "type": "scripted", "runtime": "local_process", "harness": "scripted",
+    }
+    assert AgentConfig(runtime="external").as_game_config() == {"type": "llm", "runtime": "external"}
+    for value in ("human", "unknown"):
+        with pytest.raises(ValueError):
+            AgentConfig(runtime=value)
+    with pytest.raises(ValueError):
+        AgentConfig(harness="native_tools")
+    with pytest.raises(ValueError):
+        AgentConfig(config={"runtime": "unknown"}).as_game_config()

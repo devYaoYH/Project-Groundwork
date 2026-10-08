@@ -2,6 +2,7 @@
 Tests for calendar_game/prompts.py
 """
 import pytest
+from copy import deepcopy
 from calendar_game.prompts import (
     PROMPT_VARIANTS_DIR,
     build_system_prompt,
@@ -10,6 +11,7 @@ from calendar_game.prompts import (
     build_round_start_message,
     build_turn_message,
     build_decision_message,
+    build_voluntary_reschedule_message,
     build_retry_message,
 )
 
@@ -296,3 +298,57 @@ def test_build_system_prompt_deterministic():
     out1 = build_system_prompt(GAME_CONFIG)
     out2 = build_system_prompt(GAME_CONFIG)
     assert out1 == out2
+
+
+@pytest.mark.parametrize("protocol, recipients", [
+    ("dm", "exactly one graph neighbor"),
+    ("participant_groupchat", "graph neighbors who are current meeting participants"),
+    ("all_groupchat", "graph neighbors excluding yourself, including neighboring non-participants"),
+])
+@pytest.mark.parametrize("cap, budget_text", [(-1, "unlimited"), (0, "0"), (5, "5")])
+def test_explicit_topology_prompts_describe_graph_scope_and_effective_budget(protocol, recipients, cap, budget_text):
+    policy = {"graph": "ring", "channels": {protocol: {"scope": "graph"}}, "budget": {"per_agent_per_round": cap}}
+    config = {
+        **GAME_CONFIG, "dm_cap": 999, "communication_protocol": protocol,
+        "communication_by_phase": {phase: protocol for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")},
+        "communication_policy_by_phase": {phase: policy for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")},
+    }
+    before = deepcopy(config)
+    messages = [{"from": 2, "meeting_id": 42, "channel": protocol, "content": "proposal"}]
+    kwargs = {"communication_protocol": protocol, "communication_policy": policy}
+    prompts = [
+        build_system_prompt(config),
+        build_round_start_message(MEETING, CALENDAR_RENDER, 1, **kwargs),
+        build_turn_message([], **kwargs),
+        build_turn_message(messages, **kwargs),
+        build_decision_message(MEETING, CALENDAR_RENDER, **kwargs),
+        build_voluntary_reschedule_message(MEETING, CALENDAR_RENDER, **kwargs),
+    ]
+    for prompt in prompts:
+        assert recipients in prompt
+        assert f"Messaging-tool budget per agent per meeting round: {budget_text}." in prompt
+        assert "Usage is shared across channels and phases and does not reset at phase boundaries." in prompt
+        assert "visible to every agent" not in prompt
+        assert "proposing to everyone" not in prompt
+        assert "999" not in prompt
+    assert "runaway guard" not in prompts[0]
+    if protocol == "all_groupchat":
+        assert "Graph-neighbor groupchat from Agent 2" in prompts[3]
+        assert "All-agent groupchat" not in prompts[3]
+    assert config == before
+
+
+def test_legacy_prompt_scope_and_budget_are_unchanged_with_empty_policy_metadata():
+    config = {**GAME_CONFIG, "communication_protocol": "all_groupchat"}
+    prompt = build_system_prompt(config)
+    assert "Cheap-talk messaging-tool runaway guard per agent per meeting round: 5" in prompt
+    assert "Send a message visible to every agent in the task, including non-participants." in prompt
+    assert "proposing to everyone" in prompt
+    assert "graph neighbor" not in prompt
+    assert build_system_prompt({**config, "communication_policy_by_phase": {}}) == prompt
+    messages = [{"from": 2, "meeting_id": 42, "channel": "all_groupchat", "content": "proposal"}]
+    turn = build_turn_message(messages, communication_protocol="all_groupchat")
+    assert "All-agent groupchat from Agent 2" in turn
+    assert 'Only the "all_groupchat" tool(s) are valid right now.' in turn
+    assert "graph neighbor" not in turn
+    assert "Messaging-tool budget" not in turn

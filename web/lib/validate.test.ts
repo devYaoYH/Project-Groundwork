@@ -119,3 +119,30 @@ test("typing the word_guess design one character at a time never throws", () => 
     );
   }
 });
+
+test("calendar external bindings are optional while role acceptance still applies", () => {
+  const calendar = { ...detail, environment_id: "calendar" };
+  const design = parseClientDesign("release: calendar@v1\nparameters: {item: {pin: a}}\nroster: [{id: p, role: player, kind: scripted, runtime: external}]");
+  assert.deepEqual(validateClientDesign(design, calendar), []);
+  const wrongKind = parseClientDesign("release: calendar@v1\nparameters: {item: {pin: a}}\nroster: [{id: p, role: player, kind: llm, runtime: external}]");
+  assert.ok(validateClientDesign(wrongKind, calendar).some((issue) => issue.path === "roster[0].kind"));
+});
+
+test("runtime-aware edits report malformed and unsupported options without throwing", () => {
+  for (const value of ["human", "unknown", "42", "[local_process]"]) {
+    const design = parseClientDesign(`release: test@v1\nroster: [{id: p, role: player, kind: scripted, runtime: ${value}}]`);
+    assert.doesNotThrow(() => validateClientDesign(design, detail));
+    assert.ok(validateClientDesign(design, detail).some((issue) => issue.path === "roster[0].runtime"));
+  }
+  for (const value of ["native_tools", "[scripted]", "42"]) {
+    const design = parseClientDesign(`release: test@v1\nroster: [{id: p, role: player, kind: scripted, binding: baseline, harness: ${value}}]`);
+    assert.ok(validateClientDesign(design, detail).some((issue) => issue.path === "roster[0].harness"));
+  }
+});
+
+test("remote runtimes on other games and local scripted bindings are rejected", () => {
+  const remote = parseClientDesign("release: test@v1\nroster: [{id: p, role: player, kind: scripted, binding: baseline, runtime: local_process}]");
+  assert.ok(validateClientDesign(remote, detail).some((issue) => issue.path === "roster[0].runtime"));
+  const local = parseClientDesign("release: calendar@v1\nroster: [{id: p, role: player, kind: scripted, binding: dsm, runtime: local_process}]");
+  assert.ok(validateClientDesign(local, { ...detail, environment_id: "calendar" }).some((issue) => issue.path === "roster[0].binding"));
+});

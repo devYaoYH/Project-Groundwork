@@ -18,6 +18,8 @@ inputs:
 roles:
   - id: calendar-agent
     count: 5
+    accepts: [llm, scripted]
+    scripted_bindings: {baseline: scripted}
     description: One agent per private calendar.
 resources:
   - id: private-calendars
@@ -37,3 +39,7 @@ adapter_bindings:
   communication: local.in_process
   resources:
     private-calendars: calendar.in_memory
+parameters:
+  - name: communication_topology
+    type: categorical
+    domain: [complete, ring, star, phase_shift, silent]

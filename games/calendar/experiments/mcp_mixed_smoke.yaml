@@ -1,0 +1,31 @@
+name: calendar_mcp_mixed_smoke
+description: Cloud-free Calendar parity and persistence with real reference child processes.
+defaults:
+  environment_id: calendar
+  num_agents: 3
+  num_slots: 4
+  num_meetings: 1
+  num_participants: 3
+  density: 0
+  seed: 42
+  max_turns_per_round: 2
+  decision_retries: 0
+  enable_reflection: false
+  enable_fallback: false
+  join_timeout_s: 15
+  communication:
+    topology:
+      default:
+        graph: ring
+        channels:
+          dm: {enabled: true}
+        budget: {per_agent_per_round: 2}
+  agents:
+    - {id: local, type: scripted, runtime: in_process}
+    - {id: child_one, type: scripted, runtime: local_process, harness: scripted}
+    - {id: child_two, type: scripted, runtime: local_process, harness: scripted}
+cells:
+  - {label: mixed, count: 2}
+storage:
+  backend: sqlite
+  path: results/mcp-smoke/a2a.db

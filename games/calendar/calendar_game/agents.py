@@ -39,6 +39,8 @@ class GameConfig:
     dsm_initial_budget: int = 100
     sd_model: dict[int, float] = field(default_factory=dict)
     communication_protocol: str = "dm"
+    communication_by_phase: dict[str, str] = field(default_factory=dict)
+    communication_policy_by_phase: dict[str, dict] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,10 @@ class BaseClient(ABC):
 
     def observe_calendar(self, calendar_render: str) -> None:
         """Optional hook for scripted clients that keep parsed local-calendar state."""
+        return None
+
+    def observe_messages(self, messages: list[dict]) -> None:
+        """Optional inbox push before a topology-enabled decision/voluntary turn."""
         return None
 
     def observe_penalty(self, incurred_penalty: int) -> None:

@@ -43,6 +43,40 @@ uv run python -m expt_runner.run_experiment path/to/experiment.yaml
 See `a2a-engine/examples/example_experiment.yaml`. Per-cell `config:` is
 deep-merged on top of experiment `defaults:`.
 
+### Mixed-runtime Calendar seats
+
+Install `a2a-agent` alongside the engine and Calendar package. Runtime selection is independent of participant kind; omitted runtime means `in_process`.
+
+```yaml
+name: mixed-calendar
+defaults:
+  environment_id: calendar
+  num_agents: 3
+  num_slots: 3
+  num_meetings: 1
+  density: 0
+  join_timeout_s: 15
+  communication_topology: ring
+  agents:
+    - {id: alice, type: dsm}
+    - {id: bob, type: scripted, runtime: local_process, harness: scripted}
+    - {id: carol, type: llm, runtime: external}
+cells:
+  - {label: mixed, count: 1}
+```
+
+The runner owns one loopback MCP app across parallel Calendar workers and launches reference children only for `local_process` seats. Each attempt has its own credentials and is revoked on completion or failure; local children are terminated and waited for. An external no-show produces a stopped episode with `seat_unavailable`.
+
+External admission uses a dedicated private output, defaulting to `<results-dir>/private-joins`. Set `A2A_PROVISIONING_DIR` to choose another directory; existing directories must belong to the current user and have no group/other permissions. Direct `CalendarGame` runs with external seats also require this environment variable. Each mode-0600 descriptor contains a join URL, seat, expiry, and one-time ticket. Start an independent runtime before the join deadline:
+
+```bash
+python -m a2a_agent.server --join-descriptor /absolute/private-joins/ATTEMPT-seat-2.json
+```
+
+Choose the descriptor from the private directory, not from a trace or runner log. Do not copy it into experiment YAML or shared storage. The runner removes descriptors at teardown; the reference external process exits on `episode_end`. Provider credentials for external seats belong to their runtime, not the runner. Only scripted local-process execution is implemented at this stage; live model-backed local-process harnesses fail explicitly rather than silently substituting a scripted policy. Smoke and dry-run use scripted policies while preserving the subprocess/MCP boundary; smoke persists and verifies readback, while dry-run retains its credential checks and persists nothing.
+
+Typed designs expose `communication_topology` as a scalar categorical parameter (`complete`, `ring`, `star`, `phase_shift`, or `silent`). Profiles expand into concrete phase-aware router policy before execution. Legacy cells can still author `communication.topology` directly, but combining a profile with a direct policy is an error. Persisted traces/manifests distinguish declared release bindings from the resolved per-seat model and episode communication adapters, and mark admitted agent information as self-reported rather than verified model identity.
+
 ## Registering a environment
 
 Environment classes are looked up by `environment_id`. Your benchmark package should

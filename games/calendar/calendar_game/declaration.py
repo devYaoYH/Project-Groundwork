@@ -5,6 +5,7 @@ from pathlib import Path
 from a2a_engine.declaration import ItemPolicy, MeasureConfig, ParameterConfig, ReleaseDeclaration, RoleConfig
 from a2a_engine.environment import EngineConfig
 from a2a_engine.items import ItemBank
+from calendar_game.resolve import TOPOLOGY_PROFILES
 
 
 _BANK_PATH = Path(__file__).parents[1] / "tasks" / "tiny_varied_density_5a3p.jsonl"
@@ -18,6 +19,7 @@ DECLARATION = ReleaseDeclaration(
     source_url="https://github.com/devYaoYH/Project-Groundwork/tree/main/games/calendar",
     engine=EngineConfig(environment_id="calendar", defaults={"num_agents": 5}),
     parameters=[
+        ParameterConfig(name="communication_topology", type="categorical", domain=list(TOPOLOGY_PROFILES)),
         # The bank freezes each agent's pre-existing errands and solves the
         # oracle against them, so these three describe the item that was
         # generated, not a knob the loaded scenario would honour.

@@ -133,3 +133,19 @@ def test_manifest_round_trips_through_json():
     restored = EpisodeManifest.model_validate(json.loads(m.model_dump_json()))
     assert restored.resolved_config_hash == m.resolved_config_hash
     assert [a.model for a in restored.agents] == [a.model for a in m.agents]
+
+
+def test_remote_transient_facts_are_redacted_but_behavior_changes_hash():
+    config = {"agents": [{"type": "llm", "runtime": "external", "model": "not-verified"}],
+              "communication": {"topology": {"default": {"graph": "ring"}}}}
+    first = {**config, "join_ticket": "one", "callback_url": "http://127.0.0.1:123", "seat_secret": "s1",
+             "extra": {"Authorization": "cap1", "capability": "cap1", "signing_key": "k1"}}
+    second = {**config, "join_ticket": "two", "callback_url": "http://127.0.0.1:456", "seat_secret": "s2",
+              "extra": {"Authorization": "cap2", "capability": "cap2", "signing_key": "k2"}}
+    assert config_hash(first) == config_hash(second)
+    assert config_hash(config) != config_hash({**config, "agents": [{"type": "llm", "runtime": "local_process"}]})
+    assert config_hash(config) != config_hash({**config, "communication": {"topology": {"default": {"graph": "complete"}}}})
+    manifest = build(config)
+    assert manifest.agents[0].runtime == "external"
+    assert manifest.agents[0].model is None
+    assert manifest.agents[0].protocol_version is None
