@@ -26,6 +26,17 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: >-
+          uv pip install -e a2a-engine -e a2a-agent -e expt-runner
+          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:browser
+        working-directory: web
 
   test:
     runs-on: ubuntu-latest
@@ -67,6 +78,19 @@ jobs:
           for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
             uv build "$package" --out-dir dist
           done
+
+  runtime-containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install pytest
+      - name: Require real Word Guess and transport containers
+        run: uv run pytest tests/runtime/test_container_word_guess.py tests/runtime/test_container_turns.py -q
 
   local-stack:
     runs-on: ubuntu-latest

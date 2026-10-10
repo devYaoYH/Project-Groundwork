@@ -113,7 +113,8 @@ class RuntimeManager:
         if any(spec["runtime"] == "external" for spec in remote.values()) and self.provisioning_dir is None:
             raise ValueError("external seats require a private provisioning_dir")
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
-                                                     join_timeout_s=config.get("join_timeout_s", 10))
+                                                     join_timeout_s=config.get("join_timeout_s", 10),
+                                                     environment_id=config.get("environment_id", "calendar"))
         runtime = ManagedEpisode(self, episode)
         with self.lock:
             self.episodes.add(runtime)
@@ -123,7 +124,8 @@ class RuntimeManager:
                 url = f"{self.io.base_url}/episodes/{episode.episode_id}/join"
                 if spec["runtime"] == "local_process":
                     policy = {"type": "scripted", "harness": "scripted"} if scripted else spec
-                    runtime.children.append(LocalProcessLauncher(url, seat.ticket, policy))
+                    options = {"environment_id": episode.environment_id} if episode.environment_id != "calendar" else {}
+                    runtime.children.append(LocalProcessLauncher(url, seat.ticket, policy, **options))
                 else:
                     runtime.descriptors.append(write_descriptor(self.provisioning_dir, episode, seat, url))
             return runtime

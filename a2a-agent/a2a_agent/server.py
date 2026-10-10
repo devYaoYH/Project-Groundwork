@@ -163,6 +163,7 @@ def main():
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
     parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
     parser.add_argument("--harness", default="scripted", choices=["scripted", "structured_output"])
+    parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess"])
     parser.add_argument("--model-config", help="Nonsecret model configuration JSON file")
     parser.add_argument("--port", type=int, default=0, help="Loopback callback port (default: ephemeral)")
     args = parser.parse_args()
@@ -196,6 +197,17 @@ def main():
             policy = StructuredOutputStrategy(make_llm_client({"temperature": 0.0, **config}))
         except (OSError, ValueError, TypeError):
             parser.error("structured_output requires nonsecret model configuration")
+    if args.environment_id == "word_guess":
+        from word_guess.runtime_strategy import WordGuessStrategy
+        client = policy.model if policy is not None else None
+        runtime = AgentRuntimeV2()
+        with LoopbackServer(runtime.app, port=args.port) as server:
+            admission = server.run(runtime.join(args.join_url, server.base_url, ticket,
+                                                policy=WordGuessStrategy(client=client)))
+            key = (admission.environment_id, admission.episode_id, admission.attempt_id, admission.seat)
+            while not runtime.sessions[key].ended:
+                time.sleep(0.05)
+        return
     runtime = ScriptedRuntime(ticket, policy=policy)
     with LoopbackServer(runtime.app, port=args.port) as server:
         server.run(runtime.join(args.join_url, server.base_url))

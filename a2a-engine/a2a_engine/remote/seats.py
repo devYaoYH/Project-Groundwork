@@ -31,8 +31,10 @@ def validate_runtimes(config, *, scripted=False):
         runtime = validate_runtime(spec)
         if config.get("environment_id", "calendar") == "calendar" and spec.get("type") == "human":
             raise ValueError("human is not yet supported by calendar")
-        if runtime != "in_process" and config.get("environment_id", "calendar") != "calendar":
-            raise ValueError("remote runtimes are supported only by calendar")
+        if runtime != "in_process":
+            from a2a_engine.workflow_runtime import runtime_capability
+            if runtime_capability(config.get("environment_id", "calendar")) is None:
+                raise ValueError("remote runtimes are unsupported by this environment")
         if runtime == "local_process" and not scripted:
             harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
             if harness == "scripted" and spec.get("type", "llm") != "scripted":
@@ -48,7 +50,7 @@ def validate_runtimes(config, *, scripted=False):
 
 
 class LocalProcessLauncher:
-    def __init__(self, join_url, ticket, spec=None):
+    def __init__(self, join_url, ticket, spec=None, *, environment_id="calendar"):
         # Do not inherit the runner environment: it may contain sibling tickets,
         # signing keys, tracing exporters, or unrelated provider credentials.
         env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT") if key in os.environ}
@@ -67,7 +69,9 @@ class LocalProcessLauncher:
             fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
                       "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra") if key in spec}
             env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
-        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness], env=env,
+        options = ["--environment-id", environment_id] if environment_id != "calendar" else []
+        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness,
+                                        *options], env=env,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def close(self):
@@ -92,6 +96,7 @@ def write_descriptor(directory, episode, seat, join_url):
     try:
         with os.fdopen(fd, "w") as handle:
             json.dump({"join_url": join_url, "seat": seat.seat,
+                       "environment_id": episode.environment_id,
                        "expires_at": seat.join_deadline, "join_ticket": seat.ticket}, handle)
     except BaseException:
         path.unlink(missing_ok=True)

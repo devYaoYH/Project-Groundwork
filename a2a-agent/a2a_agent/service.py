@@ -55,8 +55,12 @@ async def watch(runtime, directory, callback_url):
             seen.add(path)
             try:
                 descriptor = read_descriptor(path)
+                policy = ProbePolicy(directory, runtime.network)
+                if descriptor.get("environment_id") == "word_guess":
+                    from word_guess.runtime_strategy import WordGuessStrategy
+                    policy = WordGuessStrategy()
                 await runtime.join(descriptor["join_url"], callback_url, descriptor["join_ticket"],
-                                   policy=ProbePolicy(directory, runtime.network))
+                                   policy=policy)
             except Exception:
                 # Never expose admission bodies, ticket-bearing paths, URLs or provider errors.
                 print("Agent provisioning rejected", flush=True)

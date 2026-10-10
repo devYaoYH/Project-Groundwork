@@ -379,6 +379,12 @@ def compute_headline_scores(metrics: dict, config: dict | CalendarGameConfig | N
 class CalendarGame:
     """Calendar scheduling benchmark environment."""
 
+    @classmethod
+    def runtime_capability(cls):
+        from a2a_engine.workflow_runtime import RuntimeCapability
+        from .remote import CALENDAR_TOOLS
+        return RuntimeCapability(CALENDAR_TOOLS)
+
     def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None, runtime_manager=None) -> None:
         authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
         self.config = CalendarGameConfig(**resolve_config(authored))

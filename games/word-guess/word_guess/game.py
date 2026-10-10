@@ -32,6 +32,7 @@ class WordGuessConfig(EpisodeConfigBase):
     secret_word: str | None = None
     word_pool: list[str] = Field(default_factory=lambda: list(DEFAULT_POOL))
     max_turns: int = 20
+    turn_timeout_s: float = Field(default=120, gt=0)
 
 
 # ---------------------------------------------------------------------------
@@ -117,71 +118,76 @@ def _extract_guess(text: str) -> str | None:
 class WordGuessGame:
     """Round-robin word-guessing environment."""
 
-    def __init__(self, config: dict | WordGuessConfig, dry_run: bool = False) -> None:
+    def __init__(self, config: dict | WordGuessConfig, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
         self.config = config if isinstance(config, WordGuessConfig) else WordGuessConfig(**config)
         self.dry_run = dry_run
         rng = random.Random(self.config.seed)
         self.secret_word = self.config.secret_word or rng.choice(self.config.word_pool)
         self.events = EventLog.from_config(self.config)
-        self._build_agents()
+        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+        try:
+            self._build_agents()
+        except BaseException:
+            if self.runtime:
+                self.runtime.close()
+            raise
 
     def _build_agents(self) -> None:
-        if self.dry_run:
-            self.guesser = _ScriptedGuesser(self.secret_word)
-            self.host = _ScriptedHost(self.secret_word)
-            return
         agents = self.config.agents
-        guesser_cfg = agents[0].model_dump() if len(agents) >= 1 else {"model": "gpt-4o-mini"}
-        host_cfg = agents[1].model_dump() if len(agents) >= 2 else {"model": "gpt-4o-mini"}
-        self.guesser = GuesserAgent(make_llm_client(guesser_cfg))
-        self.host = HostAgent(make_llm_client(host_cfg), self.secret_word)
+        for seat, role in enumerate(("guesser", "host")):
+            cfg = agents[seat].model_dump() if len(agents) > seat else {"model": "gpt-4o-mini"}
+            if cfg.get("runtime", "in_process") != "in_process":
+                if not self.runtime:
+                    raise ValueError("word_guess remote seats require runtime context")
+                from .remote import RemoteTextAgent
+                agent = RemoteTextAgent(self.runtime, seat, timeout_s=getattr(self.config, "turn_timeout_s", 120))
+            elif self.dry_run:
+                agent = _ScriptedGuesser(self.secret_word) if seat == 0 else _ScriptedHost(self.secret_word)
+            else:
+                agent = GuesserAgent(make_llm_client(cfg)) if seat == 0 else HostAgent(make_llm_client(cfg), self.secret_word)
+            setattr(self, role, agent)
+
+    @classmethod
+    def build_program(cls):
+        from .workflow import build_program
+        return build_program()
+
+    @classmethod
+    def runtime_capability(cls):
+        from a2a_engine.workflow_runtime import RuntimeCapability
+        from .remote import WORD_GUESS_TOOLS
+        return RuntimeCapability(WORD_GUESS_TOOLS)
 
     def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())
 
     async def _run_async(self) -> EpisodeTrace:
-        self.events.append(
-            "game_start",
-            data={"max_turns": self.config.max_turns, "word_pool_size": len(self.config.word_pool)},
-        )
-        history: list[dict[str, str]] = []
-        guessed_word: str | None = None
-        won = False
-        turns_used = 0
+        from .workflow import GameContext
+        from .remote import RemoteTextAgent
+        remote_agents = [agent for agent in (self.guesser, self.host) if isinstance(agent, RemoteTextAgent)]
+        try:
+            for agent in remote_agents:
+                await asyncio.to_thread(agent.register, self.secret_word)
+            state = await self.build_program().ainvoke({}, context=GameContext(self),
+                config={"recursion_limit": max(10, self.config.max_turns * 7 + 5)})
+            return self._trace(state)
+        finally:
+            if self.runtime:
+                try:
+                    for agent in remote_agents:
+                        await asyncio.to_thread(agent.episode_end)
+                finally:
+                    self.runtime.close()
 
-        for turn in range(1, self.config.max_turns + 1):
-            turns_used = turn
-            obs_g = {"history": list(history), "turns_remaining": self.config.max_turns - turn + 1}
-            g_action = await self.guesser.act(obs_g, tools={})
-            g_text = g_action["text"]
-            history.append({"speaker": "guesser", "text": g_text})
-            self.events.append("message", data={"speaker": "guesser", "text": g_text})
-
-            obs_h = {"history": list(history[:-1]), "last_guesser": g_text}
-            h_action = await self.host.act(obs_h, tools={})
-            h_text = h_action["text"]
-            history.append({"speaker": "host", "text": h_text})
-            self.events.append("message", data={"speaker": "host", "text": h_text})
-
-            guess = _extract_guess(g_text)
-            if guess:
-                guessed_word = guess
-                if _is_correct(h_text):
-                    won = True
-                    break
-
-        self.events.append(
-            "game_end",
-            data={"won": won, "turns_used": turns_used},
-        )
-
+    def _trace(self, state):
+        won, turns_used = state["won"], state["turns_used"]
         return EpisodeTrace(
             episode_uid=str(uuid.uuid4()),
             config=self.config,
             events=self.events.all(),
             final_state={
                 "secret_word": self.secret_word,
-                "guessed_word": guessed_word,
+                "guessed_word": state["guessed_word"],
                 "won": won,
                 "turns_used": turns_used,
             },

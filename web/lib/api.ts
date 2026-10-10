@@ -317,6 +317,10 @@ export function getEnvironment(id: string): Promise<EnvironmentDetail> {
   return request<EnvironmentDetail>(`/api/environments/${environmentPath(id)}`);
 }
 
+export function getEnvironmentWorkflow(id: string, signal?: AbortSignal): Promise<import("./workflow").WorkflowResponse> {
+  return request(`/api/environments/${environmentPath(id)}/workflow`, { signal });
+}
+
 export function getItems(id: string, cursor?: string): Promise<ItemPage> {
   const query = new URLSearchParams({ limit: "100" });
   if (cursor) query.set("cursor", cursor);

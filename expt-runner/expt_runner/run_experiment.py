@@ -266,12 +266,12 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     sink_token = current_event_sink.set(sink)
     try:
         with ExitStack() as stack:
-            if environment_id == "calendar" and not ctx.get("runtime_manager") and any(
+            if not ctx.get("runtime_manager") and any(
                 agent.get("runtime", "in_process") != "in_process" for agent in cfg.get("agents", [])
             ):
                 from a2a_engine.remote.server import RuntimeManager
-                from calendar_game.remote import CALENDAR_TOOLS
-                manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=
+                from a2a_engine.workflow_runtime import runtime_capability
+                manager = stack.enter_context(RuntimeManager(runtime_capability(environment_id).tools, provisioning_dir=
                     os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"))
                 ctx = {**ctx, "runtime_manager": manager}
             return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
@@ -283,7 +283,9 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
 
 def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
           episode_uid: str, persist: bool, dry_run: bool) -> str:
-    kwargs = {"runtime_manager": ctx["runtime_manager"]} if environment_id == "calendar" and ctx.get("runtime_manager") else {}
+    from a2a_engine.workflow_runtime import runtime_capability
+    capability = runtime_capability(environment_id) if ctx.get("runtime_manager") else None
+    kwargs = capability.bind(ctx["runtime_manager"]) if capability else {}
     environment = spec.cls(config=cfg, dry_run=dry_run, **kwargs)
 
     tracer = get_tracer()
@@ -382,21 +384,25 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
 def _run_contexts(contexts, store, results_dir, *, max_workers, on_result, on_error):
     from a2a_engine.remote.seats import validate_runtimes
     from a2a_engine.adapters import resolve_bindings
-    remote = False
+    remote_environments = set()
     for ctx in contexts:
         cfg = ctx["config"]
         specs = validate_runtimes(cfg, scripted=ctx["dry_run"])
         if cfg.get("environment_id") == "calendar":
             resolve_bindings(cfg, specs)
-        remote |= any(spec.get("runtime", "in_process") != "in_process" for spec in specs)
+        if any(spec.get("runtime", "in_process") != "in_process" for spec in specs):
+            remote_environments.add(cfg.get("environment_id"))
     with ExitStack() as stack:
-        manager = None
-        if remote:
+        managers = {}
+        if remote_environments:
             from a2a_engine.remote.server import RuntimeManager
-            from calendar_game.remote import CALENDAR_TOOLS
+            from a2a_engine.workflow_runtime import runtime_capability
             directory = os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"
-            manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=directory))
-        items = [{**ctx, **({"runtime_manager": manager} if manager else {})} for ctx in contexts]
+            for environment_id in sorted(remote_environments):
+                managers[environment_id] = stack.enter_context(RuntimeManager(
+                    runtime_capability(environment_id).tools, provisioning_dir=directory))
+        items = [{**ctx, **({"runtime_manager": managers[ctx["config"]["environment_id"]]}
+                           if ctx["config"]["environment_id"] in managers else {})} for ctx in contexts]
         return run_with_parallelism(fn=lambda ctx: _run_one(ctx, store, results_dir), items=items,
                                     max_workers=max_workers, on_result=on_result, on_error=on_error)
 

@@ -566,6 +566,10 @@ class ControlPlane:
             })
         return environments
 
+    def environment_workflow(self, environment_id: str) -> dict[str, Any]:
+        from a2a_engine.workflow import environment_workflow
+        return environment_workflow(environment_id)
+
     def environment_detail(self, environment_id: str) -> dict[str, Any]:
         declaration = self._declaration(environment_id)
         release = self._release_for(environment_id, None)

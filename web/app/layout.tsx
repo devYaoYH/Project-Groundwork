@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Rail } from "../components/Rail";
+import "@xyflow/react/dist/style.css";
 import "../styles/globals.css";
 
 export const metadata: Metadata = {

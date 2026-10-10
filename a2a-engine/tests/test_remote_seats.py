@@ -41,8 +41,9 @@ def test_model_harness_requires_a_model_but_smoke_keeps_remote():
     assert validate_runtimes(cfg, scripted=True)[0]["runtime"] == "local_process"
     cfg["agents"][0]["model"] = "mock/model"
     assert validate_runtimes(cfg)[0]["harness"] == "structured_output"
-    with pytest.raises(ValueError, match="only by calendar"):
-        validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
+    assert validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
+    with pytest.raises(ValueError, match="unsupported"):
+        validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
 
 
 def test_real_local_child_direct_game_and_cleanup():

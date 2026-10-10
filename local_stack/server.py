@@ -76,6 +76,12 @@ class LocalStackHandler(BaseHTTPRequestHandler):
             ]})
         if parsed.path == "/api/environments":
             return self._json({"environments": self._control().environment_summaries()})
+        if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/workflow"):
+            environment_id = unquote(parsed.path.removeprefix("/api/environments/").removesuffix("/workflow").rstrip("/"))
+            try:
+                return self._json(self._control().environment_workflow(environment_id))
+            except KeyError:
+                return self._json({"error": "environment not found"}, 404)
         if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/items"):
             environment_id = unquote(
                 parsed.path.removeprefix("/api/environments/").removesuffix("/items").rstrip("/")
