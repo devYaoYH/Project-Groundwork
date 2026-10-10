@@ -1,0 +1,26 @@
+name: calendar_runtime_deepseek_v4_flash
+description: One bounded live Calendar episode; provider credentials exist only in agent services.
+storage: {backend: sqlite, path: /data/a2a.db}
+defaults:
+  environment_id: calendar
+  num_agents: 3
+  num_slots: 6
+  num_meetings: 2
+  num_participants: 3
+  density: 0.25
+  seed: 42
+  max_turns_per_round: 2
+  decision_retries: 1
+  enable_fallback: true
+  enable_reflection: true
+  reflection_frequency: environment
+  reflection_max_parallelism: 3
+  join_timeout_s: 30
+  turn_timeout_s: 120
+  communication_protocol: mixed
+  agents:
+    - {id: flash_0, type: llm, runtime: external, model: deepseek/deepseek-v4-flash, api_format: openai, api_base: "https://openrouter.ai/api/v1", temperature: 0.0, max_tokens: 4096}
+    - {id: flash_1, type: llm, runtime: external, model: deepseek/deepseek-v4-flash, api_format: openai, api_base: "https://openrouter.ai/api/v1", temperature: 0.0, max_tokens: 4096}
+    - {id: flash_2, type: llm, runtime: external, model: deepseek/deepseek-v4-flash, api_format: openai, api_base: "https://openrouter.ai/api/v1", temperature: 0.0, max_tokens: 4096}
+cells:
+  - {label: flash, count: 1}

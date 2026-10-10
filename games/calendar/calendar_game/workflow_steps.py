@@ -16,7 +16,17 @@ from .prompts import (
 
 
 class SchedulingState(TypedDict, total=False):
-    boundary: str
+    round_num: int
+    ready: bool
+    trace: object
+    coordinated: bool
+    per_agent_slot: dict
+    slot_conflicts: dict
+    consistency_violated_ids: set[int]
+    fallback_status: str
+    fallback_error: dict
+    chosen_slot: int
+    disp_plan: list[dict]
     turn_index: int
     has_activity: bool
     active_agent_ids: set[int]
@@ -67,6 +77,177 @@ class ReflectionContext:
     event_round: int
     reporter_agent_ids: list[int] | None = None
     prepared: dict = field(default_factory=dict)
+
+
+@dataclass
+class EpisodeContext:
+    game: object
+    scenario: dict
+    agents: list | None = None
+    domain: object = None
+    scheduling: RoundContext | None = None
+    reflection: ReflectionContext | None = None
+
+    def __getattr__(self, name):
+        if self.reflection is not None and hasattr(self.reflection, name):
+            return getattr(self.reflection, name)
+        if self.scheduling is not None and hasattr(self.scheduling, name):
+            return getattr(self.scheduling, name)
+        return getattr(self.domain, name)
+
+
+async def initialize_episode(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain = ctx.game._episode_domain(ctx.scenario, ctx.agents)
+    ctx.agents = ctx.domain.agents
+    return {"round_num": 0, "cursor": 0, "actor_order": list(range(len(ctx.agents))), "ready": True}
+
+
+async def await_external_readiness(state, runtime: Runtime):
+    ctx = runtime.context
+    if ctx.game.runtime_context is not None:
+        try:
+            for seat in ctx.game.runtime_context.episode.seats:
+                ctx.game.runtime_context.episode.wait_ready(seat)
+        except TimeoutError:
+            return {"ready": False}
+    return {}
+
+
+def readiness(state):
+    return "ready" if state["ready"] else "unavailable"
+
+
+async def register_agent(actor, operation, observation, state, context):
+    require_agent_step()
+    agent_id = state["actor_order"][state["cursor"]]
+    return {"ready": context.domain.register(agent_id, actor)}
+
+
+async def stopped_trace(state, runtime: Runtime):
+    return {"trace": runtime.context.domain.stopped()}
+
+
+def meeting_destination(state, runtime: Runtime):
+    return "next" if state["round_num"] < len(runtime.context.scenario["meetings"]) else "done"
+
+
+async def start_meeting(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.reflection = None
+    ctx.scheduling, updates = ctx.domain.start_meeting(state["round_num"], ctx.scenario["meetings"][state["round_num"]])
+    return {**updates, "actor_order": list(ctx.scheduling.speaker_order), "cursor": 0}
+
+
+async def notify_round(actor, operation, observation, state, context):
+    require_agent_step()
+    actor.start_round(context.scheduling.meeting, state["round_num"],
+                      incurred_penalty=context.scheduling.displacement_cost[actor.agent_id])
+    return {}
+
+
+async def voluntary_mode(state):
+    return {"mode": "VOLUNTARY"}
+
+
+async def participant_mode(state):
+    return {"mode": "DECISION"}
+
+
+async def resolve_meeting(state, runtime: Runtime):
+    ctx = runtime.context
+    return ctx.domain.resolve(state["round_num"], ctx.scheduling.meeting, state["turn_index"], state["blocked_slot_violations"])
+
+
+def fallback_eligibility(state, runtime: Runtime):
+    game = runtime.context.game
+    return "eligible" if not state["coordinated"] and not state["blocked_slot_violations"] and game.config.enable_fallback and not game.dry_run else "suppressed"
+
+
+async def search_fallback(state, runtime: Runtime):
+    ctx = runtime.context
+    return ctx.domain.fallback_search(state["round_num"], ctx.scheduling.meeting, state["turn_index"])
+
+
+def fallback_outcome(state):
+    return state["fallback_status"]
+
+
+async def apply_fallback(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain.fallback_apply(state["round_num"], ctx.scheduling.meeting, state["turn_index"], state["chosen_slot"], state["disp_plan"])
+    return {"coordinated": True, "per_agent_slot": {str(pid): state["chosen_slot"] for pid in ctx.scheduling.meeting["participants"]}}
+
+
+async def fallback_error(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.game._append_event("fallback_error", data={"round": state["round_num"], "turn": state["turn_index"],
+        "phase": "FALLBACK", "agent_id": None, "meeting_id": ctx.scheduling.meeting["id"],
+        "reason": state["fallback_status"], **state["fallback_error"]})
+    return {}
+
+
+async def record_outcome(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain.round_outcomes.append({"meeting_id": ctx.scheduling.meeting["id"],
+        "coordinated": state["coordinated"], "per_agent_slot": state["per_agent_slot"],
+        "slot_conflicts": state["slot_conflicts"], "consistency_violated_meeting_ids": sorted(state["consistency_violated_ids"]),
+        "blocked_slot_violations": state["blocked_slot_violations"]})
+    return {}
+
+
+def round_reflection_enabled(state, runtime: Runtime):
+    ctx = runtime.context
+    return "reflect" if ctx.game.config.enable_reflection and ctx.domain.reflection_frequency == "round" else "skip"
+
+
+def environment_reflection_enabled(state, runtime: Runtime):
+    ctx = runtime.context
+    return "reflect" if ctx.game.config.enable_reflection and ctx.domain.reflection_frequency == "environment" else "skip"
+
+
+async def prepare_round_reflection(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain.enter_phase("REFLECTION", state["round_num"])
+    ctx.reflection = ReflectionContext(ctx.game, ctx.agents, ctx.domain.all_agent_ids,
+        state["round_num"], state["round_num"], sorted(state["round_turn_agent_ids"]))
+    return {}
+
+
+async def prepare_environment_reflection(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain.enter_phase("REFLECTION", len(ctx.scenario["meetings"]))
+    ctx.reflection = ReflectionContext(ctx.game, ctx.agents, ctx.domain.all_agent_ids, None, len(ctx.scenario["meetings"]))
+    return {}
+
+
+async def accumulate_reflections(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.domain.reflection_estimates.extend(state["reflection_estimates"])
+    for agent_id, count in state["reflection_call_counts"].items():
+        ctx.domain.total_client_calls[agent_id] += count
+    return {}
+
+
+async def advance_meeting(state):
+    return {"round_num": state["round_num"] + 1}
+
+
+async def finalize_episode(state, runtime: Runtime):
+    return {"trace": runtime.context.domain.finalize()}
+
+
+async def prepare_episode_end(state, runtime: Runtime):
+    ctx = runtime.context
+    ctx.reflection = None
+    ctx.scheduling = None
+    return {"actor_order": sorted(ctx.game._remote_clients), "cursor": 0}
+
+
+async def end_agent_episode(actor, operation, observation, state, context):
+    require_agent_step()
+    context.game._remote_clients[state["actor_order"][state["cursor"]]].episode_end()
+    return {}
 
 
 def select_ordered_actor(state, context):

@@ -58,3 +58,38 @@ def test_remote_integrated_retries_and_reflection_match_pre_refactor(remote_harn
     assert normalized_events(traces[0]) == normalized_events(traces[1])
     assert traces[0].final_state == traces[1].final_state
     assert traces[0].metrics == traces[1].metrics
+
+
+@pytest.mark.parametrize("outcome", ["success", "depth_exceeded", "no_feasible_slot", "dry_run"])
+def test_complete_fallback_routes_match_local_and_both_transports(remote_harness, remote_harness_v2, outcome, monkeypatch):
+    from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible
+    from calendar_game.tests.test_workflow import play, setup_case
+    cfg, scenario = setup_case("empty", cap=0, retries=0)
+    cfg.update(num_agents=2, agents=[{"type": "scripted"}] * 2, enable_fallback=True,
+               enable_reflection=False, turn_timeout_s=10)
+    scenario["calendars"] = scenario["calendars"][:2]
+    if outcome in {"depth_exceeded", "no_feasible_slot"}:
+        def search(agents, meeting, *args, **kwargs):
+            if outcome == "depth_exceeded":
+                raise FallbackDepthExceeded(meeting["id"], 2)
+            raise FallbackImpossible(meeting["id"])
+        for module in ("calendar_game.game", "calendar_game.tests._legacy_workflow_oracle"):
+            monkeypatch.setattr(module + ".find_fallback_slot", search)
+    if outcome == "dry_run":
+        expected = LegacyCalendarGame(copy.deepcopy(cfg), dry_run=True).run_with_scenario(copy.deepcopy(scenario))
+    else:
+        expected, _ = play(LegacyCalendarGame, "empty", cfg, scenario)
+    for protocol, factory in ((1, remote_harness), (2, remote_harness_v2)):
+        harness = factory(seats=(0, 1))
+        policies = harness.policies if protocol == 2 else {seat: runtime.policy for seat, runtime in harness.runtimes.items()}
+        if outcome != "dry_run":
+            for policy in policies.values():
+                original = policy.calls
+                def calls(invocation, original=original):
+                    return [] if invocation.kind == "turn" else original(invocation)
+                policy.calls = calls
+        remote_cfg = {**cfg, "agents": [{"type": "scripted", "runtime": "external"}] * 2}
+        actual = CalendarGame(remote_cfg, dry_run=outcome == "dry_run", runtime_context=harness.context).run_with_scenario(copy.deepcopy(scenario))
+        assert normalized_events(actual) == normalized_events(expected)
+        assert actual.final_state == expected.final_state
+        assert actual.metrics == expected.metrics

@@ -26,6 +26,9 @@ calendar = "calendar_game"
 [tool.hatch.build.targets.wheel]
 packages = ["calendar_game"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"tasks/tiny_varied_density_5a3p.jsonl" = "calendar_game/items/tiny_varied_density_5a3p.jsonl"
+
 [tool.uv.sources]
 a2a-engine = { path = "../../a2a-engine", editable = true }
 expt-runner = { path = "../../expt-runner", editable = true }

@@ -1,4 +1,4 @@
-"""Executable Calendar boundaries called by the transitional game driver."""
+"""Calendar's executable episode graph and ordered scheduling subgraphs."""
 
 from langgraph.graph import END, START, StateGraph
 from a2a_engine.workflow_runtime import AgentStep, BatchStep, GraphProgram
@@ -92,26 +92,78 @@ def reflection_program():
     return GraphProgram(graph)
 
 
-def select_driver_boundary(state):
-    return state["boundary"]
-
-
 def build_program():
     graph = StateGraph(steps.SchedulingState)
-    graph.add_node("driver_boundary", steps.check_pass)
+    for name, function in (
+        ("initialize", steps.initialize_episode), ("external_readiness", steps.await_external_readiness),
+        ("next_registration", steps.check_pass), ("registration_outcome", steps.check_pass),
+        ("advance_registration", steps.advance_actor), ("stopped_trace", steps.stopped_trace),
+        ("meeting_guard", steps.check_pass), ("start_meeting", steps.start_meeting),
+        ("next_round_notification", steps.check_pass), ("advance_notification", steps.advance_actor),
+        ("voluntary_mode", steps.voluntary_mode), ("participant_mode", steps.participant_mode),
+        ("resolution", steps.resolve_meeting), ("fallback_search", steps.search_fallback),
+        ("fallback_apply", steps.apply_fallback), ("fallback_error", steps.fallback_error),
+        ("record_outcome", steps.record_outcome), ("prepare_round_reflection", steps.prepare_round_reflection),
+        ("collect_round_reflections", steps.accumulate_reflections), ("advance_meeting", steps.advance_meeting),
+        ("environment_reflection_guard", steps.check_pass),
+        ("prepare_environment_reflection", steps.prepare_environment_reflection),
+        ("collect_environment_reflections", steps.accumulate_reflections), ("finalize", steps.finalize_episode),
+        ("prepare_episode_end", steps.prepare_episode_end), ("next_episode_end", steps.check_pass),
+        ("advance_episode_end", steps.advance_actor),
+    ):
+        graph.add_node(name, function)
+    graph.add_node("register_agent", AgentStep(steps.select_ordered_actor, "register", steps.no_observation, steps.register_agent))
+    graph.add_node("notify_round", AgentStep(steps.select_ordered_actor, "start_round", steps.no_observation, steps.notify_round))
+    graph.add_node("end_agent_episode", AgentStep(steps.select_ordered_actor, "episode_end", steps.no_observation, steps.end_agent_episode))
     graph.add_node("cheap_talk_pass", cheap_talk_program().compiled)
-    graph.add_node("decision_batch", decision_program().compiled)
-    graph.add_node("reflection_batch", reflection_program().compiled)
-    graph.add_edge(START, "driver_boundary")
-    graph.add_conditional_edges("driver_boundary", select_driver_boundary, {
-        "cheap_talk": "cheap_talk_pass", "decision": "decision_batch", "reflection": "reflection_batch",
-    })
-    for name in ("cheap_talk_pass", "decision_batch", "reflection_batch"):
-        graph.add_edge(name, END)
-    return GraphProgram(graph, incomplete_reason="calendar_driver_not_migrated")
+    graph.add_node("voluntary_decisions", decision_program().compiled)
+    graph.add_node("participant_decisions", decision_program().compiled)
+    graph.add_node("round_reflections", reflection_program().compiled)
+    graph.add_node("environment_reflections", reflection_program().compiled)
+    graph.add_edge(START, "initialize")
+    graph.add_edge("initialize", "external_readiness")
+    graph.add_conditional_edges("external_readiness", steps.readiness, {"ready": "next_registration", "unavailable": "stopped_trace"})
+    graph.add_conditional_edges("next_registration", steps.next_actor, {"invoke": "register_agent", "finished": "meeting_guard"})
+    graph.add_edge("register_agent", "registration_outcome")
+    graph.add_conditional_edges("registration_outcome", steps.readiness, {"ready": "advance_registration", "unavailable": "stopped_trace"})
+    graph.add_edge("advance_registration", "next_registration")
+    graph.add_conditional_edges("meeting_guard", steps.meeting_destination, {"next": "start_meeting", "done": "environment_reflection_guard"})
+    graph.add_edge("start_meeting", "next_round_notification")
+    graph.add_conditional_edges("next_round_notification", steps.next_actor, {"invoke": "notify_round", "finished": "cheap_talk_pass"})
+    graph.add_edge("notify_round", "advance_notification")
+    graph.add_edge("advance_notification", "next_round_notification")
+    graph.add_edge("cheap_talk_pass", "voluntary_mode")
+    graph.add_edge("voluntary_mode", "voluntary_decisions")
+    graph.add_edge("voluntary_decisions", "participant_mode")
+    graph.add_edge("participant_mode", "participant_decisions")
+    graph.add_edge("participant_decisions", "resolution")
+    graph.add_conditional_edges("resolution", steps.fallback_eligibility, {"eligible": "fallback_search", "suppressed": "record_outcome"})
+    graph.add_conditional_edges("fallback_search", steps.fallback_outcome, {"success": "fallback_apply", "depth_exceeded": "fallback_error", "no_feasible_slot": "fallback_error"})
+    graph.add_edge("fallback_apply", "record_outcome")
+    graph.add_edge("fallback_error", "record_outcome")
+    graph.add_conditional_edges("record_outcome", steps.round_reflection_enabled, {"reflect": "prepare_round_reflection", "skip": "advance_meeting"})
+    graph.add_edge("prepare_round_reflection", "round_reflections")
+    graph.add_edge("round_reflections", "collect_round_reflections")
+    graph.add_edge("collect_round_reflections", "advance_meeting")
+    graph.add_edge("advance_meeting", "meeting_guard")
+    graph.add_conditional_edges("environment_reflection_guard", steps.environment_reflection_enabled, {"reflect": "prepare_environment_reflection", "skip": "finalize"})
+    graph.add_edge("prepare_environment_reflection", "environment_reflections")
+    graph.add_edge("environment_reflections", "collect_environment_reflections")
+    graph.add_edge("collect_environment_reflections", "finalize")
+    for name in ("finalize", "stopped_trace"):
+        graph.add_edge(name, "prepare_episode_end")
+    graph.add_edge("prepare_episode_end", "next_episode_end")
+    graph.add_conditional_edges("next_episode_end", steps.next_actor, {"invoke": "end_agent_episode", "finished": END})
+    graph.add_edge("end_agent_episode", "advance_episode_end")
+    graph.add_edge("advance_episode_end", "next_episode_end")
+    return GraphProgram(graph)
 
 
 def scheduling_limit(config):
     # Supersteps, not turns: each ordered call and each retry consumes several nodes.
     return max(100, 30 + 12 * max(0, config.max_turns_per_round) * config.num_agents
                + 14 * config.num_agents * (max(0, config.decision_retries) + 1))
+
+
+def episode_limit(config, meetings):
+    return 100 + max(0, meetings) * (scheduling_limit(config) + 10 * config.num_agents + 50)

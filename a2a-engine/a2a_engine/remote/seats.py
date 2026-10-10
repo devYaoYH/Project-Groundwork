@@ -86,7 +86,7 @@ class LocalProcessLauncher:
             self.process.wait(timeout=5)
 
 
-def write_descriptor(directory, episode, seat, join_url):
+def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError("provisioning directory must not be a symlink")
@@ -94,15 +94,18 @@ def write_descriptor(directory, episode, seat, join_url):
     if directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise ValueError("provisioning directory must be owner-only")
     path = directory / f"{episode.episode_id}-seat-{seat.seat}.json"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    temporary = directory / f".descriptor-{uuid.uuid4().hex}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as handle:
             json.dump({"join_url": join_url, "seat": seat.seat,
                        "environment_id": episode.environment_id,
-                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket}, handle)
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket,
+                       **({"policy": policy} if policy is not None else {})}, handle)
+        # Watchers must never observe a partially written, one-time descriptor.
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 

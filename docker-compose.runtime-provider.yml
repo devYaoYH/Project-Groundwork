@@ -1,0 +1,24 @@
+services:
+  runtime-seat-0:
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set the agent-only OpenRouter credential}
+    networks: [runtime, provider-egress]
+  runtime-seat-1:
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set the agent-only OpenRouter credential}
+    networks: [runtime, provider-egress]
+  runtime-seat-2:
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set the agent-only OpenRouter credential}
+    networks: [runtime, provider-egress]
+  runtime-seat-3:
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set the agent-only OpenRouter credential}
+    networks: [runtime, provider-egress]
+  runtime-seat-4:
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set the agent-only OpenRouter credential}
+    networks: [runtime, provider-egress]
+
+networks:
+  provider-egress:

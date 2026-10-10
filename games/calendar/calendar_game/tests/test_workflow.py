@@ -141,7 +141,7 @@ def test_integrated_subgraphs_match_frozen_driver_exactly(case, cap, retries, fr
         assert any(seat == 3 and method == "voluntary" for seat, method, args in calls)
 
 
-def test_export_is_partial_and_has_actual_retry_and_batch_boundaries_without_execution(monkeypatch):
+def test_export_is_complete_and_has_actual_retry_and_batch_boundaries_without_execution(monkeypatch):
     import calendar_game.workflow as workflow
     import calendar_game.workflow_steps as steps
 
@@ -159,24 +159,67 @@ def test_export_is_partial_and_has_actual_retry_and_batch_boundaries_without_exe
     for target in ("calendar_game.game.solve_optimal", "calendar_game.game.resolve_config",
                    "calendar_game.remote.RemoteSeatClient.__init__", "a2a_engine.remote.server.RuntimeManager.__init__"):
         monkeypatch.setattr(target, fail)
-    monkeypatch.setattr(workflow, "select_driver_boundary", fail)
     first = environment_workflow("calendar")
     assert first == environment_workflow("calendar")
-    assert first["status"] == "partial"
+    assert first["status"] == "available"
     body = first["workflow"]
-    assert body["diagnostics"] == [{"code": "calendar_driver_not_migrated", "graph": "root"}]
-    assert len(body["graphs"]) == 5
-    decision = next(g for g in body["graphs"] if g["id"] == "root/decision_batch")
+    assert body["diagnostics"] == []
+    assert len(body["graphs"]) == 8
+    root = next(g for g in body["graphs"] if g["id"] == "root")
+    assert {e.get("route_key") for e in root["edges"]} >= {"ready", "unavailable", "next", "done", "eligible", "suppressed", "success", "depth_exceeded", "no_feasible_slot", "reflect", "skip"}
+    assert {n.get("operation") for n in root["nodes"]} >= {"register", "start_round", "episode_end"}
+    decision = next(g for g in body["graphs"] if g["id"] == "root/participant_decisions")
     assert {e.get("route_key") for e in decision["edges"]} >= {"retry", "stage", "apply", "exhausted", "commit", "rollback"}
     assert not any(node["kind"] == "batch" for node in decision["nodes"])
-    reflection = next(g for g in body["graphs"] if g["id"] == "root/reflection_batch")
+    reflection = next(g for g in body["graphs"] if g["id"] == "root/round_reflections")
     batch = next(node for node in reflection["nodes"] if node["kind"] == "batch")
     assert batch["serial_key_selector"] == "calendar_game.workflow_steps.remote_reporter_serial_key"
     assert {n["id"] for n in reflection["nodes"]} >= {"launch_reflections", "join_reflections", "collect_in_call_order"}
     body_call = next(g for g in body["graphs"] if g["id"] == batch["subgraph"])
     assert next(n for n in body_call["nodes"] if n["kind"] == "agent_call")["actor_selector"].endswith("select_reporter_target")
-    assert len(json.dumps(first)) < 40000
+    assert len(json.dumps(first)) < 80000
     assert all(not n.get("source_ref", {}).get("path", "").startswith("/") for g in body["graphs"] for n in g["nodes"])
+
+
+@pytest.mark.parametrize("outcome", ["success", "depth_exceeded", "no_feasible_slot", "dry_run", "blocked", "zero_meetings"])
+def test_complete_episode_fallback_and_exit_routes_match_frozen_driver(outcome, monkeypatch):
+    from calendar_game.fallback import FallbackDepthExceeded, FallbackImpossible
+    cfg, scenario = setup_case("empty", cap=0, retries=0)
+    cfg.update(enable_fallback=True, enable_reflection=False)
+    if outcome == "zero_meetings":
+        scenario["meetings"] = []
+    if outcome == "blocked":
+        scenario["calendars"][0][0] = {"errand_id": 99, "cost": 10, "blocked": True}
+    if outcome in {"depth_exceeded", "no_feasible_slot"}:
+        def search(agents, meeting, *args, **kwargs):
+            if outcome == "depth_exceeded":
+                raise FallbackDepthExceeded(meeting["id"], 2)
+            raise FallbackImpossible(meeting["id"])
+        for module in ("calendar_game.game", "calendar_game.tests._legacy_workflow_oracle"):
+            monkeypatch.setattr(module + ".find_fallback_slot", search)
+    traces, recorded = [], []
+    for cls in (LegacyCalendarGame, CalendarGame):
+        calls, agents = [], []
+        for slots in scenario["calendars"]:
+            agent = Agent(ControlledClient(calls, "blocked" if outcome == "blocked" else "empty"))
+            agent.calendar = Calendar(len(slots))
+            agent.calendar.slots = copy.deepcopy(slots)
+            agents.append(agent)
+        game = cls(copy.deepcopy(cfg), dry_run=outcome == "dry_run")
+        traces.append(game._run_with_agents(agents, copy.deepcopy(scenario)))
+        recorded.append(calls)
+    expected, actual = traces
+    assert recorded[0] == recorded[1]
+    assert normalized_events(expected) == normalized_events(actual)
+    assert expected.final_state == actual.final_state
+    assert expected.metrics == actual.metrics
+    errors = [event.data["reason"] for event in actual.events if event.type == "fallback_error"]
+    if outcome in {"depth_exceeded", "no_feasible_slot"}:
+        assert errors == [outcome] * 2
+    if outcome == "success":
+        assert sum(event.type == "fallback_applied" for event in actual.events) == 2
+    if outcome in {"dry_run", "blocked", "zero_meetings"}:
+        assert not any(event.type == "fallback_start" for event in actual.events)
 
 
 @pytest.mark.parametrize("parallelism", [1, 2, None])

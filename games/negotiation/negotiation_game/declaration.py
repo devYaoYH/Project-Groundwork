@@ -8,6 +8,8 @@ from a2a_engine.items import ItemBank
 
 
 _BANK_PATH = Path(__file__).parents[1] / "data" / "scenario_pools" / "run_009" / "filtered.json"
+if not _BANK_PATH.is_file():
+    _BANK_PATH = Path(__file__).parent / "items" / "filtered.json"
 
 DECLARATION = ReleaseDeclaration(
     id="negotiation",

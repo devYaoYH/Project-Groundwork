@@ -199,8 +199,8 @@ def test_preflight_rejects_all_unsupported_configs_before_any_children(tmp_path,
     calls = []
     monkeypatch.setattr(RuntimeManager, "__enter__", lambda self: calls.append(self))
     good = config(num_agents=1, agents=[{"type": "scripted", "runtime": "local_process"}])
-    bad = {**good, "environment_id": "buyer_seller"}
-    with pytest.raises(ValueError, match="only by calendar"):
+    bad = {**good, "agents": [{"type": "scripted", "runtime": "human"}]}
+    with pytest.raises(ValueError, match="human is not yet supported"):
         _run_contexts([_make_run_context("preflight", "cell", cfg, i, False) for i, cfg in enumerate([good, bad])],
                       object(), tmp_path, max_workers=2, on_result=None, on_error=None)
     assert not calls

@@ -145,6 +145,7 @@ class LoopbackServer:
 
     def __enter__(self):
         self.socket = socket.socket()
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((self.bind_host, self.port))
         self.socket.listen(128)
         self.base_url = (self.network.advertised_origin if self.network and self.network.advertised_origin

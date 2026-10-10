@@ -905,11 +905,7 @@ class CalendarGame:
     def _close_remote(self) -> None:
         try:
             if self.runtime_context is not None:
-                try:
-                    for client in self._remote_clients.values():
-                        client.episode_end()
-                finally:
-                    self.runtime_context.close()
+                self.runtime_context.close()
         finally:
             if self._owned_manager is not None:
                 manager, self._owned_manager = self._owned_manager, None
@@ -999,9 +995,10 @@ class CalendarGame:
             return [], {}
 
         from .workflow_steps import ReflectionContext
-        program = getattr(self, "_workflow_program", None) or self.build_program()
+        from .workflow import reflection_program
+        program = reflection_program()
         result = await program.ainvoke(
-            {"boundary": "reflection"},
+            {},
             context=ReflectionContext(self, agents, all_agent_ids, round_num, event_round, reporter_agent_ids),
             config={"recursion_limit": 100},
         )
@@ -1015,6 +1012,14 @@ class CalendarGame:
             self._close_remote()
 
     async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> EpisodeTrace:
+        from .workflow import episode_limit
+        from .workflow_steps import EpisodeContext
+        context = EpisodeContext(self, scenario, agents)
+        result = await self.build_program().ainvoke({}, context=context,
+            config={"recursion_limit": episode_limit(self.config, len(scenario["meetings"]))})
+        return result["trace"]
+
+    def _episode_domain(self, scenario: dict, agents: list[Agent] | None = None):
         self._ensure_speaker_orders(scenario)
         optimal = (
             scenario.get("optimal")
@@ -1068,19 +1073,13 @@ class CalendarGame:
                                 final_state={"calendars": [agent.calendar.slots for agent in agents],
                                              "rating_context": build_calendar_rating_context(scenario)}, metrics={})
 
-        if self.runtime_context:
-            try:
-                for seat in self.runtime_context.episode.seats:
-                    self.runtime_context.episode.wait_ready(seat)
-            except TimeoutError:
-                return stopped()
         all_agent_ids = list(range(self.config.num_agents))
         communication_policy_by_phase = (
             {phase: self.topology.effective(phase=phase, round=0).as_dict()
              for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
             if not self.topology.legacy else {}
         )
-        for agent_id, agent in enumerate(agents):
+        def register(agent_id, agent):
             dsm_prior_meetings = [
                 {
                     "id": int(prior["id"]),
@@ -1123,7 +1122,7 @@ class CalendarGame:
                 agent.register(agent_id, game_config)
             except TimeoutError:
                 if agent_id in self._remote_clients:
-                    return stopped()
+                    return False
                 raise
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
                 dataclasses.asdict(game_config)
@@ -1139,6 +1138,7 @@ class CalendarGame:
                 "system_prompt": system_prompt_text,
                 "calendar_render": agent.calendar.render(),
             })
+            return True
 
         # 5. Per-environment accumulators
         displacement_cost: dict[int, int] = {i: 0 for i in range(self.config.num_agents)}
@@ -1306,13 +1306,10 @@ class CalendarGame:
                 effective_policy = policy
             return policy.protocol
 
-        from .workflow import scheduling_limit
         from .workflow_steps import RoundContext
-        self._workflow_program = self.build_program()
-        graph_config = {"recursion_limit": scheduling_limit(self.config)}
 
-        # 6. Main loop — one round per meeting
-        for round_num, meeting in enumerate(scenario["meetings"]):
+        def start_meeting(round_num, meeting):
+            nonlocal communication_protocol, round_messaging_tools_invoked_by_agent
             for agent_id, agent in enumerate(agents):
                 if agent.inbox_queue:
                     dropped_messages = list(agent.inbox_queue)
@@ -1336,14 +1333,10 @@ class CalendarGame:
             active_agent_ids: set[int] = set(speaker_order)
             active_agent_order = list(speaker_order)
 
-            # call start_round for all active cheap-talk agents
-            for agent_id in active_agent_order:
-                agents[agent_id].start_round(meeting, round_num, incurred_penalty=displacement_cost[agent_id])
-
             # per-round state
             already_queued: set[int] = set()
             round_turn_agent_ids: set[int] = set()
-            round_messaging_tools_invoked_by_agent: dict[int, int] = {
+            round_messaging_tools_invoked_by_agent = {
                 i: 0 for i in range(self.config.num_agents)
             }
             self._remote_budget_usage = round_messaging_tools_invoked_by_agent
@@ -1355,21 +1348,15 @@ class CalendarGame:
                 communication_policy_by_phase, displacement_cost, total_client_calls,
                 deliver_cheap_talk_tool, enter_phase,
             )
-            state = await self._workflow_program.ainvoke({
-                "boundary": "cheap_talk", "turn_index": turn_index, "has_activity": True,
+            return context, {
+                "turn_index": turn_index, "has_activity": True,
                 "active_agent_ids": active_agent_ids, "active_agent_order": active_agent_order,
                 "already_queued": already_queued, "round_turn_agent_ids": round_turn_agent_ids,
                 "blocked_slot_violations": blocked_slot_violations,
-            }, context=context, config=graph_config)
-            for mode in ("VOLUNTARY", "DECISION"):
-                state = await self._workflow_program.ainvoke(
-                    {**state, "boundary": "decision", "mode": mode}, context=context, config=graph_config,
-                )
-            turn_index = state["turn_index"]
-            round_turn_agent_ids = state["round_turn_agent_ids"]
-            blocked_slot_violations = state["blocked_slot_violations"]
+            }
 
-            # --- RESOLUTION PHASE ---
+        def resolve(round_num, meeting, turn_index, blocked_slot_violations):
+            blocked_slot_violations = list(blocked_slot_violations)
             enter_phase("RESOLUTION", round_num)
             per_agent_slot: dict[str, int | None] = {}
             for agent_id in meeting["participants"]:
@@ -1466,23 +1453,31 @@ class CalendarGame:
                 "consistency_violated_meeting_ids": sorted(consistency_violated_ids),
                 "blocked_slot_violations": blocked_slot_violations,
             })
+            return {"coordinated": coordinated, "per_agent_slot": per_agent_slot,
+                    "slot_conflicts": slot_conflicts, "consistency_violated_ids": consistency_violated_ids,
+                    "blocked_slot_violations": blocked_slot_violations}
 
-            # --- FALLBACK PHASE ---
-            if not coordinated and not blocked_slot_violations and self.config.enable_fallback and not self.dry_run:
-                enter_phase("FALLBACK", round_num)
-                self._append_event("fallback_start", data={
+        def fallback_search(round_num, meeting, turn_index):
+            enter_phase("FALLBACK", round_num)
+            self._append_event("fallback_start", data={
                     "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                     "agent_id": None,
                     "meeting_id": meeting["id"],
                     "participants": meeting["participants"],
-                })
-                try:
-                    chosen_slot, disp_plan = find_fallback_slot(
+            })
+            try:
+                chosen_slot, disp_plan = find_fallback_slot(
                         agents, meeting, self.config.num_slots,
                         meeting_registry, list(registered_meetings.values()),
                         max_depth=self.config.fallback_max_depth,
-                    )
-                    # Apply displacement actions grouped by agent
+                )
+                return {"fallback_status": "success", "chosen_slot": chosen_slot, "disp_plan": disp_plan}
+            except FallbackDepthExceeded as exc:
+                return {"fallback_status": "depth_exceeded", "fallback_error": {"depth": exc.depth, "detail": str(exc)}}
+            except FallbackImpossible as exc:
+                return {"fallback_status": "no_feasible_slot", "fallback_error": {"detail": str(exc)}}
+
+        def fallback_apply(round_num, meeting, turn_index, chosen_slot, disp_plan):
                     registry_cascades: list[int] = []
                     for action in disp_plan:
                         aid = action["agent_id"]
@@ -1520,8 +1515,6 @@ class CalendarGame:
                             if len(cascade_slots) == 1:
                                 meeting_registry[mid_c] = next(iter(cascade_slots))
                     meeting_registry[meeting["id"]] = chosen_slot
-                    coordinated = True
-                    per_agent_slot = {str(pid): chosen_slot for pid in meeting["participants"]}
                     self._append_event("fallback_applied", data={
                         "round": round_num, "turn": turn_index, "phase": "FALLBACK",
                         "agent_id": None,
@@ -1535,61 +1528,44 @@ class CalendarGame:
                             for pid in meeting["participants"]
                         },
                     })
-                except FallbackDepthExceeded as exc:
-                    self._append_event("fallback_error", data={
-                        "round": round_num, "turn": turn_index, "phase": "FALLBACK",
-                        "agent_id": None,
-                        "meeting_id": meeting["id"],
-                        "reason": "depth_exceeded",
-                        "depth": exc.depth,
-                        "detail": str(exc),
-                    })
-                except FallbackImpossible as exc:
-                    self._append_event("fallback_error", data={
-                        "round": round_num, "turn": turn_index, "phase": "FALLBACK",
-                        "agent_id": None,
-                        "meeting_id": meeting["id"],
-                        "reason": "no_feasible_slot",
-                        "detail": str(exc),
-                    })
+        round_messaging_tools_invoked_by_agent = {}
 
-            round_outcomes.append({
-                "meeting_id": meeting["id"],
-                "coordinated": coordinated,
-                "per_agent_slot": per_agent_slot,
-                "slot_conflicts": slot_conflicts,
-                "consistency_violated_meeting_ids": sorted(consistency_violated_ids),
-                "blocked_slot_violations": blocked_slot_violations,
-            })
+        def finalize():
+            return self._finalize_episode(
+                scenario=scenario, agents=agents, optimal=optimal, greedy=greedy,
+                displacement_cost=displacement_cost, fallback_displacement_cost=fallback_displacement_cost,
+                total_client_calls=total_client_calls, total_dms_sent=total_dms_sent,
+                total_participant_groupchat_messages_sent=total_participant_groupchat_messages_sent,
+                total_all_groupchat_messages_sent=total_all_groupchat_messages_sent,
+                total_dm_chars=total_dm_chars, total_participant_groupchat_chars=total_participant_groupchat_chars,
+                total_all_groupchat_chars=total_all_groupchat_chars, max_dm_chars=max_dm_chars,
+                max_participant_groupchat_chars=max_participant_groupchat_chars, max_all_groupchat_chars=max_all_groupchat_chars,
+                messages_sent_by_agent=messages_sent_by_agent, messages_received_by_agent=messages_received_by_agent,
+                dms_sent_by_agent=dms_sent_by_agent,
+                participant_groupchat_messages_sent_by_agent=participant_groupchat_messages_sent_by_agent,
+                all_groupchat_messages_sent_by_agent=all_groupchat_messages_sent_by_agent,
+                round_outcomes=round_outcomes, reflection_estimates=reflection_estimates,
+                representation_elo_by_agent=representation_elo_by_agent, team_metadata=team_metadata,
+                initial_calendar_densities=initial_calendar_densities, nosy_agent_ids=nosy_agent_ids,
+                communication_protocol=communication_protocol)
 
-            if reflection_frequency == "round":
-                if self.config.enable_reflection:
-                    enter_phase("REFLECTION", round_num)
-                round_reflections, reflection_call_counts = await self._run_reflection_measurement(
-                    agents=agents,
-                    all_agent_ids=all_agent_ids,
-                    round_num=round_num,
-                    event_round=round_num,
-                    reporter_agent_ids=sorted(round_turn_agent_ids),
-                )
-                reflection_estimates.extend(round_reflections)
-                for agent_id, count in reflection_call_counts.items():
-                    total_client_calls[agent_id] += count
+        from types import SimpleNamespace
+        return SimpleNamespace(agents=agents, register=register, stopped=stopped,
+            start_meeting=start_meeting, resolve=resolve, fallback_search=fallback_search,
+            fallback_apply=fallback_apply, finalize=finalize, enter_phase=enter_phase,
+            all_agent_ids=all_agent_ids, reflection_frequency=reflection_frequency,
+            round_outcomes=round_outcomes, reflection_estimates=reflection_estimates,
+            total_client_calls=total_client_calls)
 
-        if reflection_frequency == "environment":
-            if self.config.enable_reflection:
-                enter_phase("REFLECTION", len(scenario["meetings"]))
-            game_reflections, reflection_call_counts = await self._run_reflection_measurement(
-                agents=agents,
-                all_agent_ids=all_agent_ids,
-                round_num=None,
-                event_round=len(scenario["meetings"]),
-            )
-            reflection_estimates.extend(game_reflections)
-            for agent_id, count in reflection_call_counts.items():
-                total_client_calls[agent_id] += count
-
-        # 7. Compute final metrics
+    def _finalize_episode(self, *, scenario, agents, optimal, greedy, displacement_cost,
+            fallback_displacement_cost, total_client_calls, total_dms_sent,
+            total_participant_groupchat_messages_sent, total_all_groupchat_messages_sent,
+            total_dm_chars, total_participant_groupchat_chars, total_all_groupchat_chars,
+            max_dm_chars, max_participant_groupchat_chars, max_all_groupchat_chars,
+            messages_sent_by_agent, messages_received_by_agent, dms_sent_by_agent,
+            participant_groupchat_messages_sent_by_agent, all_groupchat_messages_sent_by_agent,
+            round_outcomes, reflection_estimates, representation_elo_by_agent, team_metadata,
+            initial_calendar_densities, nosy_agent_ids, communication_protocol):
         total_meetings = len(scenario["meetings"])
         coordinated_meetings = sum(1 for o in round_outcomes if o["coordinated"])
         coordination_rate = coordinated_meetings / total_meetings if total_meetings > 0 else 1.0

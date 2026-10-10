@@ -81,11 +81,17 @@ class AgentRuntimeV2:
             Route("/hello", self.hello, methods=["POST"]),
             Route("/mcp", McpRoute(), methods=["POST", "GET", "DELETE"]),
             Route("/health", self.health),
+            Route("/credentials", self.credentials),
         ])
 
     async def health(self, request):
         self._expire()
         return JSONResponse({"healthy": not self.stopping})
+
+    async def credentials(self, request):
+        from a2a_engine.llm.factory import PROVIDER_ENV_VARS, get_api_key_for_provider
+        return JSONResponse({"providers": {provider: bool(get_api_key_for_provider(provider))
+                                         for provider in PROVIDER_ENV_VARS}})
 
     async def hello(self, request):
         body = await request.body()
@@ -282,6 +288,19 @@ class AgentRuntimeV2:
             record.receipt = await report_completion(invocation, finished, network=self.network, grace_s=self.grace_s)
         except (Exception, asyncio.CancelledError):
             pass
+
+    async def close_session(self, key):
+        session = self.sessions.get(key)
+        if session is None:
+            return
+        session.ended = True
+        session.expires = self.clock()
+        tasks = [record.task for record in self.records.values() if record.session is session and not record.task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._expire()
 
     async def close(self):
         self.stopping = True

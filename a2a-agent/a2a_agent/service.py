@@ -46,27 +46,58 @@ def read_descriptor(path):
     return descriptor
 
 
+def descriptor_policy(descriptor, directory, network):
+    if "policy" not in descriptor and descriptor["environment_id"] in {"calendar", "probe"}:
+        return ProbePolicy(directory, network)
+    config = descriptor.get("policy", {"type": "scripted"})
+    if not isinstance(config, dict) or set(config) - {"type", "model", "api_base", "api_format", "temperature", "max_tokens"}:
+        raise ValueError("unsupported agent policy")
+    environment_id = descriptor["environment_id"]
+    kind = config.get("type", "scripted")
+    if kind not in {"scripted", "heuristic", "llm"} or (kind == "heuristic" and environment_id != "negotiation"):
+        raise ValueError("unsupported agent strategy")
+    model = None
+    if environment_id == "negotiation":
+        from negotiation_game.runtime_strategy import NegotiationStrategy
+        return NegotiationStrategy(config=config if kind == "llm" else None)
+    if kind == "llm":
+        from a2a_engine.llm.factory import make_llm_client
+        from a2a_engine.remote.compose import MODEL_FIELDS
+        if not config.get("model"):
+            raise ValueError("provider strategy requires a model")
+        model = make_llm_client({"temperature": 0.0, **{key: value for key, value in config.items() if key in MODEL_FIELDS and key != "type"}})
+    if environment_id == "calendar":
+        if model is not None:
+            from .strategies import StructuredOutputStrategy
+            return StructuredOutputStrategy(model)
+        return ScriptedPolicy()
+    if environment_id == "word_guess":
+        from word_guess.runtime_strategy import WordGuessStrategy
+        return WordGuessStrategy(client=model)
+    if environment_id == "buyer_seller":
+        from buyer_seller.runtime_strategy import BuyerSellerStrategy
+        return BuyerSellerStrategy(client=model)
+    if environment_id == "probe":
+        return ProbePolicy(directory, network)
+    raise ValueError("unsupported environment strategy")
+
+
 async def watch(runtime, directory, callback_url):
     seen = set()
+    sessions = {}
     while not runtime.stopping:
         existing = set(directory.glob("*.json"))
+        for path in list(sessions):
+            if path not in existing:
+                await runtime.close_session(sessions.pop(path))
         seen.intersection_update(existing)
         for path in sorted(existing - seen):
             seen.add(path)
             try:
                 descriptor = read_descriptor(path)
-                policy = ProbePolicy(directory, runtime.network)
-                if descriptor.get("environment_id") == "word_guess":
-                    from word_guess.runtime_strategy import WordGuessStrategy
-                    policy = WordGuessStrategy()
-                elif descriptor.get("environment_id") == "buyer_seller":
-                    from buyer_seller.runtime_strategy import BuyerSellerStrategy
-                    policy = BuyerSellerStrategy()
-                elif descriptor.get("environment_id") == "negotiation":
-                    from negotiation_game.runtime_strategy import NegotiationStrategy
-                    policy = NegotiationStrategy()
-                await runtime.join(descriptor["join_url"], callback_url, descriptor["join_ticket"],
-                                   policy=policy)
+                policy = descriptor_policy(descriptor, directory, runtime.network)
+                admission = await runtime.join(descriptor["join_url"], callback_url, descriptor["join_ticket"], policy=policy)
+                sessions[path] = (admission.environment_id, admission.episode_id, admission.attempt_id, admission.seat)
             except Exception:
                 # Never expose admission bodies, ticket-bearing paths, URLs or provider errors.
                 print("Agent provisioning rejected", flush=True)
@@ -77,11 +108,17 @@ async def watch(runtime, directory, callback_url):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", required=True)
-    parser.add_argument("--environment-origin", required=True)
+    parser.add_argument("--environment-origin", action="append", required=True)
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--provisioning-dir", type=Path, default=Path("/provision"))
     args = parser.parse_args()
-    network = NetworkPolicy(advertised_origin=args.origin, allowed_origins=[args.origin, args.environment_origin])
+    origins = []
+    for origin in args.environment_origin:
+        if origin.endswith(":ports"):
+            origins.extend(f"{origin.removesuffix(':ports')}:{port}" for port in range(8100, 8132))
+        else:
+            origins.append(origin)
+    network = NetworkPolicy(advertised_origin=args.origin, allowed_origins=[args.origin, *origins])
     runtime = AgentRuntimeV2(network=network)
     with LoopbackServer(runtime.app, port=args.port, bind_host="0.0.0.0", network=network) as io:
         io.run(watch(runtime, args.provisioning_dir, args.origin), timeout=None)

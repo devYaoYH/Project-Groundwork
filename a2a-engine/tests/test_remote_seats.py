@@ -112,6 +112,37 @@ def test_descriptor_refuses_public_directory_and_symlink(tmp_path):
             manager.provision(cfg)
 
 
+def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch):
+    from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+    episode = EpisodeContext("atomic", [0])
+    dump = json.dump
+
+    def observed_dump(payload, handle):
+        handle.write("{")
+        handle.flush()
+        assert not list(tmp_path.glob("*.json"))
+        handle.seek(0)
+        handle.truncate()
+        return dump(payload, handle)
+
+    monkeypatch.setattr("a2a_engine.remote.seats.json.dump", observed_dump)
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    assert json.loads(descriptor.read_text())["join_ticket"] == episode.seats[0].ticket
+    assert descriptor.stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_duplicate_descriptor_never_overwrites_existing_ticket(tmp_path):
+    from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+    episode = EpisodeContext("duplicate", [0])
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    original = descriptor.read_bytes()
+    with pytest.raises(FileExistsError):
+        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/join")
+    assert descriptor.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_child_environment_never_inherits_sibling_secrets(monkeypatch):
     captured = {}
 

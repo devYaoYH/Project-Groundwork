@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         runner_args.append("--smoke-test")
     if args.dry_run:
         runner_args.append("--dry-run")
+    store = SQLiteEpisodeStore(path=args.storage_path)
+    existing = {episode.episode_uid for episode in store.iter_episodes()}
     result = run_experiment(runner_args)
     if result != 0:
         return result
@@ -58,11 +60,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     if not declared:
         return result
-    emitted = [
-        episode.metrics
-        for episode in SQLiteEpisodeStore(path=args.storage_path).iter_episodes()
-        if episode.config.environment_id == environment_id
-    ]
+    episodes = [episode for episode in store.iter_episodes()
+                if episode.config.environment_id == environment_id and episode.episode_uid not in existing]
+    if any(episode.stopped for episode in episodes):
+        raise AssertionError(f"runtime release for {environment_id!r} emitted a stopped episode")
+    emitted = [episode.metrics for episode in episodes]
     if not emitted:
         raise AssertionError(f"runtime release for {environment_id!r} emitted no episodes")
     missing = {

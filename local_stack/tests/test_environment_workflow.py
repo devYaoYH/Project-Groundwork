@@ -27,7 +27,7 @@ def test_workflow_projection_preserves_declaration_and_never_constructs_game(tmp
     monkeypatch.setattr(NegotiationGame, 'runtime_capability', fail)
     assert control.environment_workflow("word_guess")["status"] == "available"
     assert control.environment_detail("word_guess") == before
-    assert control.environment_workflow("calendar")["status"] == "partial"
+    assert control.environment_workflow("calendar")["status"] == "available"
     assert control.environment_workflow("buyer_seller")["status"] == "available"
     assert control.environment_detail("buyer_seller") == bargaining_before
     assert control.environment_workflow("negotiation")["status"] == "available"
@@ -55,7 +55,7 @@ def test_real_workflow_http_status_and_no_source_reader(tmp_path):
                 client.close()
         status, body = get("/api/environments/word_guess/workflow")
         assert status == 200 and body["status"] == "available"
-        assert get("/api/environments/calendar/workflow")[1]["status"] == "partial"
+        assert get("/api/environments/calendar/workflow")[1]["status"] == "available"
         status, bargaining = get("/api/environments/buyer_seller/workflow")
         assert status == 200 and bargaining["status"] == "available"
         assert {e.get("route_key") for e in bargaining["workflow"]["graphs"][0]["edges"] if e["conditional"]} == {"continue", "finished", "accepted", "rejected"}

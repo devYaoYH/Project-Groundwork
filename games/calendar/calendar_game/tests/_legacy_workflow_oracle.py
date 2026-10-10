@@ -54,6 +54,12 @@ from calendar_game.game import CalendarGame, compute_headline_scores, _clip01
 
 
 class LegacyCalendarGame(CalendarGame):
+    def _close_remote(self):
+        if self.runtime_context is not None and self.runtime_context.episode.active:
+            for client in self._remote_clients.values():
+                client.episode_end()
+        super()._close_remote()
+
     async def _run_reflection_measurement(
         self,
         *,

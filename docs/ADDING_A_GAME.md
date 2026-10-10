@@ -99,21 +99,35 @@ class BuyerSellerGame:
     def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())   # sync entry point; async inside
 
+    @classmethod
+    def build_program(cls):
+        from .workflow import build_program
+        return build_program()
+
     async def _run_async(self) -> EpisodeTrace:
-        self.events.append("game_start", data={...})
-        # ... loop, calling await agent.act(observation, tools={}) ...
-        self.events.append("game_end", data={...})
-        return EpisodeTrace(
-            episode_uid=str(uuid.uuid4()),   # the runner overwrites this
-            config=self.config,
-            events=self.events.all(),
-            final_state={...},           # what the world looked like at the end
-            metrics={...},               # scalars you will plot
+        from .workflow import GameContext, recursion_limit
+        result = await self.build_program().ainvoke(
+            {}, context=GameContext(self),
+            config={"recursion_limit": recursion_limit(self.config)},
         )
+        return result["trace"]
 ```
 
-`run()` must be synchronous. Wrapping an async loop in `asyncio.run` is the
-normal pattern — all four shipped games do it.
+`run()` remains synchronous and wraps graph execution with `asyncio.run`. The game owns event emission and `EpisodeTrace` assembly in its finalization node; raw graph state is not the trace contract. The example's context and limit are game-owned helpers; use the shipped workflow modules as executable references.
+
+### Executable workflow and remote adapters
+
+All four shipped games execute local LangGraph programs. Author a `StateGraph` in `workflow.py`, wrap it with `GraphProgram`, and expose it through side-effect-free `build_program()`. The same builder supplies execution and `GET /api/environments/<id>/workflow`; do not write a descriptive provider, parallel edge table, renderer-specific graph catalog, or event-to-node mapping.
+
+- Put counters, candidates and explicit scheduling outcomes in graph state; keep agents, private domain objects, event sinks, sockets and waiters in invocation context.
+- Declare every agent handoff with `AgentStep(actor_selector, operation, observation_builder, adapter)`. Domain leaves may calculate, validate and commit effects but must not hide another invocation, round loop or retry loop. The invocation gateway catches exercised violations, not arbitrary Python bypasses.
+- Use finite executable route maps for optional phases, termination and validation retries. Size the superstep limit from game bounds, not LangGraph's default. Real subgraphs provide navigation; `BatchStep` exposes actual bounded fan-out/join execution, including per-seat serialization where required.
+- Expose a class-level `runtime_capability()` for execution-only environment tools and context binding. Add a game-owned staged submission tool in `remote.py` and agent-owned strategy in `runtime_strategy.py`. Provider execution, prompts/parsers and history stay agent-side; authorization, validation, resolution and events stay environment-side.
+- New separate-container examples use `a2a-turns/2`; `/1` is an explicit legacy loopback adapter. Acknowledgement is not completion or permission to commit. Missing/failed results follow the game's established policy, never an invented generic fallback.
+
+Export reads executable bindings, routes and actual subgraphs without constructing an episode, evaluating selectors/guards, resolving tasks, running a solver, making provider calls or contacting a runtime. It shows possible control flow, not a historical replay or communication-permission graph. Source references are package-relative symbols, not source-reading endpoints; the structural digest is not a hash of every domain algorithm.
+
+Test exact observations/prompts, normalized events, final state and metrics against a frozen test-only baseline, including untaken routes and failure/timeout/cleanup paths. Add fail-fast export doubles, ordinary installed-wheel checks, real isolated container execution and generic API/browser coverage. Never keep the frozen orchestration as a second production driver. See `docs/AGENT_RUNTIME_CONTRACT.md` and `docs/LOCAL_STACK.md` for the supported provisioning deployment.
 
 ### 3.3 Agents
 
@@ -339,6 +353,8 @@ assert exact outcomes and run in CI with no keys. From
   SQLite storage, and `observability.capture_content: true`
 - [ ] `a2a-run experiments/example.yaml --smoke-test` passes
 - [ ] Protocol tests pass with no keys
+- [ ] Execution and inspection use one side-effect-free `build_program()` with explicit handoffs, finite routes and bounded recursion
+- [ ] Remote adapters/strategies pass `/2` parity and isolated Compose smoke; installed wheels export without execution or credentials
 - [ ] Every declared derived metric has a registered deterministic extractor;
   `scripts/materialize_metrics.py --database ... --environment <environment>` is idempotent
 - [ ] Added to `experiments/all_games_smoke.yaml` and `site/games.json`
@@ -347,7 +363,8 @@ assert exact outcomes and run in CI with no keys. From
 
 | You want to … | Look at |
 |---|---|
-| Write the environment loop | `a2a_engine.schemas.EpisodeTrace`, `a2a_engine.tracing.EventLog` |
+| Author executable orchestration | `a2a_engine.workflow_runtime`, `games/buyer-seller/buyer_seller/workflow.py` |
+| Assemble the trace and events | `a2a_engine.schemas.EpisodeTrace`, `a2a_engine.tracing.EventLog` |
 | Subclass an agent | `a2a_engine.agent.LLMAgent` |
 | Build an LLM client from config | `a2a_engine.llm.factory.make_llm_client` |
 | Choose where episodes go | `docs/STORAGE.md` |

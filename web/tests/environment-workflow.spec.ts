@@ -191,38 +191,48 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
 }
 
 for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
-  test(`partial Calendar subgraphs at ${width}px ${colorScheme}`, async ({ page, request }) => {
+  test(`complete Calendar subgraphs at ${width}px ${colorScheme}`, async ({ page, request }) => {
     await page.setViewportSize({ width, height: 1000 });
     await page.emulateMedia({ colorScheme });
     const { status, workflow } = await (await request.get("/api/environments/calendar/workflow")).json();
-    expect(status).toBe("partial");
+    expect(status).toBe("available");
     await page.goto("/environments/calendar/");
     const section = page.locator(".workflow-section");
     const inspector = section.getByRole("complementary", { name: "Step inspector" });
     const outline = section.locator(".workflow-outline");
     const canvas = section.locator(".workflow-canvas");
-    await expect(section.getByText(/not a complete episode/)).toBeVisible();
+    await expect(section.getByText(/not a complete episode/)).toHaveCount(0);
     const root = workflow.graphs.find((g: { id: string }) => g.id === "root");
     await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
-    for (const name of ["cheap_talk_pass", "decision_batch", "reflection_batch"]) {
+    await expect(canvas.locator('.react-flow__edge')).toHaveCount(root.edges.length);
+    for (const route of ['unavailable', 'eligible', 'suppressed', 'success', 'depth_exceeded', 'no_feasible_slot']) {
+      await expect(canvas.getByText(route, { exact: true }).first()).toBeVisible();
+    }
+    for (const node of root.nodes) {
+      await outline.getByRole('button', { name: node.id, exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect(inspector.getByRole('heading', { name: node.id, exact: true })).toBeVisible();
+      await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"]`)).toHaveClass(/selected/);
+    }
+    for (const name of ["cheap_talk_pass", "voluntary_decisions", "participant_decisions", "round_reflections", "environment_reflections"]) {
       const select = outline.getByRole("button", { name, exact: true });
       await select.focus(); await page.keyboard.press("Enter");
       const open = inspector.getByRole("button", { name: "Open subgraph" });
       await open.focus(); await page.keyboard.press("Enter");
       const graph = workflow.graphs.find((g: { id: string }) => g.id === `root/${name}`);
       await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
-      await expect(section.getByText(/not a complete episode/)).toBeVisible();
+      await expect(section.getByText(/not a complete episode/)).toHaveCount(0);
       for (const node of graph.nodes) {
         const button = outline.getByRole("button", { name: node.id, exact: true });
         await button.focus(); await page.keyboard.press("Enter");
         await expect(inspector.getByRole("heading", { name: node.id, exact: true })).toBeVisible();
         await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"]`)).toHaveClass(/selected/);
       }
-      if (name === "decision_batch") {
+      if (name.endsWith("decisions")) {
         await expect(canvas.getByText("retry", { exact: true })).toBeVisible();
         expect(graph.nodes.some((n: { kind: string }) => n.kind === "batch")).toBe(false);
       }
-      if (name === "reflection_batch") {
+      if (name.endsWith("reflections")) {
         await outline.getByRole("button", { name: "bounded_fan_out", exact: true }).click();
         await expect(inspector.getByText(/Bounded concurrent fan-out/)).toBeVisible();
         await inspector.getByRole("button", { name: "Open subgraph" }).focus();
@@ -232,7 +242,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
         await expect(outline.getByRole("button", { name: "join_reflections", exact: true })).toBeVisible();
       }
       await section.getByRole("button", { name: "Root graph" }).focus(); await page.keyboard.press("Enter");
-      await expect(outline.getByRole("button", { name: "driver_boundary", exact: true })).toBeVisible();
+      await expect(outline.getByRole("button", { name: "meeting_guard", exact: true })).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   });

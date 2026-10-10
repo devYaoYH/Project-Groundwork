@@ -48,7 +48,7 @@ def test_calendar_container_subgraphs_callbacks_and_frozen_driver_parity():
             pending = request("status")
             if pending["accepted_pending"] and pending["staged"] == 1:
                 break
-            assert not pending["done"], pending
+            assert not pending["done"], json.dumps(pending)
             time.sleep(0.1)
         assert pending["accepted_pending"] and pending["staged"] == 1 and not pending["closed"] and not pending["done"]
         time.sleep(2.5)
@@ -63,7 +63,7 @@ def test_calendar_container_subgraphs_callbacks_and_frozen_driver_parity():
             time.sleep(0.1)
         assert status["done"] and status["error"] is None, json.dumps(status)
         assert {key: status[key] for key in ("episodes", "reflections", "parity", "persisted_readback", "workflow")} == {
-            "episodes": 2, "reflections": 12, "parity": True, "persisted_readback": True, "workflow": "partial"}
+            "episodes": 2, "reflections": 12, "parity": True, "persisted_readback": True, "workflow": "available"}
         for name in services[1:]:
             compose("exec", "-T", name, "python", "-c", "from pathlib import Path; import os; "
                 "assert not Path('/data').exists(); assert not list(Path('/provision').glob('*.json')); "

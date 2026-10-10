@@ -31,6 +31,9 @@ negotiation = "negotiation_game"
 [tool.hatch.build.targets.wheel]
 packages = ["negotiation_game", "negotiation_analysis", "negotiation_judge"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"data/scenario_pools/run_009/filtered.json" = "negotiation_game/items/filtered.json"
+
 [tool.uv.sources]
 a2a-engine = { path = "../../a2a-engine", editable = true }
 expt-runner = { path = "../../expt-runner", editable = true }

@@ -1,0 +1,12 @@
+name: negotiation_runtime_smoke
+storage: {backend: sqlite, path: /data/a2a.db}
+defaults:
+  environment_id: negotiation
+  num_rounds: 2
+  cheap_talk_turns: 1
+  seed: 4
+  agents:
+    - {id: first, type: heuristic, runtime: external}
+    - {id: second, type: heuristic, runtime: external}
+cells:
+  - {label: isolated, count: 2}

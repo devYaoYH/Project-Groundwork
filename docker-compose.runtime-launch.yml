@@ -1,0 +1,91 @@
+name: a2a-isolated-runtime
+
+x-agent: &agent
+  build:
+    context: .
+    dockerfile: a2a-agent/runtime/Dockerfile
+  image: a2a-agent-runtime:local
+  environment:
+    OTEL_SDK_DISABLED: "true"
+    LANGCHAIN_TRACING_V2: "false"
+  networks: [runtime]
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os; from urllib.request import urlopen; urlopen(os.environ['A2A_HEALTH_URL'], timeout=2).read()"]
+    interval: 1s
+    timeout: 3s
+    retries: 60
+  stop_grace_period: 5s
+
+services:
+  viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: a2a-comm-local:latest
+    environment:
+      A2A_RUNTIME_MODE: compose
+      A2A_RUNTIME_HOST: viewer
+      A2A_PROVISIONING_DIR: /provision
+      A2A_TRACE_DB: /data/a2a.db
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-data:/data
+      - seat-0:/provision/seat-0
+      - seat-1:/provision/seat-1
+      - seat-2:/provision/seat-2
+      - seat-3:/provision/seat-3
+      - seat-4:/provision/seat-4
+    networks: [runtime, viewer-ui]
+    ports: ["127.0.0.1:8082:8080"]
+    command: ["python", "local_stack/server.py", "--database", "/data/a2a.db", "--workspace", "/workspace", "--static-dir", "/opt/groundwork-web", "--host", "0.0.0.0", "--port", "8080"]
+    depends_on:
+      runtime-seat-0: {condition: service_healthy}
+      runtime-seat-1: {condition: service_healthy}
+      runtime-seat-2: {condition: service_healthy}
+      runtime-seat-3: {condition: service_healthy}
+      runtime-seat-4: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/api/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  runtime-seat-0:
+    <<: *agent
+    environment: {OTEL_SDK_DISABLED: "true", A2A_HEALTH_URL: "http://runtime-seat-0:8001/health"}
+    volumes: ["seat-0:/provision:ro"]
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-seat-0:8001", "--environment-origin", "http://viewer:ports"]
+  runtime-seat-1:
+    <<: *agent
+    environment: {OTEL_SDK_DISABLED: "true", A2A_HEALTH_URL: "http://runtime-seat-1:8001/health"}
+    volumes: ["seat-1:/provision:ro"]
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-seat-1:8001", "--environment-origin", "http://viewer:ports"]
+  runtime-seat-2:
+    <<: *agent
+    environment: {OTEL_SDK_DISABLED: "true", A2A_HEALTH_URL: "http://runtime-seat-2:8001/health"}
+    volumes: ["seat-2:/provision:ro"]
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-seat-2:8001", "--environment-origin", "http://viewer:ports"]
+  runtime-seat-3:
+    <<: *agent
+    environment: {OTEL_SDK_DISABLED: "true", A2A_HEALTH_URL: "http://runtime-seat-3:8001/health"}
+    volumes: ["seat-3:/provision:ro"]
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-seat-3:8001", "--environment-origin", "http://viewer:ports"]
+  runtime-seat-4:
+    <<: *agent
+    environment: {OTEL_SDK_DISABLED: "true", A2A_HEALTH_URL: "http://runtime-seat-4:8001/health"}
+    volumes: ["seat-4:/provision:ro"]
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-seat-4:8001", "--environment-origin", "http://viewer:ports"]
+
+volumes:
+  runtime-data:
+  seat-0:
+  seat-1:
+  seat-2:
+  seat-3:
+  seat-4:
+
+networks:
+  runtime:
+    internal: true
+  viewer-ui:
