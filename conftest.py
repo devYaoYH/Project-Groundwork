@@ -43,6 +43,43 @@ def remote_harness():
 
 
 @pytest.fixture
+def remote_harness_v2():
+    from a2a_agent.server import AgentRuntimeV2
+    from a2a_engine.remote.dispatch import LoopbackServer
+    from a2a_engine.remote.server import EnvironmentApp
+    from calendar_game.remote import CALENDAR_TOOLS, CalendarRuntimeContext
+
+    with ExitStack() as stack:
+        def create(*, seats=(0,), join=True, episode_id="episode", join_timeout_s=10):
+            environment = EnvironmentApp(CALENDAR_TOOLS)
+            io = stack.enter_context(LoopbackServer(environment.app))
+            episode = environment.registry.provision(episode_id, seats, join_timeout_s=join_timeout_s)
+            stack.callback(environment.registry.unregister, episode)
+            runtime = AgentRuntimeV2()
+            callback = stack.enter_context(LoopbackServer(runtime.app))
+            invocations = []
+            policies = {}
+            for seat in seats:
+                from a2a_agent.scripted import ScriptedPolicy
+                policy = ScriptedPolicy()
+                calls = policy.calls
+
+                def record(invocation, original=calls):
+                    invocations.append(invocation)
+                    return original(invocation)
+
+                policy.calls = record
+                policies[seat] = policy
+                if join:
+                    callback.run(runtime.join(f"{io.base_url}/episodes/{episode_id}/join", callback.base_url,
+                                              episode.seats[seat].ticket, policy=policy))
+            return SimpleNamespace(environment=environment, io=io, episode=episode, runtime=runtime,
+                                   callback=callback, invocations=invocations, policies=policies,
+                                   context=CalendarRuntimeContext(environment, io, episode))
+        yield create
+
+
+@pytest.fixture
 def open_remote_turn(remote_harness):
     from calendar_game.agents import GameConfig
     from calendar_game.game import CalendarGame

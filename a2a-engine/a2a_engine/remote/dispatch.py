@@ -18,7 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from a2a_engine.llm.retry import RetryPolicy, compute_delay
-from .contract import MAX_BODY_BYTES, TurnCompletion
+from .contract import MAX_BODY_BYTES, TurnAcceptance, TurnCompletion
 
 DELIVERY_POLICY = RetryPolicy(max_attempts=3, backoff_base=0.05, backoff_max=0.25)
 
@@ -105,8 +105,11 @@ def verify_push(body: bytes, headers, key: str):
         raise ValueError("invalid or expired push signature") from None
 
 
-async def post_signed(url, model, key, *, timeout=None):
-    loopback_url(url)
+async def post_signed(url, model, key, *, timeout=None, network=None):
+    if network is None:
+        loopback_url(url)
+    else:
+        network.validate(url)
     remaining = (model.deadline - datetime.now(timezone.utc)).total_seconds()
     if timeout is not None:
         remaining = min(remaining, timeout)
@@ -131,16 +134,21 @@ async def post_signed(url, model, key, *, timeout=None):
 class LoopbackServer:
     """One lifespan on one I/O loop, usable by a blocked synchronous worker."""
 
-    def __init__(self, app, *, port=0):
+    def __init__(self, app, *, port=0, bind_host="127.0.0.1", network=None):
         self.app = app
         self.loop = None
         self.port = port
+        self.bind_host = bind_host
+        self.network = network
+        if bind_host != "127.0.0.1" and (network is None or network.advertised_origin is None):
+            raise ValueError("non-loopback bind requires provisioned origins")
 
     def __enter__(self):
         self.socket = socket.socket()
-        self.socket.bind(("127.0.0.1", self.port))
+        self.socket.bind((self.bind_host, self.port))
         self.socket.listen(128)
-        self.base_url = f"http://127.0.0.1:{self.socket.getsockname()[1]}"
+        self.base_url = (self.network.advertised_origin if self.network and self.network.advertised_origin
+                         else f"http://127.0.0.1:{self.socket.getsockname()[1]}")
         async def guarded(scope, receive, send):
             if scope["type"] == "http":
                 request = Request(scope)
@@ -267,3 +275,77 @@ class TurnDispatcher:
         finally:
             if not future.done():
                 future.cancel()
+
+
+class TurnDispatcherV2:
+    def __init__(self, io, lifecycle, *, request_timeout_s=2, network=None, policy=DELIVERY_POLICY,
+                 clock=time.monotonic):
+        self.io = io
+        self.lifecycle = lifecycle
+        self.request_timeout_s = request_timeout_s
+        self.network = network
+        self.policy = policy
+        self.clock = clock
+
+    async def _start(self, seat, invocation, deadline, record):
+        from .network import mcp_call
+
+        async def request(remaining):
+            result = await mcp_call(seat.callback_url + "/mcp", seat.secret, "start_turn",
+                                    invocation.model_dump(mode="json"),
+                                    timeout=min(remaining, self.request_timeout_s), network=self.network)
+            acceptance = TurnAcceptance.model_validate(result)
+            if any(getattr(acceptance, key) != value for key, value in invocation.identity().model_dump().items()):
+                raise ValueError("invalid acceptance identity")
+            record.acceptance = acceptance
+            if acceptance.status == "rejected":
+                self.lifecycle.close(record, "rejected")
+            return acceptance
+
+        def attempted(count):
+            if record.recorder:
+                with record.recorder.lock:
+                    record.recorder.attempts = count
+
+        return await deliver_with_retry(request, deadline=deadline, policy=self.policy,
+                                        clock=self.clock, on_attempt=attempted)
+
+    def dispatch(self, seat, invocation, recorder=None, *, deadline=None):
+        deadline = deadline if deadline is not None else (recorder.deadline if recorder else self.clock() + max(
+            0, (invocation.deadline - datetime.now(timezone.utc)).total_seconds()))
+        record = self.lifecycle.open(invocation, deadline=deadline, recorder=recorder)
+        future = None
+        try:
+            start = self._start(seat, invocation, deadline, record)
+            try:
+                future = self.io.submit(start)
+            except BaseException:
+                start.close()
+                raise
+            while not record.event.is_set():
+                if recorder:
+                    recorder.service_work()
+                    if recorder.closed:
+                        self.lifecycle.close(record, recorder.closed_by)
+                if self.clock() >= deadline:
+                    self.lifecycle.close(record, "deadline")
+                # Ambiguous start delivery is not permission to close early or switch
+                # protocols. A valid completion wins even when every acknowledgement is lost.
+                record.event.wait(min(0.01, max(0, deadline - self.clock())))
+            if record.finished and record.finished.status == "succeeded":
+                return TurnCompletion(turn_id=invocation.turn_id, telemetry=record.finished.telemetry,
+                                      reflection=record.finished.reflection)
+            if recorder:
+                return None
+            raise DeliveryFailure(record.closed_by, recorder.attempts if recorder else 0)
+        finally:
+            if not record.event.is_set():
+                self.lifecycle.close(record, "cancelled")
+            if future is not None:
+                if not future.done():
+                    future.cancel()
+                else:
+                    try:
+                        future.result()
+                    except Exception:
+                        pass

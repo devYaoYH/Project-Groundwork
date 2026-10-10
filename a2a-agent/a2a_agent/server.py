@@ -21,6 +21,7 @@ from a2a_engine.remote.contract import MAX_BODY_BYTES, Hello, JoinRequest, JoinR
 from a2a_engine.remote.dispatch import LoopbackServer, loopback_url, verify_push
 from .mcp_client import execute
 from .scripted import ScriptedPolicy
+from .runtime_v2 import AgentRuntimeV2
 
 
 class ScriptedRuntime:

@@ -111,11 +111,13 @@ class ExternalSeat:
     registered: bool = False
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
     recorder: object = field(default=None, repr=False)
+    protocol_version: str = "a2a-turns/1"
 
 
 class EpisodeContext:
-    def __init__(self, episode_id, seats, *, join_timeout_s=10):
+    def __init__(self, episode_id, seats, *, join_timeout_s=10, environment_id="calendar"):
         self.episode_id = episode_id
+        self.environment_id = environment_id
         self.attempt_id = uuid.uuid4().hex
         self.seats = {seat: ExternalSeat(seat, time.time() + join_timeout_s) for seat in seats}
         self.lock = threading.RLock()

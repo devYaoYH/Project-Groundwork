@@ -459,7 +459,7 @@ class CalendarGame:
             elif event_type in {"turn_end", "decide_end"}:
                 payload.update(remote.lifecycle)
             elif event_type == "agent_registered":
-                payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version="a2a-turns/1",
+                payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version=remote.seat.protocol_version,
                                agent_info={"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
                 if payload["runtime"] == "local_process":
                     spec = self._agent_spec_for(agent_id)

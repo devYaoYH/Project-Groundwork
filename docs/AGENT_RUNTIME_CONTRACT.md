@@ -1,6 +1,8 @@
-# Agent Runtime Contract: a2a-turns/1
+# Agent Runtime Contract: a2a-turns/1 And a2a-turns/2
 
-Calendar's environment owns the clock, ordering, validation, calendar commits, message routing, seeds, and event log. An admitted runtime receives signed HTTP pushes and acts through two episode-scoped Streamable HTTP MCP endpoints. The reference package requires Python 3.11+ and pins MCP SDK 1.26.0; the application protocol `a2a-turns/1` is separate from the SDK's negotiated MCP transport version.
+Calendar's environment owns the clock, ordering, validation, calendar commits, message routing, seeds, and event log. The reference package requires Python 3.11+ and pins MCP SDK 1.26.0. Application protocol negotiation is separate from MCP's transport version. `a2a-turns/1` remains the explicit legacy loopback adapter; `a2a-turns/2` admits short requests and reports eventual completion independently. There is no automatic fallback after ambiguous delivery.
+
+The sections through Schema And Conformance describe the unchanged `/1` contract. The Acknowledgement-First Protocol section specifies `/2` and the private two-container probe.
 
 ## Admission And Identity
 
@@ -11,7 +13,7 @@ The runner provisions one ticket per remote seat and attempt. `local_process` ch
 3. After the successful challenge, the environment returns a separately minted seat secret, the two MCP URLs, negotiated protocol, and `ready_url`.
 4. The runtime installs the secret and acknowledges `ready_url` using `Authorization: Bearer <seat_secret>`. No game data is dispatched before this barrier.
 
-Tickets cannot authenticate later pushes. URLs must use HTTP with literal loopback addresses and explicit ports, without credentials, query, fragment, or redirects. Host and Origin must match the actual bound server. A generic private IP, Compose service name, or public address is not trusted by this spike. In Compose, children share the runner/viewer container's loopback namespace; MCP and callback ports are never published. TLS/mTLS and separate agent containers remain future work.
+Tickets cannot authenticate later pushes. `/1` URLs must use HTTP with literal loopback addresses and explicit ports, without credentials, query, fragment, or redirects. Host and Origin must match the actual bound server. A generic private IP, Compose service name, or public address is not trusted. Legacy Compose children share the runner/viewer container's loopback namespace; MCP and callback ports are never published. `/2` uses separately provisioned exact service origins as described below. Production TLS/mTLS remains outside this local deployment contract.
 
 ## Signed Pushes
 
@@ -78,3 +80,67 @@ uv run a2a-agent --port 8765 --join-descriptor /tmp/a2a-private-joins/ATTEMPT-se
 ```
 
 Do not print, commit, or copy the descriptor into logs. Use a fresh runtime per episode. The command emits only a sanitized pass/fail report and removes provisioning on all exit paths. Cloud-free CI also runs the packaged mixed smoke experiment, independent scripted subprocess conformance, and mock-model prompt/action tests. No live provider calls are an acceptance gate.
+
+## Acknowledgement-First Protocol: a2a-turns/2
+
+### Negotiation And Network Authority
+
+`JoinRequest.protocol_versions` explicitly selects `/2` when supported. A `/2` bootstrap challenge and admission include `environment_id` and `attempt_id` in addition to episode and seat. The ticket is consumed once, authenticates only the challenge, and is removed from runtime bootstrap state after admission. The ready barrier remains mandatory. Container mode rejects `/1`; a loopback harness can deliberately choose either protocol. `PROTOCOL_VERSION` and the existing `/1` schema/conformance fixtures are unchanged.
+
+`NetworkPolicy` distinguishes the socket bind from the advertised origin. The local container servers bind `0.0.0.0`, advertise the exact configured Compose service origin, and validate Host and any supplied Origin against that origin. Endpoints must match provisioned HTTP origins with explicit ports; arbitrary private IPs, unrelated service names, credentials, query strings, fragments, redirects, and alternate callback paths are rejected. Admission uses the configured environment origin, not untrusted request headers, to construct the endpoint map. The agent checks this exact map against its private join URL. Loopback mode retains literal-IP validation.
+
+### Wire Shapes
+
+Every `/2` invocation, acceptance, completion, and receipt carries the complete identity: `protocol_version`, `environment_id`, `episode_id`, `attempt_id`, `seat`, and `turn_id`.
+
+| Shape | Additional Fields | Meaning |
+|---|---|---|
+| `TurnInvocationV2` | kind, bounded operation, phase/parent phase, absolute deadline, observation, prompt, inbox, MCP endpoints, optional action capability, lifecycle credential | One invocation, including lifecycle-only work |
+| `TurnAcceptance` | status accepted/rejected, safe reason code | Validation and admission to an in-memory runtime-owned task, not model progress or durable delivery |
+| `TurnFinished` | status succeeded/failed, safe failure code, numeric telemetry, optional reflection | Immutable terminal outcome; never authoritative game actions |
+| `CompletionReceipt` | disposition recorded/duplicate/closed | Correlated lifecycle acknowledgement, not renewed action authority |
+
+The current operation vocabulary is `register`, `observe`, `act`, `reflect`, `episode_end`, and the integration-only `probe`. Operations must agree with invocation kind. Calendar action turns retain the existing supported phases and retry-parent restrictions. There is no arbitrary method-name RPC.
+
+### Request And Completion Ordering
+
+1. The environment opens a lifecycle pending record and registers its waiter before dispatch. Every register, round notification, reflection, action turn, and episode-end invocation has its own record, even without game tools.
+2. The environment calls the agent's Streamable HTTP MCP `start_turn` tool at `/mcp`, authenticated with the admitted seat secret. Its ordinary MCP result contains `TurnAcceptance`; it is not HTTP 202 and is never parsed as `TurnCompletion`.
+3. Admission atomically reserves one execution slot for the episode/attempt/seat session. Identical starts return the same acceptance without repeating execution; changed bodies conflict. Another observation for that busy session is rejected, not queued. Different admitted sessions can execute independently.
+4. The task owns model execution/history and awaits its action tool outcomes. Game tool calls retain stable call IDs, deduplication, action capabilities, and the existing recorder/worker authority. The request that admitted the task can end without cancelling it.
+5. The runtime finishes history and action work, installs an immutable `TurnFinished`, and releases the execution slot before requesting a completion receipt. The next invocation can begin as soon as the environment records completion, even while the previous receipt is still in flight. A lingering synchronous provider thread keeps the model/history unavailable until its lock is released.
+6. The runtime calls `complete_turn` at `/episodes/{id}/lifecycle/mcp` with the separate lifecycle credential. The environment authenticates the full identity from the registered credential, closes/revokes action authority, snapshots the recorder under its lock, then signals the waiter. No MCP callback applies Calendar mutations or emits domain events.
+7. The graph/Calendar worker consumes the closed staged snapshot and applies its game policy. Calendar keeps previously staged actions after failure/expiry, as `/1` does. Acceptance alone never closes or completes the recorder.
+
+The lifecycle credential is a random, registry-bound secret separate from the signed action capability. It grants only terminal reporting/duplicate receipts, never game tools, and spends no action-call or message budget. A caller-selected attempt/seat/turn cannot substitute for its registered identity. Identical completions are idempotent; changed terminal bodies fail. Reports after closure return `closed` without modifying snapshots. A brief grace permits duplicate receipts after deadline/action revocation, including episode teardown; it cannot extend execution authority.
+
+### Failure, Retention, And Cleanup
+
+The default start-request timeout is 2 seconds, independent of the environment's longer game deadline (the probe deliberately uses 0.5 seconds). Ambiguous start retries retain the identical body, identity, credentials, and deadline. A valid correlated completion wins over a lost acknowledgement. A confirmed rejection closes promptly. Exhausted ambiguous start delivery and loss of an accepted runtime wait until the environment deadline; neither creates a fresh turn nor triggers `/1` fallback. Completion reporting has its own bounded retries using the same terminal body.
+
+Default runtime bounds are 128 sessions, 128 executing sessions, and 1,024 invocation records. Sessions expire after one hour of their admission unless ended sooner. The environment bounds its pending/terminal registry to 1,024 records. Terminal lifecycle credentials and runtime records have a 5-second post-deadline/closure grace. Active tasks/records are never evicted to make capacity; overload rejects admission. The private provisioning watcher periodically expires ended/expired idle sessions and terminal records. Shutdown cancels/awaits runtime tasks and clears sessions; episode teardown closes all pending waiters and revokes action authority. Crashes lose in-memory state and fail/expire turns, not resume them. No checkpointer or durable turn recovery is installed.
+
+Provider request timeouts remain clipped to the authoritative deadline. Cancelled provider results cannot append history or stage actions, and the provider lock prevents overlap with subsequent model use. No provider credentials belong in the environment's `/2` deployment. The integration service selects scripted policies only; API users can admit separate per-session agent-side strategies without moving model/history ownership to the environment.
+
+### Private Compose Probe And Tests
+
+`docker-compose.agent-runtime.yml` adds two services on an internal-only network: `runtime-environment` uses the same environment image as the base Compose stack and runs the executable `StateGraph` probe; `runtime-agent` uses its own Python image with no viewer build, workspace, trace database, results, or Docker socket. Neither runtime publishes ports. The environment writes the one-time descriptor into a private per-seat volume; the agent mounts only that seat's directory read-only, not sibling tickets or environment storage. Files are owner-only and read without following symlinks. Tickets, capabilities, lifecycle credentials, and addresses never enter experiment config or probe results.
+
+Build/run only these integration services (do not start the unrelated default runner/viewer services):
+
+```bash
+docker compose --env-file /dev/null --profile agent-runtime -f docker-compose.yml -f docker-compose.agent-runtime.yml up --build -d --wait runtime-environment runtime-agent
+```
+
+The probe's local `/status` and `/release` endpoints are deterministic test controls, not game/runtime authoring APIs. The agent stages an action and services an immediate worker-owned tool, then waits on the private release signal while the graph remains pending beyond the short request timeout. Releasing it causes an independent opposite-direction MCP completion, closed-snapshot consumption, and episode-end notification without terminating the long-lived agent process. General CLI/viewer provisioning and four-game rollout remain later phases; this probe does not replace the runner or migrate a game loop.
+
+The real Docker tests create disposable Compose projects, build current images, verify health/network/scoped mounts, hold and complete the turn, kill an accepted runtime to verify deadline closure and snapshot survival, check redaction/session-only episode end/process exit, and remove only their projects' containers/network/volumes in `finally`. Docker unavailability fails this gate rather than skipping it. Run with a build timeout long enough for fresh image dependencies:
+
+```bash
+uv run pytest tests/runtime/test_container_turns.py
+uv run pytest a2a-engine/tests/test_remote_*.py a2a-agent/tests games/calendar/calendar_game/tests/test_remote_*.py
+uv run python scripts/export_turn_contract.py --check
+uv run python scripts/export_turn_contract.py --protocol-version a2a-turns/2 --check
+```
+
+`docs/a2a-turns-2.schema.json` is a separate generated bundle. Explicit version selection preserves the original default `/1` exporter/check. The engine pins local LangGraph 1.0.10 alongside MCP 1.26.0; there is no LangGraph Server or LangSmith service requirement. Tests compare Calendar `/2` actions, normalized events, final state, and metrics with local and `/1` controlled baselines, and exercise lifecycle races, credential scope, deduplication, overload, expiry, and runtime cleanup.

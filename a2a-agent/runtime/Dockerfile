@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /opt/runtime
+COPY a2a-engine /opt/runtime/a2a-engine
+COPY a2a-agent /opt/runtime/a2a-agent
+RUN python -m pip install --no-cache-dir /opt/runtime/a2a-engine /opt/runtime/a2a-agent
+CMD ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-agent:8001", "--environment-origin", "http://runtime-environment:8000"]
