@@ -1,11 +1,14 @@
 export type WorkflowNode = {
   id: string;
   symbol: string;
-  kind: "boundary" | "domain" | "agent_call" | "decision" | "subgraph";
+  kind: "boundary" | "domain" | "agent_call" | "decision" | "subgraph" | "batch";
   actor_selector?: string;
   operation?: string;
   source_ref?: { path: string; symbol: string };
   subgraph?: string;
+  items_selector?: string;
+  concurrency_selector?: string;
+  serial_key_selector?: string;
 };
 export type WorkflowEdge = { source: string; target: string; conditional: boolean; route_key?: string; route_symbol?: string };
 export type WorkflowGraph = { id: string; nodes: WorkflowNode[]; edges: WorkflowEdge[] };

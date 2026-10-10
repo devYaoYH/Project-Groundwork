@@ -263,11 +263,17 @@ class RemoteSeatClient(BaseClient):
     def voluntary_decide(self, meeting, calendar_render):
         return self._act(DecideResult)
 
-    def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None):
+    def prepare_reflection(self, target_agent_id, num_slots, round_num=None):
         deadline = self.clock() + self._timeout("REFLECTION")
         invocation = self._invocation("reflect", phase="REFLECTION", observation={
             "target_agent_id": target_agent_id, "num_slots": num_slots, "round": round_num,
         }, prompt=build_reflection_message(target_agent_id, num_slots, round_num))
+        return invocation, deadline
+
+    def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None, *, prepared=None):
+        invocation, deadline = prepared or self.prepare_reflection(target_agent_id, num_slots, round_num)
+        if self.clock() >= deadline:
+            return None
         if not self.reflection_lock.acquire(timeout=max(0, deadline - self.clock())):
             return None
         try:

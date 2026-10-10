@@ -380,6 +380,11 @@ class CalendarGame:
     """Calendar scheduling benchmark environment."""
 
     @classmethod
+    def build_program(cls):
+        from .workflow import build_program
+        return build_program()
+
+    @classmethod
     def runtime_capability(cls):
         from a2a_engine.workflow_runtime import RuntimeCapability
         from .remote import CALENDAR_TOOLS
@@ -993,114 +998,14 @@ class CalendarGame:
         if not self.config.enable_reflection:
             return [], {}
 
-        calls: list[tuple[int, int, str, asyncio.Task]] = []
-        max_parallelism = self.config.reflection_max_parallelism
-        semaphore = (
-            asyncio.Semaphore(max(1, int(max_parallelism)))
-            if max_parallelism is not None and int(max_parallelism) > 0
-            else None
+        from .workflow_steps import ReflectionContext
+        program = getattr(self, "_workflow_program", None) or self.build_program()
+        result = await program.ainvoke(
+            {"boundary": "reflection"},
+            context=ReflectionContext(self, agents, all_agent_ids, round_num, event_round, reporter_agent_ids),
+            config={"recursion_limit": 100},
         )
-
-        async def call_reflection(agent_id: int, target_agent_id: int):
-            def run_sync():
-                return agents[agent_id].client.reflect_calendar_belief(
-                    target_agent_id,
-                    self.config.num_slots,
-                    round_num=round_num,
-                )
-
-            if semaphore is None:
-                return await asyncio.to_thread(run_sync)
-            async with semaphore:
-                return await asyncio.to_thread(run_sync)
-
-        reporter_ids = all_agent_ids if reporter_agent_ids is None else reporter_agent_ids
-
-        for agent_id in reporter_ids:
-            for target_agent_id in all_agent_ids:
-                if target_agent_id == agent_id:
-                    continue
-                prompt_sent = build_reflection_message(
-                    target_agent_id,
-                    self.config.num_slots,
-                    round_num=round_num,
-                )
-                self._append_event("reflection_start", data={
-                    "round": event_round,
-                    "turn": 0,
-                    "phase": "REFLECTION",
-                    "agent_id": agent_id,
-                    "target_agent_id": target_agent_id,
-                    "num_slots": self.config.num_slots,
-                    "reflection_scope": "environment" if round_num is None else "round",
-                    "prompt_sent": prompt_sent,
-                })
-                task = asyncio.create_task(call_reflection(agent_id, target_agent_id))
-                calls.append((agent_id, target_agent_id, prompt_sent, task))
-
-        results = await asyncio.gather(*(task for *_prefix, task in calls), return_exceptions=True)
-        reflection_estimates: list[dict] = []
-        client_call_counts: dict[int, int] = {}
-        for (agent_id, target_agent_id, _prompt_sent, _task), result in zip(calls, results, strict=False):
-            if isinstance(result, Exception):
-                result = None
-            if result is not None:
-                client_call_counts[agent_id] = client_call_counts.get(agent_id, 0) + 1
-                estimates = [
-                    {
-                        "agent_id": agent_id,
-                        "round": event_round,
-                        "reflection_scope": "environment" if round_num is None else "round",
-                        **estimate,
-                    }
-                    for estimate in result.estimates
-                ]
-                reflection_estimates.extend(estimates)
-                self._append_event("reflection_end", data={
-                    "round": event_round,
-                    "turn": 0,
-                    "phase": "REFLECTION",
-                    "agent_id": agent_id,
-                    "target_agent_id": target_agent_id,
-                    "num_slots": self.config.num_slots,
-                    "reflection_scope": "environment" if round_num is None else "round",
-                    "estimates": estimates,
-                    "text": result.text,
-                    "usage": result.usage.__dict__ if result.usage else None,
-                    "latency_ms": result.latency_ms,
-                    "raw_api_response": result.raw,
-                })
-            else:
-                estimates = [
-                    {
-                        "agent_id": agent_id,
-                        "target_agent_id": target_agent_id,
-                        "round": event_round,
-                        "reflection_scope": "environment" if round_num is None else "round",
-                        "slot": slot,
-                        "estimate_state": None,
-                        "probability_free": None,
-                        "probability_busy": None,
-                        "confidence": None,
-                        "logprobs": {"0": None, "1": None},
-                    }
-                    for slot in range(self.config.num_slots)
-                ]
-                self._append_event("reflection_end", data={
-                    "round": event_round,
-                    "turn": 0,
-                    "phase": "REFLECTION",
-                    "agent_id": agent_id,
-                    "target_agent_id": target_agent_id,
-                    "num_slots": self.config.num_slots,
-                    "reflection_scope": "environment" if round_num is None else "round",
-                    "estimates": estimates,
-                    "text": None,
-                    "usage": None,
-                    "latency_ms": None,
-                    "raw_api_response": None,
-                })
-        return reflection_estimates, client_call_counts
+        return result["reflection_estimates"], result["reflection_call_counts"]
 
     def _run_with_agents(self, agents: list[Agent], scenario: dict) -> EpisodeTrace:
         """Run the full environment loop with a pre-built agent list. Exposed for testing."""
@@ -1401,61 +1306,10 @@ class CalendarGame:
                 effective_policy = policy
             return policy.protocol
 
-        def separate_messages(tool_calls: list, *, agent_id: int, phase: str) -> list:
-            tool_calls = self._worker_attempts(agent_id, tool_calls)
-            if self.topology.legacy and agent_id not in self._remote_clients:
-                return tool_calls
-            actions = []
-            for tool in tool_calls:
-                if self._remote_rejection(tool, agent_id=agent_id, round_num=round_num,
-                                          turn=turn_index, phase=phase):
-                    continue
-                if isinstance(tool, dict) and self._canonical_tool_type(tool.get("type")) in CHANNELS:
-                    deliver_cheap_talk_tool(
-                        tool=tool, agent_id=agent_id, meeting=meeting,
-                        round_num=round_num, turn_index=turn_index,
-                        already_queued=already_queued, phase=phase,
-                    )
-                else:
-                    actions.append(tool)
-            return actions
-
-        def decision_inbox(agent: Agent) -> dict:
-            if self.topology.legacy:
-                return {}
-            messages = list(agent.inbox_queue)
-            agent.inbox_queue.clear()
-            agent.client.observe_messages(messages)
-            return {"inbox_drained": messages}
-
-        def retry_decision(agent_id, parent_phase, attempt, conflict):
-            agent = agents[agent_id]
-            inbox_data = decision_inbox(agent)
-            remote = self._remote_clients.get(agent_id)
-            data = {
-                "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
-                "parent_phase": parent_phase, "attempt": attempt,
-                "max_attempts": self.config.decision_retries, "conflict": conflict,
-                "agent_id": agent_id,
-                "calendar_snapshot_render": self._prompt_calendar_for_agent(agent, agent.calendar.snapshot().render(), round_num),
-                "prompt_sent": append_phase_inbox(build_retry_message(attempt, self.config.decision_retries, conflict,
-                                                                        parent_phase=parent_phase),
-                                                   inbox_data.get("inbox_drained", [])),
-                **inbox_data,
-            }
-            if remote:
-                self._append_event("decide_start", data=data)
-            result = agent.client.retry_decide(attempt, self.config.decision_retries, conflict)
-            if remote:
-                self._append_event("decide_end", data={
-                    "round": round_num, "turn": turn_index, "phase": "DECISION_RETRY",
-                    "parent_phase": parent_phase, "attempt": attempt, "agent_id": agent_id,
-                    "tool_calls": result.tool_calls, "text": result.text, "thinking": result.thinking,
-                    "usage": result.usage.__dict__ if result.usage else None,
-                    "latency_ms": result.latency_ms, "raw_api_response": result.raw,
-                    "retry_count": result.retry_count, "status": "pending",
-                })
-            return result
+        from .workflow import scheduling_limit
+        from .workflow_steps import RoundContext
+        self._workflow_program = self.build_program()
+        graph_config = {"recursion_limit": scheduling_limit(self.config)}
 
         # 6. Main loop — one round per meeting
         for round_num, meeting in enumerate(scenario["meetings"]):
@@ -1496,318 +1350,24 @@ class CalendarGame:
             turn_index = 0
             blocked_slot_violations: list[dict] = []
 
-            # --- CHEAP_TALK PHASE ---
-            has_activity = True
-            while has_activity and turn_index < self.config.max_turns_per_round:
-                has_activity = False
-
-                # active cheap-talk agents act
-                for agent_id in list(active_agent_order):
-                    agent = agents[agent_id]
-                    inbox_snapshot = list(agents[agent_id].inbox_queue)
-                    calendar_render = agents[agent_id].calendar.render()
-                    prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
-                    prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                    turn_prompt = build_cheap_talk_prompt(
-                        prompt_meeting, prompt_calendar_render, round_num, inbox_snapshot,
-                        first_turn=agent_id not in round_turn_agent_ids,
-                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
-                        max_turns_per_round=self.config.max_turns_per_round,
-                        communication_protocol=communication_protocol,
-                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
-                    )
-                    self._append_event("turn_start", data={
-                        "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
-                        "agent_id": agent_id,
-                        "inbox_drained": inbox_snapshot,
-                        "calendar_render": prompt_calendar_render,
-                        "prompt_sent": turn_prompt,
-                    })
-                    result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
-                    round_turn_agent_ids.add(agent_id)
-                    total_client_calls[agent_id] += 1
-                    self._append_event("turn_end", data={
-                        "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
-                        "agent_id": agent_id,
-                        "tool_calls": result.tool_calls,
-                        "text": result.text,
-                        "thinking": result.thinking,
-                        "usage": result.usage.__dict__ if result.usage else None,
-                        "latency_ms": result.latency_ms,
-                        "raw_api_response": result.raw,
-                    })
-
-                    for tool in self._worker_attempts(agent_id, result.tool_calls):
-                        if not isinstance(tool, dict):
-                            self._invalid_tool_call(
-                                round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                                agent_id=agent_id, tool=tool, reason="tool call is not an object",
-                            )
-                            continue
-                        if deliver_cheap_talk_tool(
-                            tool=tool,
-                            agent_id=agent_id,
-                            meeting=meeting,
-                            round_num=round_num,
-                            turn_index=turn_index,
-                            already_queued=already_queued,
-                        ):
-                            has_activity = True
-
-                # drain unique_queue (non-participants who got DMs or all-agent groupchat)
-                queue = sorted(already_queued - active_agent_ids)
-                for agent_id in queue:
-                    active_agent_ids.add(agent_id)
-                    active_agent_order.append(agent_id)
-                    agents[agent_id].start_round(
-                        meeting,
-                        round_num,
-                        incurred_penalty=displacement_cost[agent_id],
-                    )
-                    agent = agents[agent_id]
-                    inbox_snapshot = list(agents[agent_id].inbox_queue)
-                    calendar_render = agents[agent_id].calendar.render()
-                    prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
-                    turn_prompt = build_cheap_talk_prompt(
-                        self._prompt_meeting_for_agent(agent, meeting, round_num),
-                        prompt_calendar_render, round_num, inbox_snapshot, first_turn=True,
-                        incurred_penalty=displacement_cost[agent_id], turn_index=turn_index,
-                        max_turns_per_round=self.config.max_turns_per_round,
-                        communication_protocol=communication_protocol,
-                        communication_policy=communication_policy_by_phase.get("CHEAP_TALK"),
-                    )
-                    self._append_event("turn_start", data={
-                        "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
-                        "agent_id": agent_id,
-                        "inbox_drained": inbox_snapshot,
-                        "calendar_render": prompt_calendar_render,
-                        "prompt_sent": turn_prompt,
-                    })
-                    result = agents[agent_id].turn(turn_index, self.config.max_turns_per_round)
-                    round_turn_agent_ids.add(agent_id)
-                    total_client_calls[agent_id] += 1
-                    self._append_event("turn_end", data={
-                        "round": round_num, "turn": turn_index, "phase": "CHEAP_TALK",
-                        "agent_id": agent_id,
-                        "tool_calls": result.tool_calls,
-                        "text": result.text, "thinking": result.thinking,
-                        "usage": result.usage.__dict__ if result.usage else None,
-                        "latency_ms": result.latency_ms, "raw_api_response": result.raw,
-                    })
-                    for tool in self._worker_attempts(agent_id, result.tool_calls):
-                        if not isinstance(tool, dict):
-                            self._invalid_tool_call(
-                                round_num=round_num, turn=turn_index, phase="CHEAP_TALK",
-                                agent_id=agent_id, tool=tool, reason="tool call is not an object",
-                            )
-                            continue
-                        if deliver_cheap_talk_tool(
-                            tool=tool,
-                            agent_id=agent_id,
-                            meeting=meeting,
-                            round_num=round_num,
-                            turn_index=turn_index,
-                            already_queued=already_queued,
-                        ):
-                            has_activity = True
-
-                turn_index += 1
-
-            # --- VOLUNTARY RESCHEDULE PHASE (non-participants who received DMs) ---
-            voluntary_protocol = enter_phase("VOLUNTARY", round_num)
-            for agent_id in sorted(already_queued - set(meeting["participants"])):
-                agent = agents[agent_id]
-                inbox_data = decision_inbox(agent)
-                calendar_render = agents[agent_id].calendar.render()
-                prompt_calendar_render = self._prompt_calendar_for_agent(agent, calendar_render, round_num)
-                prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                self._append_event("decide_start", data={
-                    "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
-                    "agent_id": agent_id,
-                    "calendar_render": prompt_calendar_render,
-                    "prompt_sent": append_phase_inbox(
-                        build_voluntary_reschedule_message(
-                            prompt_meeting, prompt_calendar_render, voluntary_protocol,
-                            communication_policy=communication_policy_by_phase.get("VOLUNTARY"),
-                        ),
-                        inbox_data.get("inbox_drained", []),
-                    ),
-                    **inbox_data,
-                })
-                result = agents[agent_id].voluntary_decide(meeting)
-                total_client_calls[agent_id] += 1
-                self._append_event("decide_end", data={
-                    "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
-                    "agent_id": agent_id,
-                    "tool_calls": result.tool_calls, "text": result.text,
-                    "thinking": result.thinking,
-                    "usage": result.usage.__dict__ if result.usage else None,
-                    "latency_ms": result.latency_ms, "raw_api_response": result.raw,
-                })
-                actions = [
-                    a for a in separate_messages(result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
-                    if isinstance(a, dict) and a.get("type") == "reschedule"
-                ]
-                for attempt in range(self.config.decision_retries + 1):
-                    blocked_slot_violations.extend(self._blocked_reschedule_violations(
-                        agents[agent_id].calendar,
-                        actions,
-                        agent_id=agent_id,
-                        phase="VOLUNTARY",
-                        attempt=attempt,
-                    ))
-                    ok, conflict = validate_cell(agents[agent_id].calendar, actions, require_schedule=False)
-                    if ok:
-                        for action in actions:
-                            from_slot = int(action["from_slot"])
-                            item = agents[agent_id].calendar.get(from_slot)
-                            if isinstance(item, dict) and "cost" in item:
-                                displacement_cost[agent_id] += int(item["cost"])
-                        apply_cell(agents[agent_id].calendar, actions)
-                        self._append_event("cell_applied", data={
-                            "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
-                            "agent_id": agent_id,
-                            "actions": actions,
-                            "calendar_render_after": agents[agent_id].calendar.render(),
-                        })
-                        break
-                    else:
-                        self._append_event("cell_rejected", data={
-                            "round": round_num, "turn": turn_index, "phase": "VOLUNTARY",
-                            "agent_id": agent_id,
-                            "attempt": attempt, "conflict_description": conflict, "actions": actions,
-                        })
-                        if attempt < self.config.decision_retries:
-                            retry_result = retry_decision(agent_id, "VOLUNTARY", attempt + 1, conflict)
-                            total_client_calls[agent_id] += 1
-                            actions = [
-                                a for a in separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="VOLUNTARY")
-                                if isinstance(a, dict) and a.get("type") == "reschedule"
-                            ]
-                        else:
-                            break
-
-            # --- DECISION PHASE ---
-            decision_protocol = enter_phase("DECISION", round_num)
-            staged_decisions: dict[int, tuple[Calendar, list[dict], int]] = {}
-            decision_phase_failed = False
-            for agent_id in speaker_order:
-                agent = agents[agent_id]
-                inbox_data = decision_inbox(agent)
-                snapshot_render = agents[agent_id].calendar.snapshot().render()
-                prompt_snapshot_render = self._prompt_calendar_for_agent(agent, snapshot_render, round_num)
-                prompt_meeting = self._prompt_meeting_for_agent(agent, meeting, round_num)
-                decision_prompt = append_phase_inbox(
-                    build_decision_message(
-                        prompt_meeting, prompt_snapshot_render, decision_protocol,
-                        communication_policy=communication_policy_by_phase.get("DECISION"),
-                    ),
-                    inbox_data.get("inbox_drained", []),
+            context = RoundContext(
+                self, agents, meeting, round_num, speaker_order, communication_protocol,
+                communication_policy_by_phase, displacement_cost, total_client_calls,
+                deliver_cheap_talk_tool, enter_phase,
+            )
+            state = await self._workflow_program.ainvoke({
+                "boundary": "cheap_talk", "turn_index": turn_index, "has_activity": True,
+                "active_agent_ids": active_agent_ids, "active_agent_order": active_agent_order,
+                "already_queued": already_queued, "round_turn_agent_ids": round_turn_agent_ids,
+                "blocked_slot_violations": blocked_slot_violations,
+            }, context=context, config=graph_config)
+            for mode in ("VOLUNTARY", "DECISION"):
+                state = await self._workflow_program.ainvoke(
+                    {**state, "boundary": "decision", "mode": mode}, context=context, config=graph_config,
                 )
-                self._append_event("decide_start", data={
-                    "round": round_num, "turn": turn_index, "phase": "DECISION",
-                    "agent_id": agent_id,
-                    "calendar_snapshot_render": prompt_snapshot_render,
-                    "prompt_sent": decision_prompt,
-                    **inbox_data,
-                })
-                result = agents[agent_id].decide(meeting)
-                total_client_calls[agent_id] += 1
-                self._append_event("decide_end", data={
-                    "round": round_num, "turn": turn_index, "phase": "DECISION",
-                    "agent_id": agent_id,
-                    "tool_calls": result.tool_calls, "text": result.text,
-                    "thinking": result.thinking,
-                    "usage": result.usage.__dict__ if result.usage else None,
-                    "latency_ms": result.latency_ms, "raw_api_response": result.raw,
-                    "retry_count": result.retry_count, "status": "pending",
-                })
-
-                # validate and apply cell with retries
-                # Inject meeting cost into schedule actions so apply_cell can store it
-                actions = self._decision_actions(
-                    separate_messages(result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
-                    round_num=round_num, turn_index=turn_index,
-                    agent_id=agent_id, attempt=0,
-                )
-                for attempt in range(self.config.decision_retries + 1):
-                    blocked_slot_violations.extend(self._blocked_reschedule_violations(
-                        agents[agent_id].calendar,
-                        actions,
-                        agent_id=agent_id,
-                        phase="DECISION",
-                        attempt=attempt,
-                    ))
-                    ok, conflict = validate_cell(agents[agent_id].calendar, actions)
-                    if ok:
-                        staged_calendar = agents[agent_id].calendar.snapshot()
-                        pending_displacement_cost = 0
-                        for action in actions:
-                            if action.get("type") == "reschedule":
-                                from_slot = int(action["from_slot"])
-                                item = agents[agent_id].calendar.get(from_slot)
-                                if isinstance(item, dict) and "cost" in item:
-                                    pending_displacement_cost += int(item["cost"])
-                        apply_cell(staged_calendar, actions)
-                        staged_decisions[agent_id] = (
-                            staged_calendar,
-                            actions,
-                            pending_displacement_cost,
-                        )
-                        break
-                    else:
-                        self._append_event("cell_rejected", data={
-                            "round": round_num, "turn": turn_index, "phase": "DECISION",
-                            "agent_id": agent_id,
-                            "attempt": attempt, "conflict_description": conflict, "actions": actions,
-                        })
-                        if attempt < self.config.decision_retries:
-                            retry_result = retry_decision(agent_id, "DECISION", attempt + 1, conflict)
-                            total_client_calls[agent_id] += 1
-                            actions = self._decision_actions(
-                                separate_messages(retry_result.tool_calls, agent_id=agent_id, phase="DECISION"), meeting,
-                                round_num=round_num, turn_index=turn_index,
-                                agent_id=agent_id, attempt=attempt + 1,
-                            )
-                        else:
-                            self._append_event("decision_failed", data={
-                                "round": round_num, "turn": turn_index, "phase": "DECISION",
-                                "agent_id": agent_id,
-                                "attempts_exhausted": self.config.decision_retries + 1,
-                            })
-                            decision_phase_failed = True
-                            break
-
-            if (
-                not decision_phase_failed
-                and not blocked_slot_violations
-                and len(staged_decisions) == len(speaker_order)
-            ):
-                for agent_id in speaker_order:
-                    staged_calendar, actions, pending_displacement_cost = staged_decisions[agent_id]
-                    agents[agent_id].calendar.slots = staged_calendar.slots
-                    agents[agent_id].calendar.meeting_participants = staged_calendar.meeting_participants
-                    displacement_cost[agent_id] += pending_displacement_cost
-                    self._append_event("cell_applied", data={
-                        "round": round_num, "turn": turn_index, "phase": "DECISION",
-                        "agent_id": agent_id,
-                        "actions": actions,
-                        "calendar_render_after": agents[agent_id].calendar.render(),
-                    })
-            elif staged_decisions:
-                rollback_reason = (
-                    "blocked slot violation"
-                    if blocked_slot_violations
-                    else "another participant failed decision validation"
-                )
-                for agent_id, (_staged_calendar, actions, _pending_cost) in staged_decisions.items():
-                    self._append_event("cell_rolled_back", data={
-                        "round": round_num, "turn": turn_index, "phase": "DECISION",
-                        "agent_id": agent_id,
-                        "actions": actions,
-                        "reason": rollback_reason,
-                        "calendar_render_after": agents[agent_id].calendar.render(),
-                    })
+            turn_index = state["turn_index"]
+            round_turn_agent_ids = state["round_turn_agent_ids"]
+            blocked_slot_violations = state["blocked_slot_violations"]
 
             # --- RESOLUTION PHASE ---
             enter_phase("RESOLUTION", round_num)

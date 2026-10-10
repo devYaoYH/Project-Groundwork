@@ -1,0 +1,250 @@
+import asyncio
+import copy
+import dataclasses
+import inspect
+import json
+import threading
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from a2a_engine.workflow import environment_workflow, export_program
+from a2a_engine.workflow_runtime import require_agent_step
+from calendar_game.agents import Agent, BaseClient, DecideResult, ReflectionResult, TurnResult
+from calendar_game.calendar import Calendar
+from calendar_game.game import CalendarGame
+from calendar_game.tests._legacy_workflow_oracle import LegacyCalendarGame
+from calendar_game.tests.test_remote_parity import normalized_events
+
+
+def result(actions, decision=False):
+    return (DecideResult if decision else TurnResult)(copy.deepcopy(actions), None, None, None, None, None)
+
+
+class ControlledClient(BaseClient):
+    def __init__(self, calls, case):
+        self.calls, self.case, self.meeting, self.agent_id = calls, case, None, -1
+
+    def record(self, method, **args):
+        self.calls.append((self.agent_id, method, copy.deepcopy(args)))
+
+    def register(self, agent_id, game_config):
+        self.agent_id = agent_id
+        self.record("register", game_config=dataclasses.asdict(game_config))
+
+    def start_round(self, meeting, calendar_render, round_num):
+        self.meeting = meeting
+        self.record("start_round", meeting=meeting, calendar=calendar_render, round=round_num)
+
+    def observe_calendar(self, calendar_render):
+        self.record("observe_calendar", calendar=calendar_render)
+
+    def observe_messages(self, messages):
+        self.record("observe_messages", messages=messages)
+
+    def observe_penalty(self, incurred_penalty):
+        self.record("observe_penalty", penalty=incurred_penalty)
+
+    def turn(self, messages, turn_index=None, max_turns_per_round=None):
+        self.record("turn", messages=messages, turn=turn_index, cap=max_turns_per_round)
+        if self.case == "long_cap":
+            actions = [{"type": "dm", "to": 1 - self.agent_id, "content": "repeat"}]
+        elif turn_index == 0 and self.agent_id in {0, 2}:
+            actions = [{"type": "dm", "to": 2 if self.agent_id == 0 else 3, "content": "contact"}]
+        else:
+            actions = []
+        return result(actions)
+
+    def actions(self, retry=False):
+        schedule = {"type": "schedule", "meeting_id": self.meeting["id"], "slot": 2}
+        if self.case == "blocked" and self.agent_id == 0 and not retry:
+            return [{"type": "reschedule", "item_id": 99, "from_slot": 0, "to_slot": 1, "justification": "move"}, schedule]
+        if self.case == "empty" or (self.case == "exhausted" and self.agent_id == 1):
+            return []
+        if self.case == "retries" and self.agent_id == 0 and not retry:
+            return [{**schedule, "slot": 999}, {"type": "dm", "to": 1, "content": "decision budget"}]
+        return [schedule]
+
+    def decide(self, meeting, calendar_render):
+        self.record("decide", meeting=meeting, calendar=calendar_render)
+        return result(self.actions(), True)
+
+    def voluntary_decide(self, meeting, calendar_render):
+        self.record("voluntary", meeting=meeting, calendar=calendar_render)
+        actions = [{"type": "reschedule", "item_id": 7, "from_slot": 0, "to_slot": 999, "justification": "move"}] if self.case == "retries" and self.agent_id == 2 else []
+        return result(actions, True)
+
+    def retry_decide(self, attempt, max_attempts, conflict):
+        self.record("retry", attempt=attempt, max_attempts=max_attempts, conflict=conflict)
+        actions = ([{"type": "reschedule", "item_id": 7, "from_slot": 0, "to_slot": 1, "justification": "move"}]
+                   if self.agent_id == 2 and self.case == "retries" else self.actions(True))
+        return result(actions, True)
+
+    def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None):
+        self.record("reflect", target=target_agent_id, slots=num_slots, round=round_num)
+        if self.agent_id == 1:
+            raise ValueError("controlled reflection failure")
+        return ReflectionResult(target_agent_id, [{"target_agent_id": target_agent_id, "slot": s,
+            "estimate_state": 0, "probability_free": 1, "probability_busy": 0, "confidence": 1,
+            "logprobs": {"0": None, "1": None}} for s in range(num_slots)], None, None, None, None)
+
+
+def setup_case(case, cap=1, retries=1, frequency="round"):
+    n = 2 if case == "long_cap" else 4
+    cfg = {"seed": 42, "num_agents": n, "num_slots": 4, "num_meetings": 2,
+           "agents": [{"type": "scripted"}] * n, "max_turns_per_round": cap,
+           "decision_retries": retries, "enable_fallback": False, "enable_reflection": True,
+           "reflection_frequency": frequency, "reflection_max_parallelism": 1,
+           "communication": {"topology": {"default": {"graph": "complete", "channels": {"dm": {"enabled": True}},
+               "budget": {"per_agent_per_round": -1 if case == "long_cap" else 2}}}}}
+    calendars = [[None] * 4 for _ in range(n)]
+    if case == "blocked":
+        calendars[0][0] = {"errand_id": 99, "cost": 10, "blocked": True}
+    if case == "retries":
+        calendars[2][0] = {"errand_id": 7, "cost": 5}
+    scenario = {"seed": 42, "calendars": calendars, "meetings": [
+        {"id": i, "participants": [0, 1], "speaker_order": [1, 0], "duration": 1, "cost": 1}
+        for i in range(2)], "prior_meetings": []}
+    return cfg, scenario
+
+
+def play(cls, case, cfg, scenario):
+    calls, agents = [], []
+    for slots in scenario["calendars"]:
+        agent = Agent(ControlledClient(calls, case))
+        agent.calendar = Calendar(len(slots))
+        agent.calendar.slots = copy.deepcopy(slots)
+        agents.append(agent)
+    game = cls(copy.deepcopy(cfg))
+    return game._run_with_agents(agents, copy.deepcopy(scenario)), calls
+
+
+@pytest.mark.parametrize("case,cap,retries,frequency", [
+    ("cap", 1, 1, "round"), ("cap", 2, 1, "round"), ("retries", 2, 2, "round"),
+    ("blocked", 1, 1, "round"), ("exhausted", 1, 2, "round"), ("empty", 1, 0, "round"),
+    ("empty", 0, 0, "round"), ("cap", 1, -1, "round"), ("cap", 2, 1, "environment"),
+    ("long_cap", 40, 1, "round"),
+])
+def test_integrated_subgraphs_match_frozen_driver_exactly(case, cap, retries, frequency):
+    cfg, scenario = setup_case(case, cap, retries, frequency)
+    expected, expected_calls = play(LegacyCalendarGame, case, cfg, scenario)
+    actual, calls = play(CalendarGame, case, cfg, scenario)
+    assert calls == expected_calls
+    assert normalized_events(actual) == normalized_events(expected)
+    assert actual.final_state == expected.final_state
+    assert actual.metrics == expected.metrics
+    if case == "cap" and cap == 1:
+        # The second snapshot activates seat 2 but must not drain seat 3 on the same pass.
+        turns = [args for seat, method, args in calls if seat == 3 and method == "turn"]
+        assert not turns
+        assert any(seat == 3 and method == "voluntary" for seat, method, args in calls)
+
+
+def test_export_is_partial_and_has_actual_retry_and_batch_boundaries_without_execution(monkeypatch):
+    import calendar_game.workflow as workflow
+    import calendar_game.workflow_steps as steps
+
+    def fail(*args, **kwargs):
+        raise AssertionError("export executed Calendar")
+
+    for name, original in vars(steps).copy().items():
+        if inspect.isfunction(original) and original.__module__ == steps.__name__:
+            def double(*args, **kwargs):
+                return fail(*args, **kwargs)
+            double.__module__, double.__qualname__, double.__name__ = original.__module__, original.__qualname__, original.__name__
+            monkeypatch.setattr(steps, name, double)
+    for name in ("__init__", "runtime_capability", "_run_async", "generate_scenario", "_build_agents", "_append_event"):
+        monkeypatch.setattr(CalendarGame, name, fail)
+    for target in ("calendar_game.game.solve_optimal", "calendar_game.game.resolve_config",
+                   "calendar_game.remote.RemoteSeatClient.__init__", "a2a_engine.remote.server.RuntimeManager.__init__"):
+        monkeypatch.setattr(target, fail)
+    monkeypatch.setattr(workflow, "select_driver_boundary", fail)
+    first = environment_workflow("calendar")
+    assert first == environment_workflow("calendar")
+    assert first["status"] == "partial"
+    body = first["workflow"]
+    assert body["diagnostics"] == [{"code": "calendar_driver_not_migrated", "graph": "root"}]
+    assert len(body["graphs"]) == 5
+    decision = next(g for g in body["graphs"] if g["id"] == "root/decision_batch")
+    assert {e.get("route_key") for e in decision["edges"]} >= {"retry", "stage", "apply", "exhausted", "commit", "rollback"}
+    assert not any(node["kind"] == "batch" for node in decision["nodes"])
+    reflection = next(g for g in body["graphs"] if g["id"] == "root/reflection_batch")
+    batch = next(node for node in reflection["nodes"] if node["kind"] == "batch")
+    assert batch["serial_key_selector"] == "calendar_game.workflow_steps.remote_reporter_serial_key"
+    assert {n["id"] for n in reflection["nodes"]} >= {"launch_reflections", "join_reflections", "collect_in_call_order"}
+    body_call = next(g for g in body["graphs"] if g["id"] == batch["subgraph"])
+    assert next(n for n in body_call["nodes"] if n["kind"] == "agent_call")["actor_selector"].endswith("select_reporter_target")
+    assert len(json.dumps(first)) < 40000
+    assert all(not n.get("source_ref", {}).get("path", "").startswith("/") for g in body["graphs"] for n in g["nodes"])
+
+
+@pytest.mark.parametrize("parallelism", [1, 2, None])
+def test_delayed_local_reflection_launch_join_order_and_concurrency(parallelism):
+    game = CalendarGame({"num_agents": 3, "num_slots": 1, "reflection_max_parallelism": parallelism})
+    log, active, peak = [], 0, 0
+    lock, second_finished = threading.Lock(), threading.Event()
+    append = game._append_event
+
+    def event(name, **kwargs):
+        log.append((name, kwargs["data"].get("target_agent_id")))
+        append(name, **kwargs)
+    game._append_event = event
+
+    class Delayed(ControlledClient):
+        def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None):
+            nonlocal active, peak
+            require_agent_step()
+            assert len([entry for entry in log if entry[0] == "reflection_start"]) == 2
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            if parallelism != 1 and target_agent_id == 1:
+                assert second_finished.wait(2)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+                log.append(("finished", target_agent_id))
+            if target_agent_id == 2:
+                second_finished.set()
+            return ReflectionResult(target_agent_id, [{"target_agent_id": target_agent_id, "slot": 0}], None, None, None, None)
+
+    agents = [Agent(Delayed([], "cap")) for _ in range(3)]
+    estimates, counts = asyncio.run(game._run_reflection_measurement(agents=agents, all_agent_ids=[0, 1, 2],
+        round_num=0, event_round=0, reporter_agent_ids=[0]))
+    assert peak == (1 if parallelism == 1 else 2)
+    assert [target for kind, target in log if kind == "finished"] == ([1, 2] if parallelism == 1 else [2, 1])
+    assert [target for kind, target in log if kind == "reflection_end"] == [1, 2]
+    assert [row["target_agent_id"] for row in estimates] == [1, 2]
+    assert counts == {0: 2}
+
+
+@pytest.mark.parametrize("parallelism", [1, 2])
+def test_queued_remote_reflection_keeps_launch_deadline(parallelism):
+    game = CalendarGame({"num_agents": 3, "num_slots": 1, "reflection_max_parallelism": parallelism})
+    dispatches, deadlines = [], []
+
+    class RemoteDouble(ControlledClient):
+        def prepare_reflection(self, target, slots, round_num):
+            deadline = time.monotonic() + 0.08
+            deadlines.append(deadline)
+            return (target, deadline)
+
+        def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None, *, prepared=None):
+            require_agent_step()
+            assert prepared[0] == target_agent_id
+            if time.monotonic() >= prepared[1]:
+                return None
+            dispatches.append(target_agent_id)
+            time.sleep(0.12)
+            return ReflectionResult(target_agent_id, [], None, None, None, None)
+
+    client = RemoteDouble([], "cap")
+    game._remote_clients[0] = client
+    agents = [Agent(client), Agent(client), Agent(client)]
+    estimates, counts = asyncio.run(game._run_reflection_measurement(agents=agents, all_agent_ids=[0, 1, 2],
+        round_num=0, event_round=0, reporter_agent_ids=[0]))
+    assert dispatches == [1] and len(deadlines) == 2
+    assert abs(deadlines[0] - deadlines[1]) < 0.02
+    assert counts == {0: 1}
+    assert not estimates

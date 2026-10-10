@@ -1,0 +1,50 @@
+services:
+  runtime-environment:
+    command: ["python", "tests/runtime/calendar_environment.py"]
+    volumes:
+      - runtime-seat-1:/provision/seat-1
+      - runtime-seat-2:/provision/seat-2
+    depends_on:
+      runtime-host:
+        condition: service_healthy
+      runtime-observer:
+        condition: service_healthy
+  runtime-agent:
+    build:
+      context: .
+      dockerfile: tests/runtime/calendar-agent.Dockerfile
+    image: a2a-calendar-agent-test:local
+    command: ["python", "calendar_agent.py", "--origin", "http://runtime-agent:8001", "--environment-origin", "http://runtime-environment:8000"]
+  runtime-host:
+    profiles: [agent-runtime]
+    image: a2a-calendar-agent-test:local
+    command: ["python", "calendar_agent.py", "--origin", "http://runtime-host:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-seat-1:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-host:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  runtime-observer:
+    profiles: [agent-runtime]
+    image: a2a-calendar-agent-test:local
+    command: ["python", "calendar_agent.py", "--origin", "http://runtime-observer:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-seat-2:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-observer:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+volumes:
+  runtime-seat-1:
+  runtime-seat-2:

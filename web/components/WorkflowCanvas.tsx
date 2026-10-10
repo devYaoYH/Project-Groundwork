@@ -19,7 +19,7 @@ export default function WorkflowCanvas({ graph, selected, onSelect }: { graph: W
       setNodes(graph.nodes.map((node) => {
         const position = layout.children?.find((child) => child.id === node.id);
         return { id: node.id, position: { x: position?.x ?? 0, y: position?.y ?? 0 },
-          data: { label: <div><strong>{node.id}</strong><span>{node.kind.replaceAll("_", " ")}</span>{node.actor_selector ? <small>{node.actor_selector.split(".").at(-1)} / {node.operation}</small> : null}</div> },
+          data: { label: <div><strong>{node.id}</strong><span>{node.kind === "batch" ? "bounded concurrent fan-out" : node.kind.replaceAll("_", " ")}</span>{node.actor_selector ? <small>{node.actor_selector.split(".").at(-1)} / {node.operation}</small> : null}</div> },
           sourcePosition: narrow ? Position.Bottom : Position.Right,
           targetPosition: narrow ? Position.Top : Position.Left,
           style: { width: 210, height: 86 }, className: `workflow-node workflow-node-${node.kind}` };

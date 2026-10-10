@@ -70,7 +70,55 @@ test("fetch failures are isolated from detail and workflow", async ({ page }) =>
 });
 
 test("unmigrated environment reports unavailable, not a guessed graph", async ({ page }) => {
-  await page.goto("/environments/calendar/");
+  await page.goto("/environments/buyer_seller/");
   await expect(page.getByText("Executable workflow unavailable: migration pending for this environment.")).toBeVisible();
   await expect(page.locator(".workflow-canvas")).toHaveCount(0);
 });
+
+for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
+  test(`partial Calendar subgraphs at ${width}px ${colorScheme}`, async ({ page, request }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.emulateMedia({ colorScheme });
+    const { status, workflow } = await (await request.get("/api/environments/calendar/workflow")).json();
+    expect(status).toBe("partial");
+    await page.goto("/environments/calendar/");
+    const section = page.locator(".workflow-section");
+    const inspector = section.getByRole("complementary", { name: "Step inspector" });
+    const outline = section.locator(".workflow-outline");
+    const canvas = section.locator(".workflow-canvas");
+    await expect(section.getByText(/not a complete episode/)).toBeVisible();
+    const root = workflow.graphs.find((g: { id: string }) => g.id === "root");
+    await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
+    for (const name of ["cheap_talk_pass", "decision_batch", "reflection_batch"]) {
+      const select = outline.getByRole("button", { name, exact: true });
+      await select.focus(); await page.keyboard.press("Enter");
+      const open = inspector.getByRole("button", { name: "Open subgraph" });
+      await open.focus(); await page.keyboard.press("Enter");
+      const graph = workflow.graphs.find((g: { id: string }) => g.id === `root/${name}`);
+      await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+      await expect(section.getByText(/not a complete episode/)).toBeVisible();
+      for (const node of graph.nodes) {
+        const button = outline.getByRole("button", { name: node.id, exact: true });
+        await button.focus(); await page.keyboard.press("Enter");
+        await expect(inspector.getByRole("heading", { name: node.id, exact: true })).toBeVisible();
+        await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"]`)).toHaveClass(/selected/);
+      }
+      if (name === "decision_batch") {
+        await expect(canvas.getByText("retry", { exact: true })).toBeVisible();
+        expect(graph.nodes.some((n: { kind: string }) => n.kind === "batch")).toBe(false);
+      }
+      if (name === "reflection_batch") {
+        await outline.getByRole("button", { name: "bounded_fan_out", exact: true }).click();
+        await expect(inspector.getByText(/Bounded concurrent fan-out/)).toBeVisible();
+        await inspector.getByRole("button", { name: "Open subgraph" }).focus();
+        await page.keyboard.press("Enter");
+        await expect(outline.getByRole("button", { name: "reporter_target_call", exact: true })).toBeVisible();
+        await section.getByRole("button", { name: "Parent graph" }).focus(); await page.keyboard.press("Enter");
+        await expect(outline.getByRole("button", { name: "join_reflections", exact: true })).toBeVisible();
+      }
+      await section.getByRole("button", { name: "Root graph" }).focus(); await page.keyboard.press("Enter");
+      await expect(outline.getByRole("button", { name: "driver_boundary", exact: true })).toBeVisible();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  });
+}

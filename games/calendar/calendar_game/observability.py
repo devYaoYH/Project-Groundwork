@@ -117,10 +117,13 @@ class InstrumentedCalendarClient(BaseClient):
         target_agent_id: int,
         num_slots: int,
         round_num: int | None = None,
+        *,
+        prepared=None,
     ) -> ReflectionResult | None:
         return self._call(
             "reflect_calendar_belief",
-            lambda: self.delegate.reflect_calendar_belief(target_agent_id, num_slots, round_num),
+            lambda: self.delegate.reflect_calendar_belief(target_agent_id, num_slots, round_num,
+                                                        **({"prepared": prepared} if prepared is not None else {})),
             **{
                 "a2a.reflection.target_agent_id": target_agent_id,
                 "a2a.round": round_num,

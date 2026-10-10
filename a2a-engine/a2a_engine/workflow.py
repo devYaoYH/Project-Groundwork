@@ -4,7 +4,7 @@ import hashlib
 import inspect
 import json
 
-from .workflow_runtime import AgentStep, GraphProgram
+from .workflow_runtime import AgentStep, BatchStep, GraphProgram
 
 
 def symbol(fn):
@@ -30,6 +30,8 @@ def export_program(program, environment_id):
         if id(current) in ancestors or len(graphs) >= 32:
             raise ValueError("subgraph bound exceeded")
         builder = current.builder
+        if getattr(current, "incomplete_reason", None):
+            diagnostics.append({"code": current.incomplete_reason, "graph": graph_id})
         if len(builder.nodes) > 256:
             raise ValueError("node bound exceeded")
         unsupported = set()
@@ -50,11 +52,17 @@ def export_program(program, environment_id):
                 continue
             fn = binding(builder.nodes[name])
             # LangGraph wraps callable objects' bound __call__ methods.
-            step = fn if isinstance(fn, AgentStep) else getattr(fn, "__self__", None)
+            step = fn if isinstance(fn, (AgentStep, BatchStep)) else getattr(fn, "__self__", None)
             if isinstance(step, AgentStep):
                 nodes.append({"id": name, "symbol": symbol(step.adapter), "kind": "agent_call",
                               "actor_selector": symbol(step.actor), "operation": step.operation,
                               "source_ref": source_ref(step.adapter)})
+            elif isinstance(step, BatchStep):
+                child_id = graph_id + "/" + name
+                nodes.append({"id": name, "symbol": symbol(step.items), "kind": "batch", "subgraph": child_id,
+                              "items_selector": symbol(step.items), "concurrency_selector": symbol(step.concurrency),
+                              "serial_key_selector": symbol(step.serial_key)})
+                project(step.program, child_id, ancestors | {id(current)})
             elif hasattr(fn, "get_graph") and hasattr(fn, "builder"):
                 child_id = graph_id + "/" + name
                 nodes.append({"id": name, "symbol": name, "kind": "subgraph", "subgraph": child_id})

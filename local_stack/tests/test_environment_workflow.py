@@ -17,7 +17,8 @@ def test_workflow_projection_preserves_declaration_and_never_constructs_game(tmp
     monkeypatch.setattr(WordGuessGame, "__init__", fail)
     assert control.environment_workflow("word_guess")["status"] == "available"
     assert control.environment_detail("word_guess") == before
-    for game in ("calendar", "negotiation", "buyer_seller"):
+    assert control.environment_workflow("calendar")["status"] == "partial"
+    for game in ("negotiation", "buyer_seller"):
         assert control.environment_workflow(game)["status"] == "unavailable"
     monkeypatch.setattr(WordGuessGame, "build_program", fail)
     assert control.environment_workflow("word_guess") == {"status": "invalid", "reason": "invalid_executable_program"}
@@ -42,7 +43,7 @@ def test_real_workflow_http_status_and_no_source_reader(tmp_path):
                 client.close()
         status, body = get("/api/environments/word_guess/workflow")
         assert status == 200 and body["status"] == "available"
-        assert get("/api/environments/calendar/workflow")[1]["status"] == "unavailable"
+        assert get("/api/environments/calendar/workflow")[1]["status"] == "partial"
         assert get("/api/environments/missing/workflow")[0] == 404
         assert get("/api/environments/word_guess/source/workflow")[0] == 404
         assert not any(key in json.dumps(body) for key in ("/Users/", "secret_word", "capability", "positions"))

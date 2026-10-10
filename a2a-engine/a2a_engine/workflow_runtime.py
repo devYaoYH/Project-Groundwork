@@ -1,5 +1,6 @@
 """Executable invocation bindings; no alternate scheduler or workflow catalog."""
 
+import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -71,9 +72,46 @@ def runtime_capability(environment_id):
 
 
 class GraphProgram:
-    def __init__(self, builder):
+    def __init__(self, builder, *, incomplete_reason=None):
         self.builder = builder
         self.compiled = builder.compile()
+        self.incomplete_reason = incomplete_reason
 
     async def ainvoke(self, state, *, context, **kwargs):
         return await self.compiled.ainvoke(state, context=context, **kwargs)
+
+
+@dataclass(frozen=True)
+class BatchStep:
+    program: GraphProgram
+    items: Callable
+    concurrency: Callable
+    serial_key: Callable
+
+    async def __call__(self, state: dict, runtime: Runtime[Any]):
+        context = runtime.context
+        items = self.items(state, context)
+        limit = self.concurrency(state, context)
+        semaphore = asyncio.Semaphore(limit) if limit else None
+        locks = {}
+
+        async def invoke(item):
+            key = self.serial_key(item, context)
+            lock = locks.setdefault(key, asyncio.Lock()) if key is not None else None
+
+            async def execute():
+                return await self.program.ainvoke({"call": item}, context=context)
+
+            async def serialized():
+                if lock is None:
+                    return await execute()
+                async with lock:
+                    return await execute()
+
+            if semaphore is None:
+                return await serialized()
+            async with semaphore:
+                return await serialized()
+
+        results = await asyncio.gather(*(invoke(item) for item in items), return_exceptions=True)
+        return {"batch_results": results}
