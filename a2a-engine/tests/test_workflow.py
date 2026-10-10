@@ -146,6 +146,6 @@ def test_agent_step_cannot_hide_a_second_call():
         asyncio.run(step({}, SimpleNamespace(context=None)))
 
 
-@pytest.mark.parametrize("environment_id", ["buyer_seller", "negotiation"])
+@pytest.mark.parametrize("environment_id", ["negotiation"])
 def test_unmigrated_games_are_unavailable(environment_id):
     assert environment_workflow(environment_id)["status"] == "unavailable"

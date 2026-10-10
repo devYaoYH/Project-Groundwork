@@ -186,7 +186,7 @@ class _ScriptedBuyer:
 class BuyerSellerGame:
     """Seller-led alternating-offer bargaining over k identical units."""
 
-    def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False) -> None:
+    def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
         self.config = (
             config if isinstance(config, BuyerSellerConfig) else BuyerSellerConfig(**config)
         )
@@ -198,32 +198,45 @@ class BuyerSellerGame:
             if self.config.opening_price is not None
             else round(self.config.seller_cost * 2.5, 2)
         )
-        self._build_agents()
+        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+        try:
+            self._build_agents()
+        except BaseException:
+            if self.runtime:
+                self.runtime.close()
+            raise
 
     def _build_agents(self) -> None:
         cfg = self.config
-        if self.dry_run:
-            self.seller = _ScriptedSeller(cfg.seller_cost, self.opening_price, cfg.max_rounds)
-            self.buyer = _ScriptedBuyer(cfg.buyer_value, cfg.buyer_patience, cfg.max_rounds)
-            return
         agents = cfg.agents
-        seller_cfg = agents[0].model_dump() if len(agents) >= 1 else {"model": "gpt-4o-mini"}
-        buyer_cfg = agents[1].model_dump() if len(agents) >= 2 else {"model": "gpt-4o-mini"}
-        self.seller = SellerAgent(
-            make_llm_client(seller_cfg),
-            cost=cfg.seller_cost,
-            num_items=cfg.num_items,
-            max_rounds=cfg.max_rounds,
-            discount_factor=cfg.discount_factor,
-            monotonic=cfg.enforce_monotonic_offers,
-        )
-        self.buyer = BuyerAgent(
-            make_llm_client(buyer_cfg),
-            value=cfg.buyer_value,
-            num_items=cfg.num_items,
-            max_rounds=cfg.max_rounds,
-            discount_factor=cfg.discount_factor,
-        )
+        for seat, role in enumerate(("seller", "buyer")):
+            agent_cfg = agents[seat].model_dump() if len(agents) > seat else {"model": "gpt-4o-mini"}
+            if agent_cfg.get("runtime", "in_process") != "in_process":
+                if not self.runtime:
+                    raise ValueError("buyer_seller remote seats require runtime context")
+                from .remote import RemoteBargainingAgent
+                agent = RemoteBargainingAgent(self.runtime, seat)
+            elif self.dry_run:
+                agent = (_ScriptedSeller(cfg.seller_cost, self.opening_price, cfg.max_rounds) if seat == 0
+                         else _ScriptedBuyer(cfg.buyer_value, cfg.buyer_patience, cfg.max_rounds))
+            else:
+                common = {"num_items": cfg.num_items, "max_rounds": cfg.max_rounds,
+                          "discount_factor": cfg.discount_factor}
+                agent = (SellerAgent(make_llm_client(agent_cfg), cost=cfg.seller_cost,
+                                     monotonic=cfg.enforce_monotonic_offers, **common) if seat == 0
+                         else BuyerAgent(make_llm_client(agent_cfg), value=cfg.buyer_value, **common))
+            setattr(self, role, agent)
+
+    @classmethod
+    def build_program(cls):
+        from .workflow import build_program
+        return build_program()
+
+    @classmethod
+    def runtime_capability(cls):
+        from a2a_engine.workflow_runtime import RuntimeCapability
+        from .remote import BUYER_SELLER_TOOLS
+        return RuntimeCapability(BUYER_SELLER_TOOLS)
 
     # --- observations: the information-leakage boundary (§5) ---
 
@@ -254,93 +267,36 @@ class BuyerSellerGame:
         obs["current_offer"] = price
         return obs
 
-    # --- loop ---
+    # --- execution ---
 
     def run(self) -> EpisodeTrace:
         return asyncio.run(self._run_async())
 
     async def _run_async(self) -> EpisodeTrace:
+        from .workflow import GameContext
+        from .remote import RemoteBargainingAgent
+        remote_agents = [agent for agent in (self.seller, self.buyer) if isinstance(agent, RemoteBargainingAgent)]
+        succeeded = False
+        try:
+            state = await self.build_program().ainvoke({}, context=GameContext(self),
+                config={"recursion_limit": self.config.max_rounds * 9 + 15})
+            succeeded = True
+            return self._trace(state)
+        finally:
+            if self.runtime:
+                try:
+                    if not succeeded:
+                        for agent in remote_agents:
+                            await asyncio.to_thread(agent.episode_end)
+                finally:
+                    self.runtime.close()
+
+    def _trace(self, state):
         cfg = self.config
-        self.events.append("game_start", data={
-            "num_items": cfg.num_items,
-            "max_rounds": cfg.max_rounds,
-            "discount_factor": cfg.discount_factor,
-            "enforce_monotonic_offers": cfg.enforce_monotonic_offers,
-            "opening_price": self.opening_price,
-        })
-
-        units_sold = 0
-        history: list[dict] = []
-        strikes: list[dict] = []
-        buyer_utility = 0.0
-        seller_utility = 0.0
-        last_price: float | None = None
-        t = 1
-        reason = DEADLINE
-
-        while units_sold < cfg.num_items and t <= cfg.max_rounds:
-            self.events.append("round_start", data={
-                "round": t, "units_remaining": cfg.num_items - units_sold,
-            })
-
-            # --- seller offers ---
-            action = await self.seller.act(
-                self._seller_observation(t, units_sold, history, last_price), tools={}
-            )
-            price = float(action["price"])
-            violation = False
-            if cfg.enforce_monotonic_offers and last_price is not None and price > last_price:
-                violation = True
-                price = last_price
-            price = round(price, 2)
-
-            self.events.append("offer", data={
-                "round": t,
-                "speaker": "seller",
-                "text": action.get("text") or f"I offer one unit at {price:.2f}.",
-                "price": price,
-                "monotonic_violation": violation,
-            })
-
-            # --- buyer responds ---
-            response = await self.buyer.act(
-                self._buyer_observation(t, units_sold, history, price), tools={}
-            )
-            accepted = bool(response["accept"])
-            self.events.append("response", data={
-                "round": t,
-                "speaker": "buyer",
-                "text": response.get("text") or ("I accept." if accepted else "I reject."),
-                "decision": "accept" if accepted else "reject",
-                "price": price,
-            })
-
-            if accepted:
-                discount = cfg.discount_factor ** (t - 1)
-                buyer_surplus = discount * (cfg.buyer_value - price)
-                seller_surplus = discount * (price - cfg.seller_cost)
-                buyer_utility += buyer_surplus
-                seller_utility += seller_surplus
-                units_sold += 1
-                strikes.append({
-                    "unit_index": units_sold, "round": t, "price": price,
-                    "discount": discount,
-                    "buyer_surplus": buyer_surplus, "seller_surplus": seller_surplus,
-                })
-                self.events.append("trade", data=strikes[-1])
-
-            history.append({"round": t, "price": price, "accepted": accepted})
-            last_price = price
-            t += 1
-
-            if units_sold >= cfg.num_items:
-                reason = SOLD_OUT
-
-        rounds_used = t - 1
-        self.events.append("game_end", data={
-            "reason": reason, "units_sold": units_sold, "rounds_used": rounds_used,
-        })
-
+        units_sold, rounds_used = state["units_sold"], state["round"] - 1
+        strikes, history = state["strikes"], state["history"]
+        buyer_utility, seller_utility = state["buyer_utility"], state["seller_utility"]
+        reason = SOLD_OUT if units_sold >= cfg.num_items else DEADLINE
         return EpisodeTrace(
             episode_uid=str(uuid.uuid4()),
             config=self.config,

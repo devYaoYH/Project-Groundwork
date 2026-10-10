@@ -59,6 +59,9 @@ async def watch(runtime, directory, callback_url):
                 if descriptor.get("environment_id") == "word_guess":
                     from word_guess.runtime_strategy import WordGuessStrategy
                     policy = WordGuessStrategy()
+                elif descriptor.get("environment_id") == "buyer_seller":
+                    from buyer_seller.runtime_strategy import BuyerSellerStrategy
+                    policy = BuyerSellerStrategy()
                 await runtime.join(descriptor["join_url"], callback_url, descriptor["join_ticket"],
                                    policy=policy)
             except Exception:

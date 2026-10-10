@@ -70,10 +70,47 @@ test("fetch failures are isolated from detail and workflow", async ({ page }) =>
 });
 
 test("unmigrated environment reports unavailable, not a guessed graph", async ({ page }) => {
-  await page.goto("/environments/buyer_seller/");
+  await page.goto("/environments/negotiation/");
   await expect(page.getByText("Executable workflow unavailable: migration pending for this environment.")).toBeVisible();
   await expect(page.locator(".workflow-canvas")).toHaveCount(0);
 });
+
+for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
+  test(`Buyer-Seller complete workflow at ${width}px ${colorScheme}`, async ({ page, request }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.emulateMedia({ colorScheme });
+    const { status, workflow } = await (await request.get("/api/environments/buyer_seller/workflow")).json();
+    expect(status).toBe("available");
+    const graph = workflow.graphs[0];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/environments/buyer_seller/");
+    const section = page.locator(".workflow-section");
+    const canvas = section.locator(".workflow-canvas");
+    const outline = section.locator(".workflow-outline");
+    const inspector = section.getByRole("complementary", { name: "Step inspector" });
+    await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+    await expect(canvas.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
+    for (const route of ["accepted", "rejected", "continue", "finished", "back-edge"]) {
+      await expect(canvas.getByText(route, { exact: true })).toBeVisible();
+    }
+    for (const node of graph.nodes) {
+      await outline.getByRole("button", { name: node.id, exact: true }).focus();
+      await page.keyboard.press("Enter");
+      await expect(inspector.getByRole("heading", { name: node.id, exact: true })).toBeVisible();
+      await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"]`)).toHaveClass(/selected/);
+      if (node.operation) {
+        await expect(inspector.getByText(node.actor_selector, { exact: true })).toBeVisible();
+      }
+    }
+    await expect(section).toContainText("not a replay");
+    await expect(canvas.locator(".react-flow__handle:visible")).toHaveCount(0);
+    await expect(canvas.locator("input, textarea")).toHaveCount(0);
+    await canvas.getByRole("button", { name: "Fit View", exact: true }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+}
 
 for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
   test(`partial Calendar subgraphs at ${width}px ${colorScheme}`, async ({ page, request }) => {
