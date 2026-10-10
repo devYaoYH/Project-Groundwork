@@ -196,7 +196,14 @@ class AgentRuntimeV2:
                 invocation.phase not in {"CHEAP_TALK", "DECISION", "VOLUNTARY", "DECISION_RETRY"}
                 or invocation.phase == "DECISION_RETRY" and invocation.parent_phase not in {"DECISION", "VOLUNTARY"}):
             raise ValueError("invalid action phase")
-        if invocation.operation != {"register": "register", "round_start": "observe", "turn": "act",
+        if invocation.environment_id == 'negotiation':
+            from negotiation_game.remote import OPERATIONS
+            valid = (invocation.kind == 'turn' and invocation.operation in OPERATIONS
+                     and invocation.phase == invocation.operation.upper() and invocation.parent_phase is None)
+            valid = valid or (invocation.kind in {'register', 'episode_end'} and invocation.operation == invocation.kind)
+            if not valid:
+                raise ValueError('invalid Negotiation operation')
+        elif invocation.operation != {"register": "register", "round_start": "observe", "turn": "act",
                                     "reflect": "reflect", "episode_end": "episode_end"}[invocation.kind]:
             if not (invocation.kind == "turn" and invocation.operation == "probe"
                     and invocation.environment_id == "probe"):

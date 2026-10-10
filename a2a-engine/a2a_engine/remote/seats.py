@@ -36,8 +36,9 @@ def validate_runtimes(config, *, scripted=False):
             if runtime_capability(config.get("environment_id", "calendar")) is None:
                 raise ValueError("remote runtimes are unsupported by this environment")
         if runtime == "local_process" and not scripted:
-            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
-            if harness == "scripted" and spec.get("type", "llm") != "scripted":
+            heuristic = config.get('environment_id') == 'negotiation' and spec.get('type') == 'heuristic'
+            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
+            if harness == "scripted" and spec.get("type", "llm") != "scripted" and not heuristic:
                 raise ValueError("local_process scripted harness requires type: scripted")
             if harness == "structured_output" and (spec.get("type", "llm") != "llm" or not spec.get("model")):
                 raise ValueError("structured_output requires type: llm and a model")
@@ -56,7 +57,8 @@ class LocalProcessLauncher:
         env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT") if key in os.environ}
         env.update(A2A_JOIN_URL=join_url, A2A_JOIN_TICKET=ticket)
         spec = spec or {"type": "scripted"}
-        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
+        heuristic = environment_id == 'negotiation' and spec.get('type') == 'heuristic'
+        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
         if harness == "structured_output":
             from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
             from a2a_engine.manifest import redact_config

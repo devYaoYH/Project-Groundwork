@@ -69,10 +69,88 @@ test("fetch failures are isolated from detail and workflow", async ({ page }) =>
   await expect(page.locator(".workflow-canvas .react-flow__node")).toHaveCount(10);
 });
 
-test("unmigrated environment reports unavailable, not a guessed graph", async ({ page }) => {
+test("unsupported capability reports unavailable, not a guessed graph", async ({ page }) => {
+  await page.route('**/api/environments/negotiation/workflow', route => route.fulfill({
+    contentType: 'application/json', body: '{"status":"unavailable","reason":"executable_migration_pending"}'
+  }));
   await page.goto("/environments/negotiation/");
   await expect(page.getByText("Executable workflow unavailable: migration pending for this environment.")).toBeVisible();
   await expect(page.locator(".workflow-canvas")).toHaveCount(0);
+});
+
+for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
+  test(`Negotiation backend/subgraphs at ${width}px ${colorScheme}`, async ({ page, request }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.emulateMedia({ colorScheme });
+    const { status, workflow } = await (await request.get('/api/environments/negotiation/workflow')).json();
+    expect(status).toBe('available');
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('/environments/negotiation/');
+    const section = page.locator('.workflow-section');
+    const outline = section.locator('.workflow-outline');
+    const canvas = section.locator('.workflow-canvas');
+    const inspector = section.getByRole('complementary', { name: 'Step inspector' });
+    const inspectGraph = async (id: string) => {
+      const graph = workflow.graphs.find((g: { id: string }) => g.id === id);
+      await expect(canvas.locator('.react-flow__node')).toHaveCount(graph.nodes.length);
+      await expect(canvas.locator('.react-flow__edge')).toHaveCount(graph.edges.length);
+      for (const node of graph.nodes) {
+        await outline.getByRole('button', { name: node.id, exact: true }).focus();
+        await page.keyboard.press('Enter');
+        await expect(inspector.getByRole('heading', { name: node.id, exact: true })).toBeVisible();
+        await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"]`)).toHaveClass(/selected/);
+        if (node.actor_selector) await expect(inspector.getByText(node.actor_selector, { exact: true })).toBeVisible();
+      }
+    };
+    const open = async (name: string) => {
+      await outline.getByRole('button', { name, exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await inspector.getByRole('button', { name: 'Open subgraph' }).focus();
+      await page.keyboard.press('Enter');
+    };
+    await inspectGraph('root');
+    await open('round');
+    await inspectGraph('root/round');
+    await open('cheap_talk');
+    await inspectGraph('root/round/cheap_talk');
+    for (const key of ['both_decided', 'cap', 'bypass_decided']) {
+      await expect(canvas.getByText(key, { exact: true }).first()).toBeVisible();
+    }
+    await section.getByRole('button', { name: 'Parent graph' }).click();
+    for (const decision of ['decision_a', 'decision_b']) {
+      await open(decision);
+      await inspectGraph(`root/round/${decision}`);
+      for (const key of ['bypass_decided', 'retry', 'exhausted', 'valid', 'invalid']) {
+        await expect(canvas.getByText(key === 'retry' ? 'retry / back-edge' : key, { exact: true }).first()).toBeVisible();
+      }
+      await section.getByRole('button', { name: 'Parent graph' }).click();
+    }
+    await section.getByRole('button', { name: 'Root graph' }).click();
+    await expect(outline.getByRole('button', { name: 'complete_game', exact: true })).toBeVisible();
+    await expect(section).toContainText('not a replay');
+    await expect(canvas.locator('.react-flow__handle:visible')).toHaveCount(0);
+    await expect(canvas.locator('input, textarea')).toHaveCount(0);
+    await canvas.getByRole('button', { name: 'Fit View', exact: true }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    expect(errors).toEqual([]);
+  });
+}
+
+test('persisted Negotiation replay remains usable beside lanes/transcript', async ({ page, request }) => {
+  const uid = 'workflow-browser-negotiation';
+  const detail = await (await request.get(`/api/episodes/${uid}`)).json();
+  expect(detail.episode.metrics.num_rounds).toBe(2);
+  await page.goto(`/episode/?uid=${uid}`);
+  await expect(page.getByRole('heading', { name: 'Transcript', exact: true })).toBeVisible();
+  await expect(page.locator('.transcript-line')).toHaveCount(detail.cursor_max);
+  const frame = page.frameLocator('iframe[title="negotiation replay"]');
+  await expect(frame.locator('#liveGameId')).toHaveText(uid);
+  await page.getByRole('button', { name: 'Step back', exact: true }).click();
+  await page.getByRole('button', { name: 'Step', exact: true }).click();
+  await expect(frame.locator('#liveStatus')).toHaveText(`${detail.cursor_max}/${detail.cursor_max} events`);
+  await expect(frame.locator('#liveRounds')).toContainText('Round');
+  await expect(frame.locator('#humanInputBar')).toBeHidden();
 });
 
 for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {

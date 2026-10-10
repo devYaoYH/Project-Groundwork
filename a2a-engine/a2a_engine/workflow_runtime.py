@@ -10,9 +10,14 @@ from langgraph.runtime import Runtime
 _invoking = ContextVar("workflow_agent_invocation", default=None)
 
 
-def require_agent_step():
-    if not _invoking.get():
+def require_agent_step(actor=None, operation=None):
+    scope = _invoking.get()
+    if not scope:
         raise RuntimeError("agent invocation requires an executable AgentStep")
+    if actor is not None:
+        if scope.actor is not actor or scope.operation != operation or scope.used:
+            raise RuntimeError("agent invocation does not match executable AgentStep")
+        scope.used = True
 
 
 @dataclass
@@ -32,11 +37,7 @@ class GuardedAgent:
         return getattr(self.agent, name)
 
     async def act(self, observation, tools):
-        require_agent_step()
-        scope = _invoking.get()
-        if scope.actor is not self or scope.operation != "act" or scope.used:
-            raise RuntimeError("agent invocation does not match executable AgentStep")
-        scope.used = True
+        require_agent_step(self, "act")
         return await self.agent.act(observation, tools)
 
 

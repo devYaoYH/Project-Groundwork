@@ -163,7 +163,7 @@ def main():
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
     parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
     parser.add_argument("--harness", default="scripted", choices=["scripted", "structured_output"])
-    parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess", "buyer_seller"])
+    parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess", "buyer_seller", "negotiation"])
     parser.add_argument("--model-config", help="Nonsecret model configuration JSON file")
     parser.add_argument("--port", type=int, default=0, help="Loopback callback port (default: ephemeral)")
     args = parser.parse_args()
@@ -183,6 +183,28 @@ def main():
             parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
+    if args.environment_id == 'negotiation':
+        from negotiation_game.runtime_strategy import NegotiationStrategy
+        config = None
+        if args.harness == 'structured_output':
+            try:
+                config = json.loads(os.environ.get('A2A_MODEL_CONFIG', '{}'))
+                if args.model_config:
+                    with open(args.model_config) as handle:
+                        config = json.load(handle)
+                if not isinstance(config, dict) or not config.get('model') or 'api_key' in config:
+                    raise ValueError()
+                config['type'] = 'llm'
+            except (OSError, ValueError, TypeError):
+                parser.error('Negotiation requires nonsecret backend model configuration')
+        runtime = AgentRuntimeV2()
+        with LoopbackServer(runtime.app, port=args.port) as server:
+            admission = server.run(runtime.join(args.join_url, server.base_url, ticket,
+                                                policy=NegotiationStrategy(config=config)))
+            key = (admission.environment_id, admission.episode_id, admission.attempt_id, admission.seat)
+            while not runtime.sessions[key].ended:
+                time.sleep(0.05)
+        return
     policy = None
     if args.harness == "structured_output":
         from a2a_engine.llm.factory import make_llm_client

@@ -140,7 +140,9 @@ class JoinResponseV2(JoinResponse):
 
 class TurnInvocationV2(TurnIdentity):
     kind: Literal["register", "round_start", "turn", "reflect", "episode_end"]
-    operation: Literal["register", "observe", "act", "reflect", "episode_end", "probe"]
+    operation: Literal["register", "observe", "act", "reflect", "episode_end", "probe",
+                       "initialize_session", "reset_context", "project_update", "error_feedback",
+                       "cheap_talk", "decide_allocation", "notify_round_result"]
     phase: str | None = Field(default=None, max_length=128)
     parent_phase: str | None = Field(default=None, max_length=128)
     deadline: datetime

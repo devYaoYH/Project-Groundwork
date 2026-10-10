@@ -34,7 +34,7 @@ def test_join_deadline_validation(timeout):
         validate_runtimes(config(join_timeout_s=timeout))
 
 
-def test_model_harness_requires_a_model_but_smoke_keeps_remote():
+def test_model_harness_requires_a_model_but_smoke_keeps_remote(monkeypatch):
     cfg = config(agents=[{"type": "llm", "runtime": "local_process", "harness": "structured_output"}])
     with pytest.raises(ValueError, match="requires type: llm and a model"):
         validate_runtimes(cfg)
@@ -42,6 +42,8 @@ def test_model_harness_requires_a_model_but_smoke_keeps_remote():
     cfg["agents"][0]["model"] = "mock/model"
     assert validate_runtimes(cfg)[0]["harness"] == "structured_output"
     assert validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
+    assert validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
+    monkeypatch.setattr('a2a_engine.workflow_runtime.runtime_capability', lambda environment_id: None)
     with pytest.raises(ValueError, match="unsupported"):
         validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
 

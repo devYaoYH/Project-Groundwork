@@ -120,11 +120,22 @@ def _sync_effective_config(cfg: NegotiationConfig, engine_cfg: GameConfig) -> No
 class NegotiationGame:
     """Runs one negotiation environment and returns a ``EpisodeTrace``."""
 
-    def __init__(self, config: dict, dry_run: bool = False) -> None:
+    def __init__(self, config: dict, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
         self.config = NegotiationConfig(**config)
         self.dry_run = dry_run
         self.events: list[Event] = []
         self._publisher = publisher_from_config(self.config)
+        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+
+    @classmethod
+    def build_program(cls):
+        return GameEngine.build_program()
+
+    @classmethod
+    def runtime_capability(cls):
+        from a2a_engine.workflow_runtime import RuntimeCapability
+        from .remote import NEGOTIATION_TOOLS
+        return RuntimeCapability(NEGOTIATION_TOOLS)
 
     # --- event adaptation ---
 
@@ -155,9 +166,15 @@ class NegotiationGame:
         """
         specs = [dict(a) if isinstance(a, dict) else a.model_dump()
                  for a in self.config.agents] or [{"type": "heuristic"}, {"type": "heuristic"}]
-        if self.dry_run:
-            specs = [{"type": "heuristic"} for _ in specs]
-        impls = [make_agent(spec) for spec in specs]
+        impls = []
+        for seat, spec in enumerate(specs):
+            if spec.get('runtime', 'in_process') != 'in_process':
+                from .remote import RemoteNegotiator
+                if not self.runtime:
+                    raise ValueError('negotiation remote seats require runtime context')
+                impls.append(RemoteNegotiator(self.runtime, seat))
+            else:
+                impls.append(make_agent({'type': 'heuristic'} if self.dry_run else spec))
         fs = self.config.first_speaker
         return impls[fs], impls[1 - fs]
 
@@ -165,17 +182,17 @@ class NegotiationGame:
 
     def run(self) -> EpisodeTrace:
         started = datetime.now(timezone.utc)
-        engine_config = _to_engine_config(self.config)
-        # The engine's __post_init__ pins some fields regardless of what was
-        # requested. Copy the effective values back so the trace records the
-        # config the environment was actually played under, not the one asked for.
-        _sync_effective_config(self.config, engine_config)
-        agent_a, agent_b = self._make_agents()
-
-        engine = GameEngine(engine_config, agent_a, agent_b)
-        engine.on_event(self._on_engine_event)
-
-        result = asyncio.run(engine.run_game())
+        try:
+            engine_config = _to_engine_config(self.config)
+            # Record the visibility values pinned by the backend, not the requested values.
+            _sync_effective_config(self.config, engine_config)
+            agent_a, agent_b = self._make_agents()
+            engine = GameEngine(engine_config, agent_a, agent_b)
+            engine.on_event(self._on_engine_event)
+            result = asyncio.run(engine.run_game())
+        finally:
+            if self.runtime:
+                self.runtime.close()
         ended = datetime.now(timezone.utc)
         if self._publisher is not None:
             self._publisher.flush()

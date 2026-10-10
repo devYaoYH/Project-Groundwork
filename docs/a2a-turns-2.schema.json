@@ -705,7 +705,14 @@
           "act",
           "reflect",
           "episode_end",
-          "probe"
+          "probe",
+          "initialize_session",
+          "reset_context",
+          "project_update",
+          "error_feedback",
+          "cheap_talk",
+          "decide_allocation",
+          "notify_round_result"
         ],
         "title": "Operation",
         "type": "string"
