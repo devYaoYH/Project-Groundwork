@@ -34,6 +34,31 @@ experiments need no keys. Metadata and immutable artifacts survive restarts in
 the `platform-data` named volume. This is a separate stack from the existing
 credential-free runtime examples in `docker-compose.yml`.
 
+The local platform uses a file-backed release catalogue on the existing named
+volume. The image build discovers every installed game entry point and exports
+its declarations and checked-in experiment templates into a JSON manifest.
+The API publishes a content-addressed catalogue snapshot once, then reuses it
+for release listing, environment metadata, item browsing, agent choices and
+validation. Private experiment counts are queried separately for the signed-in
+user; they are never stored in the shared catalogue.
+
+To stage a new game, add its package under `games/` with an
+`a2a_engine.environments` entry point and a release declaration, then rerun the
+Compose build command above. Package installation, catalogue discovery and
+frontend environment routes are automatic. Game developers do not need to edit
+Compose, Dockerfiles, service settings or a hard-coded environment list. Direct
+Python development discovers installed games on first use; restart the API after
+installing or changing a game. Local staging needs no Firebase emulator or cloud
+credentials. The scientific compiler and runner still use their private SQLite
+snapshots; hosted catalogue publication is a separate follow-up.
+
+For an isolated staging stack, use a separate Compose project, image tag and port:
+
+```sh
+PLATFORM_IMAGE=groundwork-platform:catalogue PLATFORM_PORT=18082 \
+  docker compose -p groundwork-catalogue -f compose.platform.yml up --build --detach --wait
+```
+
 For real local Google login, create a **Web application** Google OAuth client,
 add `http://localhost:8080` as an authorized JavaScript origin, set
 `GOOGLE_OAUTH_CLIENT_ID`, and disable `PLATFORM_DEV_AUTH` in the API environment.

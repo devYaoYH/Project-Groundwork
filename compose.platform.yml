@@ -1,7 +1,7 @@
 name: groundwork-platform
 services:
   api:
-    image: groundwork-platform:local
+    image: ${PLATFORM_IMAGE:-groundwork-platform:local}
     build:
       context: .
       dockerfile: Dockerfile.platform
@@ -23,7 +23,7 @@ services:
       timeout: 3s
       retries: 30
   worker:
-    image: groundwork-platform:local
+    image: ${PLATFORM_IMAGE:-groundwork-platform:local}
     command: ["python", "-m", "cloud_platform.worker"]
     environment:
       PLATFORM_BACKEND: local
