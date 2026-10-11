@@ -1,4 +1,5 @@
 import { notifySessionExpired, sessionMutationHeaders } from "./session.ts";
+import { consumeLaunchEvents, type LaunchStreamOptions } from "./launch-stream.ts";
 
 export type Level = {
   value: unknown;
@@ -249,6 +250,7 @@ export type Launch = {
   started_at: string | null;
   ended_at: string | null;
   error: string | null;
+  live_logs?: boolean;
 };
 
 export type LaunchAttempt = {
@@ -287,6 +289,8 @@ export type LaunchDetail = {
   attempts: LaunchAttempt[];
   progress: ExperimentDetail["launches"][number]["progress"];
   runner_logs: LaunchLog[];
+  provisional?: boolean;
+  logs_truncated?: boolean;
 };
 
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -379,6 +383,10 @@ export function getExperiment(id: string): Promise<ExperimentDetail> {
 
 export function getLaunch(id: string): Promise<LaunchDetail> {
   return request<LaunchDetail>(`/api/launches/${encodeURIComponent(id)}`);
+}
+
+export function streamLaunchEvents(id: string, options: LaunchStreamOptions): Promise<void> {
+  return consumeLaunchEvents(`${baseUrl}/api/launches/${encodeURIComponent(id)}/events`, options);
 }
 
 export function validateDesign(releaseId: string, designText: string): Promise<DesignValidation> {

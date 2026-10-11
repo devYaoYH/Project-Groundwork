@@ -23,7 +23,7 @@ def test_live_snapshot_is_private_and_final_evidence_takes_precedence(platform):
     progress = {"planned": len(attempts), "completed": 0, "failed": 0, "by_cell": []}
     key = f"launches/{identifier}/live-detail.json"
     control.artifacts.put(key, json.dumps({"attempts": attempts, "progress": progress,
-        "runner_logs": [event(7, "first live line")]}).encode(), immutable=False)
+        "runner_logs": [event(7, "first live line")], "logs_truncated": True}).encode(), immutable=False)
     control.repo.claim("launches", identifier, {"QUEUED"}, {"status": "RUNNING",
         "live_detail_key": key, "live_updated_at": "2026-10-11T00:00:00Z",
         "heartbeat_at": now()})
@@ -32,7 +32,7 @@ def test_live_snapshot_is_private_and_final_evidence_takes_precedence(platform):
     assert not detail.get("evidence_complete")
     assert detail["attempts"][0]["status"] == "RUNNING"
     assert detail["runner_logs"][0]["payload"]["line"] == "first live line"
-    assert detail["log_start_id"] == 7
+    assert detail["log_start_id"] == 7 and detail["logs_truncated"]
     assert bob.get(f"/api/launches/{identifier}").status_code == 404
     assert bob.get(f"/api/launches/{identifier}/events").status_code == 404
     final_key = f"launches/{identifier}/detail.json"
@@ -40,7 +40,8 @@ def test_live_snapshot_is_private_and_final_evidence_takes_precedence(platform):
     control.artifacts.put(final_key, json.dumps(final).encode())
     control.repo.claim("launches", identifier, {"RUNNING"}, {"status": "COMPLETED", "detail_key": final_key})
     detail = alice.get(f"/api/launches/{identifier}").json()
-    assert not detail["provisional"] and detail["runner_logs"][0]["payload"]["line"] == "final evidence"
+    assert not detail["provisional"] and not detail["logs_truncated"]
+    assert detail["runner_logs"][0]["payload"]["line"] == "final evidence"
     response = alice.get(f"/api/launches/{identifier}/events", headers={"Last-Event-ID": "7"})
     assert response.status_code == 200 and "event: runner.log" not in response.text
     assert "event: launch.progress" in response.text and "event: launch.status" in response.text
