@@ -127,70 +127,155 @@ class PlatformControl:
             cp.seed_installed_releases()
             exp = cp.create_experiment(name=name, release_id=release_id,
                                        design_text=design_text, yaml_path=yaml_path)
-            if exp.design_text:
-                exp = cp.lock_experiment(exp.id, design_sha256=exp.design_sha256)
-                configs = cp._design_episode_configs(exp, mode="live")
-            else:
-                # Resolve sidecars, presets and agent pool once. The resulting
-                # configs are portable across control-service releases and have
-                # the same explicit identity contract as authored designs.
-                from expt_runner.run_experiment import _make_run_context
-                spec = load_experiment(self.workspace / exp.yaml_path)
-                configs = []
-                hooks = {exp.environment_id: get_environment_spec(exp.environment_id).resolve_config}
-                for cell, resolved in expand_cells(spec, resolve_config=hooks):
-                    if len(configs) + cell.count > 1000:
-                        raise ValueError("An experiment is limited to 1000 planned episodes")
-                    for index in range(cell.count):
-                        config = _make_run_context(exp.name, cell.label, {"seed": 0, **resolved}, index,
-                                                   dry_run=False)["config"]
-                        # Namespace logical identity by experiment rather than
-                        # a reusable template/name shared by different owners.
-                        config["episode_id"] = f"{exp.id}.{cell.label}.{index}"
-                        config["provenance"].update(experiment_id=exp.id, episode_id=config["episode_id"],
-                                                    experiment_name=exp.name)
-                        configs.append(config)
-            if not configs or len(configs) > 1000:
-                raise ValueError("An experiment must contain 1–1000 planned episodes")
-            adaptations = {}
-            if design_text is None:
-                # Checked-in templates also serve the standalone external-seat
-                # runner. Hosted execution owns agent lifetime, so those trusted
-                # declarations become child processes of the episode worker.
-                for config in configs:
-                    for index, agent in enumerate(config.get("agents", [])):
-                        if agent.get("runtime") == "external":
-                            participant = str(agent.get("id") or agent.get("name") or f"participant_{index}")
-                            adaptations[participant] = {"participant_id": participant,
-                                                        "from_runtime": "external", "to_runtime": "local_process"}
-                            agent["runtime"] = "local_process"
-            policy = apply_policy(configs)
-            policy["runtime_adaptations"] = [adaptations[key] for key in sorted(adaptations)]
+            if design_text is not None and body.get("draft") is True:
+                return self._persist_draft(cp, exp, owner_id)
+            return self._freeze(cp, exp, owner_id, design_text, yaml_path)
+
+    def _freeze(self, cp, exp, owner_id, design_text, yaml_path, previous=None):
+        if exp.design_text:
+            exp = cp.lock_experiment(exp.id, design_sha256=exp.design_sha256)
+            configs = cp._design_episode_configs(exp, mode="live")
+        else:
+            # Resolve sidecars, presets and agent pool once. The resulting
+            # configs are portable across control-service releases and have
+            # the same explicit identity contract as authored designs.
+            from expt_runner.run_experiment import _make_run_context
+            spec = load_experiment(self.workspace / exp.yaml_path)
+            configs = []
+            hooks = {exp.environment_id: get_environment_spec(exp.environment_id).resolve_config}
+            for cell, resolved in expand_cells(spec, resolve_config=hooks):
+                if len(configs) + cell.count > 1000:
+                    raise ValueError("An experiment is limited to 1000 planned episodes")
+                for index in range(cell.count):
+                    config = _make_run_context(exp.name, cell.label, {"seed": 0, **resolved}, index,
+                                               dry_run=False)["config"]
+                    # Namespace logical identity by experiment rather than
+                    # a reusable template/name shared by different owners.
+                    config["episode_id"] = f"{exp.id}.{cell.label}.{index}"
+                    config["provenance"].update(experiment_id=exp.id, episode_id=config["episode_id"],
+                                                experiment_name=exp.name)
+                    configs.append(config)
+        if not configs or len(configs) > 1000:
+            raise ValueError("An experiment must contain 1–1000 planned episodes")
+        adaptations = {}
+        if design_text is None:
+            # Checked-in templates also serve the standalone external-seat
+            # runner. Hosted execution owns agent lifetime, so those trusted
+            # declarations become child processes of the episode worker.
             for config in configs:
-                config["provenance"]["participants"] = pinned_participants(config)
-            if exp.design_text:
-                # Effective platform limits are part of the resolved execution
-                # plan; preserve the authored roster/design separately.
-                grouped = {}
-                for config in configs:
-                    grouped.setdefault(config["provenance"]["cell_id"], []).append(config)
-                with cp._session() as db:
-                    for cell_id, cell_configs in grouped.items():
-                        db.execute("UPDATE cells SET episode_configs=? WHERE experiment_id=? AND cell_id=?",
-                                   (json.dumps(cell_configs, sort_keys=True), exp.id, cell_id))
-            data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
-                    "image_digest": self.image_digest, "job_name": self.job_name,
-                    "status": "READY", "launch_ordinal": 0, "platform_policy": policy}
-            key = f"experiments/{exp.id}/compiler.db"
-            self.artifacts.put(key, snapshot(cp.path))
-            data["snapshot_key"] = key
-            data["frozen_plan_key"] = f"experiments/{exp.id}/frozen-plan.json"
-            self.artifacts.put(data["frozen_plan_key"], json.dumps(configs, sort_keys=True).encode())
-            # Retain exact input separately for a portable joined export.
-            input_text = exp.design_text or (self.workspace / exp.yaml_path).read_text()
-            self.artifacts.put(f"experiments/{exp.id}/input.yaml", input_text.encode())
+                for index, agent in enumerate(config.get("agents", [])):
+                    if agent.get("runtime") == "external":
+                        participant = str(agent.get("id") or agent.get("name") or f"participant_{index}")
+                        adaptations[participant] = {"participant_id": participant,
+                                                    "from_runtime": "external", "to_runtime": "local_process"}
+                        agent["runtime"] = "local_process"
+        policy = apply_policy(configs)
+        policy["runtime_adaptations"] = [adaptations[key] for key in sorted(adaptations)]
+        for config in configs:
+            config["provenance"]["participants"] = pinned_participants(config)
+        if exp.design_text:
+            # Effective platform limits are part of the resolved execution
+            # plan; preserve the authored roster/design separately.
+            grouped = {}
+            for config in configs:
+                grouped.setdefault(config["provenance"]["cell_id"], []).append(config)
+            with cp._session() as db:
+                for cell_id, cell_configs in grouped.items():
+                    db.execute("UPDATE cells SET episode_configs=? WHERE experiment_id=? AND cell_id=?",
+                               (json.dumps(cell_configs, sort_keys=True), exp.id, cell_id))
+        data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
+                "image_digest": self.image_digest, "job_name": self.job_name,
+                "status": "READY", "launch_ordinal": 0, "platform_policy": policy}
+        prefix = f"experiments/{exp.id}" if previous is None else f"experiments/{exp.id}/locked/{uuid.uuid4()}"
+        key = f"{prefix}/compiler.db"
+        self.artifacts.put(key, snapshot(cp.path))
+        data["snapshot_key"] = key
+        data["frozen_plan_key"] = f"{prefix}/frozen-plan.json"
+        self.artifacts.put(data["frozen_plan_key"], json.dumps(configs, sort_keys=True).encode())
+        # Retain exact input separately for a portable joined export.
+        input_text = exp.design_text or (self.workspace / exp.yaml_path).read_text()
+        data["input_key"] = f"{prefix}/input.yaml"
+        self.artifacts.put(data["input_key"], input_text.encode())
+        if previous is None:
             self.repo.create("experiments", exp.id, data)
-            return data
+        elif not self.repo.claim("experiments", exp.id, ["DRAFT"], data,
+                                 expected_fields={"snapshot_key": previous["snapshot_key"]}):
+            raise ValueError("The draft changed during locking; reload it before proceeding")
+        return data
+    def _persist_draft(self, cp, exp, owner_id, previous=None):
+        revision = str(uuid.uuid4())
+        prefix = f"experiments/{exp.id}/drafts/{revision}"
+        data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
+                "image_digest": self.image_digest, "job_name": self.job_name,
+                "status": "DRAFT", "launch_ordinal": 0,
+                "snapshot_key": f"{prefix}/compiler.db"}
+        self.artifacts.put(data["snapshot_key"], snapshot(cp.path))
+        self.artifacts.put(f"{prefix}/input.yaml", exp.design_text.encode())
+        if previous is None:
+            self.repo.create("experiments", exp.id, data)
+        elif not self.repo.claim("experiments", exp.id, ["DRAFT"], data,
+                                 expected_fields={"snapshot_key": previous["snapshot_key"]}):
+            raise ValueError("The draft changed while saving; reload it before proceeding")
+        return data
+
+    def _draft(self, identifier, owner_id):
+        record = self.owned("experiments", identifier, owner_id)
+        if record["status"] != "DRAFT":
+            raise ValueError("This experiment is locked; fork it before editing")
+        if record["image_digest"] != self.image_digest:
+            raise ValueError("The environment release changed; fork this draft against the current release")
+        return record
+
+    def save_design(self, identifier, owner_id, body):
+        previous = self._draft(identifier, owner_id)
+        text = body.get("design_text")
+        if not isinstance(text, str) or len(text) > 200000:
+            raise ValueError("Design document is invalid or too large")
+        try:
+            reject_credentials(yaml.safe_load(text))
+        except yaml.YAMLError as exc:
+            raise ValueError("Design YAML is invalid") from exc
+        with tempfile.TemporaryDirectory() as directory:
+            cp = self.compiler(directory, self.artifacts.get(previous["snapshot_key"]))
+            exp = cp.update_experiment_design(identifier, design_text=text)
+            return self._persist_draft(cp, exp, owner_id, previous)
+
+    def fork_design(self, identifier, owner_id, body):
+        previous = self.owned("experiments", identifier, owner_id)
+        if previous.get("design_text") is None:
+            raise ValueError("A checked-in template has no authored design to fork")
+        created = self.create_experiment(owner_id, {"name": previous["name"][:115] + " fork",
+            "release_id": previous["release_id"], "design_text": previous["design_text"], "draft": True})
+        # Keep fork provenance inside the immutable compiler revision as well.
+        with tempfile.TemporaryDirectory() as directory:
+            cp = self.compiler(directory, self.artifacts.get(created["snapshot_key"]))
+            with cp._session() as db:
+                # The compiler's fork reference is a SQLite foreign key. Keep
+                # a provenance-only source row in this private snapshot; other
+                # source dimensions/evidence stay in their own artifacts.
+                columns = ["id", "name", "environment_id", "release_id", "yaml_path",
+                           "config_sha256", "design_text", "design_sha256", "locked_at",
+                           "forked_from", "created_at"]
+                source = {**previous, "forked_from": None}
+                db.execute("INSERT INTO experiments (" + ",".join(columns) +
+                           ") VALUES (" + ",".join("?" for _ in columns) + ")",
+                           [source.get(column) for column in columns])
+                db.execute("UPDATE experiments SET forked_from=? WHERE id=?", (identifier, created["id"]))
+            return self._persist_draft(cp, cp.experiment(created["id"]), owner_id, created)
+
+    def lock_design(self, identifier, owner_id, body):
+        record = self.owned("experiments", identifier, owner_id)
+        if record["status"] == "READY":
+            if body.get("design_sha256") != record.get("design_sha256"):
+                raise ValueError("The supplied design digest does not match the locked experiment")
+            return record
+        previous = self._draft(identifier, owner_id)
+        with tempfile.TemporaryDirectory() as directory:
+            cp = self.compiler(directory, self.artifacts.get(previous["snapshot_key"]))
+            exp = cp.experiment(identifier)
+            if body.get("design_sha256") != exp.design_sha256:
+                raise ValueError("The draft changed; reload it before locking")
+            return self._freeze(cp, exp, owner_id, exp.design_text, None, previous)
 
     def detail(self, identifier, owner_id):
         exp = self.owned("experiments", identifier, owner_id)
@@ -199,6 +284,8 @@ class PlatformControl:
 
     def launch(self, identifier, owner_id, body):
         exp = self.owned("experiments", identifier, owner_id)
+        if exp["status"] != "READY":
+            raise ValueError("Lock the design before launching this experiment")
         mode = body.get("mode", "smoke")
         if mode not in {"smoke", "live", "dry_run"}:
             raise ValueError("mode must be live, smoke, or dry_run")

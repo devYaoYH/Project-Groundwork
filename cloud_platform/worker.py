@@ -116,12 +116,11 @@ class Worker:
                        A2A_PROVISIONING_DIR=str(root / "private-joins"),
                        A2A_OTEL_TRACES_FILE=str(results / "otel-spans.jsonl"),
                        OTEL_TRACES_EXPORTER="file", A2A_CAPTURE_CONTENT="true")
-            if self.artifacts.backend == "gcp":
-                env.update(A2A_DURABLE_EVENT_SINK="cloud_platform.storage:durable_event_write",
-                           A2A_DURABLE_EVENT_PREFIX=prefix + "/events")
-            else:
-                env.pop("A2A_DURABLE_EVENT_SINK", None)
-                env.pop("A2A_DURABLE_EVENT_PREFIX", None)
+            env.update(A2A_DURABLE_EVENT_SINK="cloud_platform.storage:durable_event_write",
+                       A2A_DURABLE_EVENT_PREFIX=prefix + "/events",
+                       PLATFORM_BACKEND=self.artifacts.backend)
+            if self.artifacts.backend == "local":
+                env["PLATFORM_DATA_DIR"] = str(self.artifacts.root.parent)
             log_path = root / "runner.log"
             control._mark_launch_started(identifier)
             with log_path.open("w") as log:

@@ -6,6 +6,10 @@
   shared SQLite document metadata and immutable artifact volume.
 - Reused the existing scientific design compiler and episode runner; colocated
   environment and agent children communicate over loopback inside the worker.
+- Preserved the existing Next.js researcher interface, including the environment
+  catalog, design editor, draft/save/lock/fork workflow, experiment evidence,
+  episode viewer, and same-origin replay assets. Connected its API to owner-scoped
+  metadata and private immutable artifacts rather than mounting the local server.
 - Added hosted Google login, expiring application sessions, CSRF validation, and
   owner checks for experiment metadata, launches, episodes and exports.
 - Added native Firestore metadata and private GCS launch plans, evidence and
@@ -15,6 +19,8 @@
 - Added automatic checked-in environment discovery, built-image tests, Artifact
   Registry publication, and image-digest-pinned Cloud Run release Jobs.
 - Added hosted health and unauthenticated-denial verification after CI publication.
+- Generated Next static environment routes from installed release declarations
+  during image builds, so new checked-in games need no frontend ID-list edit.
 
 The first release runs one launch per Job execution, with one task and bounded
 episode parallelism. Job runtime is limited to one hour and automatic retries

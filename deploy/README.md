@@ -3,7 +3,9 @@
 The local and hosted platforms execute the same pinned experiment plans. One
 launch owns a worker sandbox; its runner runs episodes with bounded parallelism
 and starts agent processes on loopback. No service-instance addressing is needed.
-The control pane cannot access model-provider credentials.
+The control pane cannot access model-provider credentials. Hosting preserves the
+existing experiment UI, design editor, environment/item views, launch progress,
+episode lanes, and replay screens; Google login wraps that interface.
 
 ## Local first
 
@@ -102,7 +104,21 @@ workflow, and `main` push/manual events. No service-account key is stored in
 GitHub. Pull requests run platform tests without cloud credentials. Trusted main
 pushes validate, submit Cloud Build, test the built image, push Artifact Registry,
 and deploy a digest-pinned release for all experimenters. All checked-in game
-packages declaring `a2a_engine.environments` are automatically installed.
+packages declaring `a2a_engine.environments` are automatically installed. The
+image first installs those packages, then exports route IDs from the same
+registered release declarations used by the API catalog. Next builds static
+environment and item pages from that generated JSON, so adding a trusted game
+does not require editing a frontend environment list. A game that fails to
+register fails the image build rather than silently disappearing.
+
+For a plain local web build after installing a new game, regenerate the same
+route artifact before building:
+
+```sh
+uv run python scripts/export_environment_ids.py
+cd web
+npm run build
+```
 
 For first verification before merge, pass `--verification-branch codex/platform-deployment`
 to trust exactly that workflow branch, then push the reviewed implementation.
@@ -148,6 +164,13 @@ python deploy/verify_hosted.py --project cicl-487801 --source-sha FULL_COMMIT
 CI runs this health, Google login configuration, and unauthenticated-denial check
 after publication. Real Google login and completed experiment/export checks still
 require an authenticated end-to-end run.
+
+Before marking a deployment verified, record its commit SHA, immutable image
+digest, successful GitHub/Cloud Build run links, Google login result, preserved
+design-editor workflow, completed hosted episode IDs, and downloaded export
+checksum verification. Local checks provide independent evidence but do not
+substitute for hosted execution. Current verification evidence is recorded by
+the deployment task as those checks complete.
 
 ## Current limits
 

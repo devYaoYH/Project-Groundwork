@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Rail } from "../components/Rail";
+import { SessionGate, SessionProvider } from "../components/Session";
 import "@xyflow/react/dist/style.css";
 import "../styles/globals.css";
 
@@ -13,10 +14,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        <div className="shell">
+        <SessionProvider><div className="shell">
           <Rail />
-          <main className="main-content">{children}</main>
-        </div>
+          <main className="main-content"><SessionGate>{children}</SessionGate></main>
+        </div></SessionProvider>
       </body>
     </html>
   );

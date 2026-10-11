@@ -10,12 +10,12 @@ steps:
     args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: publish
-    entrypoint: python3
-    args: ['deploy/release.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '--source-sha', '${_SOURCE_SHA}', '--oauth-client-id', '${_GOOGLE_OAUTH_CLIENT_ID}']
+    entrypoint: bash
+    args: ['deploy/run_python.sh', 'deploy/release.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '--source-sha', '${_SOURCE_SHA}', '--oauth-client-id', '${_GOOGLE_OAUTH_CLIENT_ID}']
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: verify-hosted
-    entrypoint: python3
-    args: ['deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}']
+    entrypoint: bash
+    args: ['deploy/run_python.sh', 'deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}']
 substitutions:
   _REGION: us-central1
   _SOURCE_SHA: ''

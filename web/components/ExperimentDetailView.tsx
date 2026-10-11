@@ -8,8 +8,9 @@ import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
 import { ReplicationHistory } from "./ReplicationHistory";
-import { EpisodeSummary, ExperimentDetail, MetricSummary, getExperiment, listEpisodes } from "../lib/api";
+import { EpisodeSummary, ExperimentDetail, MetricSummary, downloadExperiment, getExperiment, listEpisodes } from "../lib/api";
 import { groupReplicationExecutions, replicationProgress } from "../lib/replications";
+import { useSession } from "./Session";
 
 const EPISODE_TONE: Record<string, "plain" | "good" | "warn"> = {
   COMPLETED: "good",
@@ -37,15 +38,31 @@ export function ExperimentDetailView() {
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [episodes, setEpisodes] = useState<EpisodeSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const { isPlatform } = useSession();
 
   useEffect(() => {
     if (!id) return;
-    getExperiment(id).then(setDetail).catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const next = await getExperiment(id);
+        if (cancelled) return;
+        setDetail(next);
+        if (next.launches?.some((entry) => ["QUEUED", "DISPATCHING", "DISPATCHED", "RUNNING", "CANCELLING"].includes(entry.launch.status))) {
+          timer = setTimeout(() => void refresh(), 3000);
+        }
+      } catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load experiment"); }
+    };
+    void refresh();
     // An experiment with no episodes yet is the normal state between locking
     // and the first launch finishing, so this failing must not blank the page.
     listEpisodes({ experiment_id: id })
       .then((page) => setEpisodes(page.episodes ?? []))
       .catch(() => setEpisodes([]));
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [id]);
 
   if (!id) return <p className="notice notice-error">Choose an experiment from the library.</p>;
@@ -66,8 +83,17 @@ export function ExperimentDetailView() {
       <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: experiment.name }]} />
       <header className="page-heading page-heading-split">
         <div><h1>{experiment.name}</h1><p>Release <code>{experiment.release_id}</code> · {experiment.locked_at ? `locked ${new Date(experiment.locked_at).toLocaleString()}` : "draft — live execution is locked"}</p></div>
-        {experiment.design_text ? <Link className="button button-primary" href={`/design/?id=${encodeURIComponent(experiment.id)}`}>Open design</Link> : null}
+        <div className="launch-actions">
+          {isPlatform ? <button className="button" disabled={exporting} onClick={async () => {
+            setExporting(true); setExportError(null);
+            try { await downloadExperiment(experiment.id); }
+            catch (reason) { setExportError(reason instanceof Error ? reason.message : "Unable to export results"); }
+            finally { setExporting(false); }
+          }}>{exporting ? "Preparing export…" : "Download results"}</button> : null}
+          {experiment.design_text ? <Link className="button button-primary" href={`/design/?id=${encodeURIComponent(experiment.id)}`}>Open design</Link> : null}
+        </div>
       </header>
+      {exportError ? <p className="notice notice-error" role="alert">{exportError}</p> : null}
       <section className="metric-grid">
         <div className="metric"><span>cells</span><strong>{cells.length}</strong></div>
         <div className="metric"><span>planned replications</span><strong>{cellEvidence.reduce((total, cell) => total + cell.planned_replicas, 0)}</strong></div>

@@ -3,17 +3,20 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from cloud_platform.auth import Auth
 from cloud_platform.control import PlatformControl
+from cloud_platform.static import static_response
+from cloud_platform.viewer import Viewer
 
 
 def enqueue(control, launch):
@@ -77,7 +80,7 @@ def create_app(control=None, auth=None):
         if path == "/api/health":
             return JSONResponse({"ok": True, "source_sha": os.getenv("PLATFORM_SOURCE_SHA", "local")})
         if path == "/":
-            return FileResponse(Path(__file__).parent / "static/index.html")
+            return static_response(request)
         control, auth = dependencies()
         if path == "/auth/config":
             config_body, cookie = auth.config(request)
@@ -99,6 +102,7 @@ def create_app(control=None, auth=None):
             return JSONResponse(await run_in_threadpool(dispatch, control, (await request.json())["launch_id"]))
         principal = auth.authenticate(request)
         owner = principal["owner_id"]
+        viewer = Viewer(control)
         if path.startswith("/api/experiments") or path.startswith("/api/launches"):
             await run_in_threadpool(control.repo.reconcile_stale, owner_id=owner)
         if request.method != "GET":
@@ -109,11 +113,33 @@ def create_app(control=None, auth=None):
             return JSONResponse({"ok": True}, headers={"Set-Cookie": auth.logout_cookie()})
         if path == "/api/releases":
             return JSONResponse({"releases": await run_in_threadpool(control.releases)})
+        if path == "/api/environments":
+            return JSONResponse({"environments": await run_in_threadpool(viewer.environments, owner)})
+        if path.startswith("/api/environments/"):
+            operation = request.path_params.get("operation", "detail")
+            return JSONResponse(await run_in_threadpool(viewer.environment,
+                request.path_params["identifier"], operation, request.query_params,
+                await body(request) if request.method == "POST" else None))
+        if path == "/api/agent-pool":
+            return JSONResponse(await run_in_threadpool(viewer.agent_pool))
+        if path == "/api/designs/validate":
+            return JSONResponse(await run_in_threadpool(viewer.validate, await body(request)))
         if path == "/api/experiments":
             if request.method == "GET":
                 return JSONResponse({"experiments": control.repo.list("experiments", owner_id=owner)})
             return JSONResponse(await run_in_threadpool(control.create_experiment, owner, await body(request)), status_code=201)
         identifier = request.path_params.get("identifier", "")
+        if path == "/api/launches":
+            if request.method == "GET":
+                return JSONResponse({"launches": control.repo.list("launches", owner_id=owner)})
+            payload = await body(request)
+            if payload.get("shard_count") not in {None, 1} or payload.get("shard_index") not in {None, 0}:
+                raise ValueError("Launch sharding is not enabled; choose a bounded experiment instead")
+            if payload.get("max_parallelism") is None:
+                payload["max_parallelism"] = 1
+            launch = await run_in_threadpool(control.launch, str(payload.get("experiment_id") or ""), owner, payload)
+            await run_in_threadpool(enqueue, control, launch)
+            return JSONResponse(launch, status_code=202)
         if path.startswith("/api/experiments/"):
             if path.endswith("/launch"):
                 launch = await run_in_threadpool(control.launch, identifier, owner, await body(request))
@@ -121,7 +147,13 @@ def create_app(control=None, auth=None):
                 return JSONResponse(launch, status_code=202)
             if path.endswith("/export"):
                 return JSONResponse(await run_in_threadpool(control.export, identifier, owner), status_code=201)
-            return JSONResponse(control.detail(identifier, owner))
+            if path.endswith("/design"):
+                return JSONResponse(await run_in_threadpool(control.save_design, identifier, owner, await body(request)))
+            if path.endswith("/fork"):
+                return JSONResponse(await run_in_threadpool(control.fork_design, identifier, owner, await body(request)), status_code=201)
+            if path.endswith("/lock"):
+                return JSONResponse(await run_in_threadpool(control.lock_design, identifier, owner, await body(request)))
+            return JSONResponse(await run_in_threadpool(viewer.experiment, identifier, owner))
         if path.startswith("/api/launches/"):
             launch = control.owned("launches", identifier, owner)
             if path.endswith("/cancel"):
@@ -132,11 +164,34 @@ def create_app(control=None, auth=None):
                 return JSONResponse({"ok": True})
             if launch["status"] == "QUEUED":
                 await run_in_threadpool(enqueue, control, launch)
-            return JSONResponse({**launch, "attempts": [row for row in control.repo.list("attempts", owner_id=owner,
-                experiment_id=launch["experiment_id"]) if row["launch_id"] == identifier]})
+            if path.endswith("/events"):
+                last = int(request.headers.get("last-event-id", request.query_params.get("after_id", "0")))
+                async def events():
+                    cursor = last
+                    for _ in range(20):
+                        detail = await run_in_threadpool(viewer.launch, identifier, owner)
+                        for event in detail["runner_logs"]:
+                            if int(event["id"]) > cursor:
+                                cursor = int(event["id"])
+                                yield f"id: {cursor}\nevent: {event['kind']}\ndata: {json.dumps(event)}\n\n"
+                        yield f"event: launch.status\ndata: {json.dumps(detail['launch'])}\n\n"
+                        if detail["status"] not in {"QUEUED", "DISPATCHING", "DISPATCHED", "RUNNING", "CANCELLING"}:
+                            return
+                        await asyncio.sleep(1)
+                return StreamingResponse(events(), media_type="text/event-stream")
+            return JSONResponse(await run_in_threadpool(viewer.launch, identifier, owner))
+        if path == "/api/episodes":
+            return JSONResponse(await run_in_threadpool(viewer.episodes, owner, request.query_params))
         if path.startswith("/api/episodes/"):
-            episode = control.owned("episodes", identifier, owner)
-            return Response(control.artifacts.get(episode["artifact_json_key"]), media_type="application/json")
+            operation = request.path_params.get("operation", "detail")
+            method = {"detail": viewer.episode, "raw": viewer.raw_episode,
+                      "observability": viewer.observability, "artifacts": viewer.artifacts}.get(operation)
+            if method is None:
+                raise KeyError("record not found")
+            return JSONResponse(await run_in_threadpool(method, identifier, owner))
+        if path.startswith("/api/streams/"):
+            return JSONResponse(await run_in_threadpool(viewer.stream, identifier, owner,
+                                                       request.path_params.get("operation") == "trace"))
         if path.startswith("/api/exports/"):
             record = control.owned("exports", identifier, owner)
             return Response(control.artifacts.get(record["artifact_key"]), media_type="application/zip",
@@ -168,13 +223,27 @@ def create_app(control=None, auth=None):
               Route("/auth/{action}", endpoint, methods=["POST"]),
               Route("/internal/dispatch", endpoint, methods=["POST"]),
               Route("/api/releases", endpoint), Route("/api/experiments", endpoint, methods=["GET", "POST"]),
+              Route("/api/environments", endpoint),
+              Route("/api/environments/{identifier}", endpoint),
+              Route("/api/environments/{identifier}/{operation}", endpoint, methods=["GET", "POST"]),
+              Route("/api/agent-pool", endpoint), Route("/api/designs/validate", endpoint, methods=["POST"]),
               Route("/api/experiments/{identifier}", endpoint),
               Route("/api/experiments/{identifier}/launch", endpoint, methods=["POST"]),
               Route("/api/experiments/{identifier}/export", endpoint, methods=["POST"]),
+              Route("/api/experiments/{identifier}/design", endpoint, methods=["POST"]),
+              Route("/api/experiments/{identifier}/fork", endpoint, methods=["POST"]),
+              Route("/api/experiments/{identifier}/lock", endpoint, methods=["POST"]),
+              Route("/api/launches", endpoint, methods=["GET", "POST"]),
               Route("/api/launches/{identifier}", endpoint),
               Route("/api/launches/{identifier}/cancel", endpoint, methods=["POST"]),
+              Route("/api/launches/{identifier}/events", endpoint),
+              Route("/api/episodes", endpoint),
               Route("/api/episodes/{identifier}", endpoint),
+              Route("/api/episodes/{identifier}/{operation}", endpoint),
+              Route("/api/streams/{identifier}", endpoint),
+              Route("/api/streams/{identifier}/{operation}", endpoint),
               Route("/api/exports/{identifier}/download", endpoint)]
+    routes.append(Route("/{path:path}", static_response, methods=["GET", "HEAD"]))
     application = Starlette(routes=routes, exception_handlers={KeyError: error, ValueError: error,
                                                               HTTPException: http_error})
     @application.middleware("http")
@@ -183,7 +252,7 @@ def create_app(control=None, auth=None):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
         return response
     return application
 

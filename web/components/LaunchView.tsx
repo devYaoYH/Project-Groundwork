@@ -22,7 +22,20 @@ export function LaunchView() {
   useEffect(() => {
     if (!id) return;
     setDetail(null); setError(null);
-    getLaunch(id).then(setDetail).catch((reason: Error) => setError(reason.message));
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const next = await getLaunch(id);
+        if (cancelled) return;
+        setDetail(next);
+        if (["QUEUED", "DISPATCHING", "DISPATCHED", "RUNNING", "CANCELLING"].includes(next.launch.status)) {
+          timer = setTimeout(() => void refresh(), 3000);
+        }
+      } catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load launch"); }
+    };
+    void refresh();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [id]);
   if (!id) return <p className="notice notice-error">Choose a launch from an experiment.</p>;
   if (error) return <p className="notice notice-error">{error}</p>;

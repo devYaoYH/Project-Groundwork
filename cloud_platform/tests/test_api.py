@@ -23,6 +23,10 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 def platform(tmp_path, monkeypatch):
     monkeypatch.setenv("PLATFORM_BACKEND", "local")
     monkeypatch.setenv("PLATFORM_SOURCE_SHA", "test-source")
+    static_dir = tmp_path / "web"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html>Groundwork research control plane</html>")
+    monkeypatch.setenv("PLATFORM_STATIC_DIR", str(static_dir))
     repository = Repository(backend="local", data_dir=tmp_path)
     artifacts = ArtifactStore(backend="local", data_dir=tmp_path)
     control = PlatformControl(repository, artifacts, workspace=WORKSPACE)

@@ -1,3 +1,5 @@
+import { notifySessionExpired, sessionMutationHeaders } from "./session.ts";
+
 export type Level = {
   value: unknown;
   count: number;
@@ -300,11 +302,15 @@ function environmentPath(id: string): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json",
+      ...(init?.method && !["GET", "HEAD"].includes(init.method) ? sessionMutationHeaders() : {}),
+      ...init?.headers },
   });
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error ?? `Request failed (${response.status})`);
+    throw new Error(payload.error ?? payload.detail ?? `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }
@@ -385,8 +391,23 @@ export function validateDesign(releaseId: string, designText: string): Promise<D
 export function createDesignExperiment(name: string, releaseId: string, designText: string): Promise<Experiment> {
   return request<Experiment>("/api/experiments", {
     method: "POST",
-    body: JSON.stringify({ name, release_id: releaseId, design_text: designText }),
+    body: JSON.stringify({ name, release_id: releaseId, design_text: designText, draft: true }),
   });
+}
+
+export async function downloadExperiment(id: string): Promise<void> {
+  const exported = await request<{ id: string; download_url: string }>(`/api/experiments/${encodeURIComponent(id)}/export`, {
+    method: "POST", body: JSON.stringify({}),
+  });
+  const path = `/api/exports/${encodeURIComponent(exported.id)}/download`;
+  const response = await fetch(`${baseUrl}${path}`, { credentials: "same-origin" });
+  if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
+    throw new Error("Your export could not be downloaded.");
+  }
+  const blobUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a"); link.href = blobUrl; link.download = `experiment-${id}.zip`;
+  link.click(); setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
 }
 
 export function saveDesign(id: string, designText: string): Promise<Experiment> {

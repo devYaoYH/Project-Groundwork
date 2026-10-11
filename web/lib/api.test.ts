@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { forkDesign, getEnvironment, getItems, listEpisodes, runOracle, saveDesign } from "./api.ts";
+import { createDesignExperiment, forkDesign, getEnvironment, getItems, listEpisodes, runOracle, saveDesign } from "./api.ts";
+import { setSessionCsrf } from "./session.ts";
 
 test("Word-Guess environment navigation preserves its API identifier", async () => {
   const originalFetch = globalThis.fetch;
@@ -113,4 +114,16 @@ test("listEpisodes preserves repeated environment and status filters", async () 
   }
 
   assert.equal(path, "/api/episodes?limit=50&q=testing+fork&environment_id=word_guess&environment_id=calendar&status=COMPLETED&status=PARTIAL");
+});
+
+test("new browser designs stay editable and include the session CSRF challenge", async () => {
+  const originalFetch = globalThis.fetch;
+  let init: RequestInit | undefined;
+  globalThis.fetch = async (_, options) => { init = options; return new Response(JSON.stringify({ id: "draft" }), { status: 201 }); };
+  setSessionCsrf("public-csrf-challenge");
+  try { await createDesignExperiment("My design", "buyer_seller@v1", "schema_version: 1\n"); }
+  finally { globalThis.fetch = originalFetch; setSessionCsrf(""); }
+  assert.equal(init?.credentials, "same-origin");
+  assert.equal(new Headers(init?.headers).get("X-CSRF-Token"), "public-csrf-challenge");
+  assert.equal(JSON.parse(String(init?.body)).draft, true);
 });
