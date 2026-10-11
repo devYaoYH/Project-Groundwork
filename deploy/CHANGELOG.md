@@ -17,6 +17,8 @@
   available under their original release.
 - The production deployment workflow now triggers on `main`; the temporary
   verification-branch push trigger has been removed for the merge checkpoint.
+- Dropped Python 3.11 support: CI runs one Python 3.12 test job, and shipped
+  package metadata, the game scaffold and runtime documentation require 3.12+.
 
 ## Initial platform implementation
 

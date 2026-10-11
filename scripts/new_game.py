@@ -33,7 +33,7 @@ PYPROJECT = '''\
 name = "{dist}"
 version = "0.1.0"
 description = "{title} environment for a2a-engine."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
     "expt-runner",

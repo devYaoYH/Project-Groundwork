@@ -1,6 +1,6 @@
 # Agent Runtime Contract: a2a-turns/1 And a2a-turns/2
 
-Every environment owns its clock, ordering, authorization, validation, resolution, seeds and event log. All four shipped games execute LangGraph programs; Calendar additionally owns calendar commits and message routing. The reference package requires Python 3.11+ and pins MCP SDK 1.26.0. Application protocol negotiation is separate from MCP's transport version. `a2a-turns/1` remains the explicit legacy loopback adapter; `a2a-turns/2` admits short requests and reports eventual completion independently. There is no automatic fallback after ambiguous delivery.
+Every environment owns its clock, ordering, authorization, validation, resolution, seeds and event log. All four shipped games execute LangGraph programs; Calendar additionally owns calendar commits and message routing. The reference package requires Python 3.12+ and pins MCP SDK 1.26.0. Application protocol negotiation is separate from MCP's transport version. `a2a-turns/1` remains the explicit legacy loopback adapter; `a2a-turns/2` admits short requests and reports eventual completion independently. There is no automatic fallback after ambiguous delivery.
 
 The sections through Schema And Conformance describe the unchanged `/1` contract. The Acknowledgement-First Protocol section specifies `/2` and the private two-container probe.
 

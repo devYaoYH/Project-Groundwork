@@ -2,7 +2,7 @@
 name = "expt-runner"
 version = "0.1.0"
 description = "CLI runner for a2a-engine experiments."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
     "pyyaml>=6.0",
