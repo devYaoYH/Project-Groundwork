@@ -134,12 +134,12 @@ cd web
 npm run build
 ```
 
-For first verification before merge, pass `--verification-branch codex/platform-deployment`
-to trust exactly that workflow branch, then push the reviewed implementation.
-The workflow has a temporary explicit push trigger for this branch because a
-new manual workflow cannot be dispatched before it exists on the default branch.
-After merge, remove the temporary push trigger and rerun the configuration command
-without that flag to remove the temporary trust. Protect `main` with required
+Production deployments run from `main`. For first verification before merge,
+temporarily add the chosen branch to the workflow's push trigger and pass
+`--verification-branch codex/platform-deployment` to trust exactly that branch.
+A new manual workflow cannot be dispatched before it exists on the default branch.
+Remove the temporary push trigger before merge and rerun the configuration command
+without that flag afterward to remove the temporary trust. Protect `main` with required
 reviews and CI checks appropriate to the repository's contributor model.
 
 Cloud Build uses the `groundwork-build` identity and Cloud Logging. To submit the

@@ -15,6 +15,8 @@
 - Earlier experiments retain their pinned worker release. Fork their design to
   use the new live-log worker; existing results and execution provenance remain
   available under their original release.
+- The production deployment workflow now triggers on `main`; the temporary
+  verification-branch push trigger has been removed for the merge checkpoint.
 
 ## Initial platform implementation
 

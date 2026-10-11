@@ -3,9 +3,7 @@ on:
   pull_request:
     paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'web/lib/environments.ts', 'web/lib/environment-ids.json', '.github/workflows/platform.yml']
   push:
-    # Temporary explicit branch for the first end-to-end deployment verification.
-    # Remove after merge and remove its Workload Identity provider trust too.
-    branches: [main, codex/platform-deployment]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
