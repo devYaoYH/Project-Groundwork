@@ -34,11 +34,52 @@ docker compose run --rm runner \
   --smoke-test --storage-path /data/a2a.db
 ```
 
-For a real model run, pass a local `.env` file with `--env-file`; credentials
-are not included in the image or Compose file. A local OpenAI-compatible model
+The legacy in-process stack can receive model credentials through Compose interpolation; do not use that stack for the isolated agent deployment described below. A local OpenAI-compatible model
 server can be reached from Docker Desktop through
 `http://host.docker.internal:<port>/v1`; configure that endpoint in a private
 experiment YAML or release-specific overlay.
+
+## Isolated agent runtime: CLI and viewer
+
+`docker-compose.runtime-launch.yml` is a standalone supported deployment, not an overlay on the legacy credential-bearing stack. It runs the same runner and baked-in viewer with five long-lived agent services, a private internal runtime network and separate read-only per-seat descriptor mounts. The viewer also joins a separate UI bridge so Docker Desktop can publish its localhost port (`8082`); agents never join that bridge and have no workspace, trace database, sibling tickets or Docker socket. The UI bridge is not an outbound firewall for the viewer, but the viewer receives no provider credentials. Provider credentials are absent by default. Do not combine it with `docker-compose.yml`.
+
+```bash
+docker compose --env-file /dev/null -f docker-compose.runtime-launch.yml up --build --detach --wait
+docker compose --env-file /dev/null -f docker-compose.runtime-launch.yml exec -T viewer \
+  a2a-run experiments/all_games_runtime_smoke.yaml --smoke-test \
+  --smoke-episodes-per-cell 2 --max-parallelism 4 --storage-path /data/a2a.db --results-dir /data/results
+```
+
+CLI execution uses `exec viewer` because the environment advertises the exact `viewer` service origin; an unrelated ephemeral runner container must not advertise itself as `viewer`. The ordinary `scripts/run_game_runtime.py --release ... --experiment ...` wrapper also uses this runner/provenance path, not a second orchestration implementation. Compose execution requires an explicit non-human roster of at most five seats, uses `/2`, and converts local runtime choices to isolated external seats without mutating the original config. Scripted smoke never constructs providers.
+
+Open `http://127.0.0.1:8082/`. Each game's checked-in `games/<folder>/experiments/runtime_smoke.yaml` supports browser import and smoke launch. For example:
+
+```bash
+curl -X POST http://127.0.0.1:8082/api/experiments -H 'Content-Type: application/json' \
+  -d '{"yaml_path":"games/calendar/experiments/runtime_smoke.yaml"}'
+curl -X POST http://127.0.0.1:8082/api/launches -H 'Content-Type: application/json' \
+  -d '{"experiment_id":"<returned-id>","mode":"smoke","max_parallelism":2}'
+```
+
+Health checks precede private one-time provisioning. Each game gets its own environment tool server on one of 32 exact ports (`8100`–`8131`); concurrent jobs retain independent episode/attempt/seat identities and agent histories. Capacity exhaustion fails explicitly. Successful, failed and SIGINT/SIGTERM-cancelled jobs revoke pending authority and remove descriptors; the agent watcher cancels only the corresponding session, not its service or sibling jobs. Runtime crashes expire turns rather than resume them; an abrupt environment kill can leave descriptor files behind even after their tickets expire, so graceful cancellation is preferred. Named data and descriptor volumes survive service recreation.
+
+### Optional live Calendar with agent-only credentials
+
+`games/calendar/experiments/runtime_deepseek_v4_flash.yaml` is one bounded live episode: three `deepseek/deepseek-v4-flash` seats through OpenRouter's OpenAI-compatible API, six slots, two meetings, two talk turns, one decision retry, environment reflections and a 120-second turn deadline. It contains no key. The operator must explicitly approve and execute the live run; a passing smoke test is not live-provider validation.
+
+Set `OPENROUTER_API_KEY` in the invoking shell using your secret-management workflow. Do not add it to experiment YAML or print a resolved Compose configuration. The optional provider overlay injects the key and provider-egress network only into agent services; the viewer remains credential-free on its runtime and UI networks. These commands enable the deployment and then make real, billable provider calls (omit neither the isolation file nor the provider overlay):
+
+```bash
+docker compose --env-file /dev/null -f docker-compose.runtime-launch.yml -f docker-compose.runtime-provider.yml up --build --detach --wait
+docker compose --env-file /dev/null -f docker-compose.runtime-launch.yml -f docker-compose.runtime-provider.yml exec -T viewer \
+  python scripts/run_game_runtime.py --release games/calendar/runtime/release.json \
+  --experiment games/calendar/experiments/runtime_deepseek_v4_flash.yaml \
+  --storage-path /data/a2a.db --max-parallelism 1
+```
+
+For browser execution, import that same YAML and launch with `mode: live`; readiness checks only provider-presence booleans inside the isolated agent services. The current adapter is structured-output, not native model tools. The example's model ID and account availability are not verified until the live provider run. `--smoke-test` is a safe credential-free rehearsal, not the final live command.
+
+Before visual review, rebuild/recreate this deployment with its `up --build --detach --wait` command and verify `ps` health. The Next.js export is baked into the image; a workspace mount alone cannot refresh it, and the browser may need a hard refresh. For the legacy default stack, use `docker compose up --build --detach --wait viewer`. Use `down` without `--volumes` to stop a persistent stack; never delete data/Redis volumes just to refresh code.
 
 ## Launch experiments from the browser
 
@@ -49,7 +90,7 @@ server from `--static-dir`. There is no second service and no Node at runtime.
 | Screen | Route | What it is for |
 |---|---|---|
 | Environments | `/environments/` | what each installed release declares |
-| Environment detail | `/environments/<id>/` | parameter table, measures, oracle playground |
+| Environment detail | `/environments/<id>/` | parameter table, measures, oracle playground, executable workflow |
 | Item bank | `/environments/<id>/items/` | the frozen corpus and its oracle results |
 | Experiments | `/experiments/` | the researcher's landing page |
 | Design | `/design/?id=<experiment>` | write, validate live, compile, lock |
@@ -140,6 +181,7 @@ configuration with a shared backend when that integration is ready.
 | `GET /api/health` | readiness plus the episode count |
 | `GET /api/environments` | the installed release catalog |
 | `GET /api/environments/<id>` | declaration, plus item levels projected from the pinned bank |
+| `GET /api/environments/<id>/workflow` | read-only executable LangGraph structure, without launching an episode |
 | `GET /api/environments/<id>/items` | one page of the item bank |
 | `POST /api/environments/<id>/oracle` | run the release's oracle on one item (409 when it ships none) |
 | `POST /api/designs/validate` | validate and compile a draft without storing it |

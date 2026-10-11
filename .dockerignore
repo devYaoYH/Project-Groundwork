@@ -1,9 +1,15 @@
 .git
+.humanlayer
 .venv
 .pytest_cache
 __pycache__
 *.py[cod]
-.env
+.env*
+gha-creds-*.json
+agents.local.yaml
+.demo-shots
+web/test-results
+web/playwright-report
 results
 *.db
 *.db-wal

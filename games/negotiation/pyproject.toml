@@ -2,7 +2,7 @@
 name = "negotiation-environment"
 version = "0.1.0"
 description = "Multi-agent resource negotiation benchmark for a2a-engine."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
     "expt-runner",
@@ -30,6 +30,9 @@ negotiation = "negotiation_game"
 
 [tool.hatch.build.targets.wheel]
 packages = ["negotiation_game", "negotiation_analysis", "negotiation_judge"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"data/scenario_pools/run_009/filtered.json" = "negotiation_game/items/filtered.json"
 
 [tool.uv.sources]
 a2a-engine = { path = "../../a2a-engine", editable = true }

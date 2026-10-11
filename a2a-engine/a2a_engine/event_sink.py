@@ -20,7 +20,9 @@ projection reads either source.
 from __future__ import annotations
 
 import json
+import importlib
 import logging
+import os
 import threading
 from contextvars import ContextVar
 from pathlib import Path
@@ -60,9 +62,19 @@ class JsonlEventSink:
         self._handle = self.path.open("a", encoding="utf-8")
         self._lock = threading.Lock()
         self._closed = False
+        self._sequence = 0
+        self._durable_write = None
+        hook = os.getenv("A2A_DURABLE_EVENT_SINK")
+        if hook:
+            module, function = hook.split(":", 1)
+            self._durable_write = getattr(importlib.import_module(module), function)
 
     def write(self, event: Event) -> None:
-        """Put one event on disk. Never raises: a full disk must not lose a run."""
+        """Append locally and, when configured, await durable remote storage.
+
+        The optional cloud hook fails closed: an environment must not report
+        an acknowledged turn when its evidence could not be persisted.
+        """
         line = json.dumps(
             {
                 "episode_uid": self.episode_uid,
@@ -85,6 +97,9 @@ class JsonlEventSink:
                 self._handle.flush()
             except Exception:  # pragma: no cover - defensive
                 log.warning("could not append to %s", self.path, exc_info=True)
+            if self._durable_write is not None:
+                self._durable_write(json.loads(line), self._sequence)
+            self._sequence += 1
 
     def close(self) -> None:
         with self._lock:

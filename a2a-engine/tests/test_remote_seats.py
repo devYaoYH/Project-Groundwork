@@ -34,15 +34,18 @@ def test_join_deadline_validation(timeout):
         validate_runtimes(config(join_timeout_s=timeout))
 
 
-def test_model_harness_requires_a_model_but_smoke_keeps_remote():
+def test_model_harness_requires_a_model_but_smoke_keeps_remote(monkeypatch):
     cfg = config(agents=[{"type": "llm", "runtime": "local_process", "harness": "structured_output"}])
     with pytest.raises(ValueError, match="requires type: llm and a model"):
         validate_runtimes(cfg)
     assert validate_runtimes(cfg, scripted=True)[0]["runtime"] == "local_process"
     cfg["agents"][0]["model"] = "mock/model"
     assert validate_runtimes(cfg)[0]["harness"] == "structured_output"
-    with pytest.raises(ValueError, match="only by calendar"):
-        validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
+    assert validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
+    assert validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
+    monkeypatch.setattr('a2a_engine.workflow_runtime.runtime_capability', lambda environment_id: None)
+    with pytest.raises(ValueError, match="unsupported"):
+        validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
 
 
 def test_real_local_child_direct_game_and_cleanup():
@@ -107,6 +110,37 @@ def test_descriptor_refuses_public_directory_and_symlink(tmp_path):
     with RuntimeManager(CALENDAR_TOOLS, provisioning_dir=link) as manager:
         with pytest.raises(ValueError, match="symlink"):
             manager.provision(cfg)
+
+
+def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch):
+    from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+    episode = EpisodeContext("atomic", [0])
+    dump = json.dump
+
+    def observed_dump(payload, handle):
+        handle.write("{")
+        handle.flush()
+        assert not list(tmp_path.glob("*.json"))
+        handle.seek(0)
+        handle.truncate()
+        return dump(payload, handle)
+
+    monkeypatch.setattr("a2a_engine.remote.seats.json.dump", observed_dump)
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    assert json.loads(descriptor.read_text())["join_ticket"] == episode.seats[0].ticket
+    assert descriptor.stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_duplicate_descriptor_never_overwrites_existing_ticket(tmp_path):
+    from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+    episode = EpisodeContext("duplicate", [0])
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    original = descriptor.read_bytes()
+    with pytest.raises(FileExistsError):
+        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/join")
+    assert descriptor.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_child_environment_never_inherits_sibling_secrets(monkeypatch):

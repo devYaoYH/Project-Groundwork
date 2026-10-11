@@ -1,0 +1,89 @@
+"""Provision only named Groundwork resources; existing project apps are untouched."""
+import argparse
+import json
+import secrets
+from common import bucket, bucket_grant, command, exists, grant, service_account
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--project", default="cicl-487801")
+    parser.add_argument("--region", default="us-central1")
+    args = parser.parse_args()
+    project, region = args.project, args.region
+    command(["services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com",
+             "artifactregistry.googleapis.com", "firestore.googleapis.com",
+             "cloudtasks.googleapis.com", "secretmanager.googleapis.com",
+             "iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com",
+             "cloudresourcemanager.googleapis.com",
+             "--project", project, "--quiet"])
+    accounts = {name: service_account(project, f"groundwork-{name}")
+                for name in ("api", "worker", "dispatch", "build", "ci")}
+    for name in ("api", "worker"):
+        grant(project, f"serviceAccount:{accounts[name]}", "roles/datastore.user")
+        grant(project, f"serviceAccount:{accounts[name]}", "roles/logging.logWriter")
+    grant(project, f"serviceAccount:{accounts['api']}", "roles/cloudtasks.enqueuer")
+    grant(project, f"serviceAccount:{accounts['api']}", "roles/run.jobsExecutorWithOverrides")
+    command(["iam", "service-accounts", "add-iam-policy-binding", accounts["dispatch"],
+             "--project", project, "--member", f"serviceAccount:{accounts['api']}",
+             "--role", "roles/iam.serviceAccountUser"], capture=True)
+    for name in ("api", "worker"):
+        command(["iam", "service-accounts", "add-iam-policy-binding", accounts[name],
+                 "--project", project, "--member", f"serviceAccount:{accounts['build']}",
+                 "--role", "roles/iam.serviceAccountUser"], capture=True)
+    for role in ("roles/run.developer", "roles/logging.logWriter"):
+        grant(project, f"serviceAccount:{accounts['build']}", role)
+    grant(project, f"serviceAccount:{accounts['ci']}", "roles/cloudbuild.builds.editor")
+    for name in ("build", "ci"):
+        grant(project, f"serviceAccount:{accounts[name]}", "roles/serviceusage.serviceUsageConsumer")
+    command(["iam", "service-accounts", "add-iam-policy-binding", accounts["build"],
+             "--project", project, "--member", f"serviceAccount:{accounts['ci']}",
+             "--role", "roles/iam.serviceAccountUser"], capture=True)
+    repository = "groundwork"
+    if not exists(["artifacts", "repositories", "describe", repository, "--project", project, "--location", region]):
+        command(["artifacts", "repositories", "create", repository, "--project", project,
+                 "--location", region, "--repository-format=docker", "--quiet"])
+    command(["artifacts", "repositories", "add-iam-policy-binding", repository,
+             "--project", project, "--location", region,
+             "--member", f"serviceAccount:{accounts['build']}",
+             "--role", "roles/artifactregistry.writer"], capture=True)
+    artifact_bucket, source_bucket = f"{project}-groundwork-artifacts", f"{project}-groundwork-build-source"
+    bucket(project, artifact_bucket, region)
+    bucket(project, source_bucket, region)
+    for name in ("api", "worker"):
+        bucket_grant(project, artifact_bucket, f"serviceAccount:{accounts[name]}", "roles/storage.objectAdmin")
+    bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.objectAdmin")
+    # builds submit checks source bucket metadata before uploading; object roles
+    # do not include storage.buckets.get. Scope the extra read to this bucket.
+    bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.legacyBucketReader")
+    bucket_grant(project, source_bucket, f"serviceAccount:{accounts['build']}", "roles/storage.objectViewer")
+    session_secret = "groundwork-session"
+    if not exists(["secrets", "describe", session_secret, "--project", project]):
+        command(["secrets", "create", session_secret, "--project", project,
+                 "--replication-policy=automatic", "--quiet"])
+    if not command(["secrets", "versions", "list", session_secret, "--project", project,
+                    "--filter=state:ENABLED", "--format=value(name)", "--limit=1"], capture=True):
+        command(["secrets", "versions", "add", session_secret, "--project", project,
+                 "--data-file=-"], stdin=secrets.token_urlsafe(48), capture=True)
+    command(["secrets", "add-iam-policy-binding", session_secret, "--project", project,
+             "--member", f"serviceAccount:{accounts['api']}",
+             "--role", "roles/secretmanager.secretAccessor"], capture=True)
+    for name in ("groundwork-openai-api-key", "groundwork-anthropic-api-key",
+                 "groundwork-google-api-key", "groundwork-openrouter-api-key"):
+        if exists(["secrets", "describe", name, "--project", project]):
+            for account, role in (("worker", "roles/secretmanager.secretAccessor"),
+                                  ("build", "roles/secretmanager.viewer")):
+                command(["secrets", "add-iam-policy-binding", name, "--project", project,
+                         "--member", f"serviceAccount:{accounts[account]}",
+                         "--role", role], capture=True)
+    queue = "groundwork-dispatch"
+    if not exists(["tasks", "queues", "describe", queue, "--project", project, "--location", region]):
+        command(["tasks", "queues", "create", queue, "--project", project, "--location", region,
+                 "--max-concurrent-dispatches=5", "--max-dispatches-per-second=5",
+                 "--max-attempts=10", "--min-backoff=5s", "--max-backoff=300s"])
+    print(json.dumps({"project": project, "region": region, "artifact_bucket": artifact_bucket,
+                      "source_bucket": source_bucket, "accounts": accounts, "queue": queue}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

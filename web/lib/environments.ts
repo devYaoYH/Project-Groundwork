@@ -1,9 +1,7 @@
-export const environmentIds = [
-  "buyer_seller",
-  "calendar",
-  "negotiation",
-  "word_guess",
-];
+import installedEnvironmentIds from "./environment-ids.json";
+
+// Regenerated from installed game release declarations before image web builds.
+export const environmentIds: string[] = installedEnvironmentIds;
 
 /**
  * Environments whose own replay page can render one *persisted* episode, keyed

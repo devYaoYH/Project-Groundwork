@@ -9,6 +9,8 @@ from calendar_game.resolve import TOPOLOGY_PROFILES
 
 
 _BANK_PATH = Path(__file__).parents[1] / "tasks" / "tiny_varied_density_5a3p.jsonl"
+if not _BANK_PATH.is_file():
+    _BANK_PATH = Path(__file__).parent / "items" / "tiny_varied_density_5a3p.jsonl"
 
 DECLARATION = ReleaseDeclaration(
     id="calendar",

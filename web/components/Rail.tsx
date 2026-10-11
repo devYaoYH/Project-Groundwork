@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SessionAccount } from "./Session";
 
 // The detail screens are query-parameter routes, so their paths are siblings of
 // the list they belong to rather than children of it: `/episode/` does not
@@ -35,6 +36,7 @@ export function Rail() {
           );
         })}
       </nav>
+      <SessionAccount />
       <div className="rail-note">
         <p>Shared, versioned, read-only.</p>
         <p>Each declaration defines what a design may vary.</p>

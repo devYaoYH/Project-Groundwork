@@ -31,11 +31,14 @@ def validate_runtimes(config, *, scripted=False):
         runtime = validate_runtime(spec)
         if config.get("environment_id", "calendar") == "calendar" and spec.get("type") == "human":
             raise ValueError("human is not yet supported by calendar")
-        if runtime != "in_process" and config.get("environment_id", "calendar") != "calendar":
-            raise ValueError("remote runtimes are supported only by calendar")
+        if runtime != "in_process":
+            from a2a_engine.workflow_runtime import runtime_capability
+            if runtime_capability(config.get("environment_id", "calendar")) is None:
+                raise ValueError("remote runtimes are unsupported by this environment")
         if runtime == "local_process" and not scripted:
-            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
-            if harness == "scripted" and spec.get("type", "llm") != "scripted":
+            heuristic = config.get('environment_id') == 'negotiation' and spec.get('type') == 'heuristic'
+            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
+            if harness == "scripted" and spec.get("type", "llm") != "scripted" and not heuristic:
                 raise ValueError("local_process scripted harness requires type: scripted")
             if harness == "structured_output" and (spec.get("type", "llm") != "llm" or not spec.get("model")):
                 raise ValueError("structured_output requires type: llm and a model")
@@ -48,13 +51,14 @@ def validate_runtimes(config, *, scripted=False):
 
 
 class LocalProcessLauncher:
-    def __init__(self, join_url, ticket, spec=None):
+    def __init__(self, join_url, ticket, spec=None, *, environment_id="calendar"):
         # Do not inherit the runner environment: it may contain sibling tickets,
         # signing keys, tracing exporters, or unrelated provider credentials.
         env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT") if key in os.environ}
         env.update(A2A_JOIN_URL=join_url, A2A_JOIN_TICKET=ticket)
         spec = spec or {"type": "scripted"}
-        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
+        heuristic = environment_id == 'negotiation' and spec.get('type') == 'heuristic'
+        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
         if harness == "structured_output":
             from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
             from a2a_engine.manifest import redact_config
@@ -67,7 +71,9 @@ class LocalProcessLauncher:
             fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
                       "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra") if key in spec}
             env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
-        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness], env=env,
+        options = ["--environment-id", environment_id] if environment_id != "calendar" else []
+        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness,
+                                        *options], env=env,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def close(self):
@@ -80,7 +86,7 @@ class LocalProcessLauncher:
             self.process.wait(timeout=5)
 
 
-def write_descriptor(directory, episode, seat, join_url):
+def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError("provisioning directory must not be a symlink")
@@ -88,14 +94,18 @@ def write_descriptor(directory, episode, seat, join_url):
     if directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise ValueError("provisioning directory must be owner-only")
     path = directory / f"{episode.episode_id}-seat-{seat.seat}.json"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    temporary = directory / f".descriptor-{uuid.uuid4().hex}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as handle:
             json.dump({"join_url": join_url, "seat": seat.seat,
-                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket}, handle)
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+                       "environment_id": episode.environment_id,
+                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket,
+                       **({"policy": policy} if policy is not None else {})}, handle)
+        # Watchers must never observe a partially written, one-time descriptor.
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 
@@ -111,11 +121,13 @@ class ExternalSeat:
     registered: bool = False
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
     recorder: object = field(default=None, repr=False)
+    protocol_version: str = "a2a-turns/1"
 
 
 class EpisodeContext:
-    def __init__(self, episode_id, seats, *, join_timeout_s=10):
+    def __init__(self, episode_id, seats, *, join_timeout_s=10, environment_id="calendar"):
         self.episode_id = episode_id
+        self.environment_id = environment_id
         self.attempt_id = uuid.uuid4().hex
         self.seats = {seat: ExternalSeat(seat, time.time() + join_timeout_s) for seat in seats}
         self.lock = threading.RLock()

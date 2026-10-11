@@ -1,3 +1,6 @@
+import { notifySessionExpired, sessionMutationHeaders } from "./session.ts";
+import { consumeLaunchEvents, type LaunchStreamOptions } from "./launch-stream.ts";
+
 export type Level = {
   value: unknown;
   count: number;
@@ -247,6 +250,7 @@ export type Launch = {
   started_at: string | null;
   ended_at: string | null;
   error: string | null;
+  live_logs?: boolean;
 };
 
 export type LaunchAttempt = {
@@ -285,6 +289,8 @@ export type LaunchDetail = {
   attempts: LaunchAttempt[];
   progress: ExperimentDetail["launches"][number]["progress"];
   runner_logs: LaunchLog[];
+  provisional?: boolean;
+  logs_truncated?: boolean;
 };
 
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE ?? "";
@@ -300,11 +306,15 @@ function environmentPath(id: string): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json",
+      ...(init?.method && !["GET", "HEAD"].includes(init.method) ? sessionMutationHeaders() : {}),
+      ...init?.headers },
   });
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error ?? `Request failed (${response.status})`);
+    throw new Error(payload.error ?? payload.detail ?? `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }
@@ -315,6 +325,10 @@ export async function listEnvironments(): Promise<EnvironmentSummary[]> {
 
 export function getEnvironment(id: string): Promise<EnvironmentDetail> {
   return request<EnvironmentDetail>(`/api/environments/${environmentPath(id)}`);
+}
+
+export function getEnvironmentWorkflow(id: string, signal?: AbortSignal): Promise<import("./workflow").WorkflowResponse> {
+  return request(`/api/environments/${environmentPath(id)}/workflow`, { signal });
 }
 
 export function getItems(id: string, cursor?: string): Promise<ItemPage> {
@@ -371,6 +385,10 @@ export function getLaunch(id: string): Promise<LaunchDetail> {
   return request<LaunchDetail>(`/api/launches/${encodeURIComponent(id)}`);
 }
 
+export function streamLaunchEvents(id: string, options: LaunchStreamOptions): Promise<void> {
+  return consumeLaunchEvents(`${baseUrl}/api/launches/${encodeURIComponent(id)}/events`, options);
+}
+
 export function validateDesign(releaseId: string, designText: string): Promise<DesignValidation> {
   return request<DesignValidation>("/api/designs/validate", {
     method: "POST",
@@ -381,8 +399,15 @@ export function validateDesign(releaseId: string, designText: string): Promise<D
 export function createDesignExperiment(name: string, releaseId: string, designText: string): Promise<Experiment> {
   return request<Experiment>("/api/experiments", {
     method: "POST",
-    body: JSON.stringify({ name, release_id: releaseId, design_text: designText }),
+    body: JSON.stringify({ name, release_id: releaseId, design_text: designText, draft: true }),
   });
+}
+
+export async function prepareExperimentExport(id: string): Promise<{ id: string; download_url: string }> {
+  const exported = await request<{ id: string; download_url: string }>(`/api/experiments/${encodeURIComponent(id)}/export`, {
+    method: "POST", body: JSON.stringify({}),
+  });
+  return { id: exported.id, download_url: `/api/exports/${encodeURIComponent(exported.id)}/download` };
 }
 
 export function saveDesign(id: string, designText: string): Promise<Experiment> {

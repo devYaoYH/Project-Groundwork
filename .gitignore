@@ -22,3 +22,7 @@ agents.local.yaml
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
 
+# Generated TypeScript and browser verification output.
+*.tsbuildinfo
+web/test-results/
+web/playwright-report/

@@ -16,20 +16,22 @@ from starlette.routing import Route
 
 from .admission import join
 from .capabilities import AuthorizationError, Capabilities
-from .contract import JoinRequest, ToolOutcome
+from .contract import JoinRequest, ToolOutcome, TurnFinished
+from .lifecycle import LifecycleRegistry
 from .seats import EpisodeContext
 
 
 class EpisodeRegistry:
     def __init__(self):
         self.capabilities = Capabilities()
+        self.lifecycle = LifecycleRegistry()
         self._episodes = {}
         self._lock = threading.RLock()
 
-    def provision(self, episode_id, seats, *, join_timeout_s=10):
+    def provision(self, episode_id, seats, *, join_timeout_s=10, environment_id="calendar"):
         if not episode_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in episode_id):
             raise ValueError("episode ID must be a URL-safe identifier")
-        context = EpisodeContext(episode_id, seats, join_timeout_s=join_timeout_s)
+        context = EpisodeContext(episode_id, seats, join_timeout_s=join_timeout_s, environment_id=environment_id)
         with self._lock:
             if episode_id in self._episodes:
                 raise ValueError("episode is already registered")
@@ -48,6 +50,7 @@ class EpisodeRegistry:
             if self._episodes.get(context.episode_id) is not context:
                 return
             context.active = False
+            self.lifecycle.close_episode(context.episode_id, context.attempt_id)
             for seat in context.seats.values():
                 if seat.recorder:
                     seat.recorder.close()
@@ -110,7 +113,8 @@ class RuntimeManager:
         if any(spec["runtime"] == "external" for spec in remote.values()) and self.provisioning_dir is None:
             raise ValueError("external seats require a private provisioning_dir")
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
-                                                     join_timeout_s=config.get("join_timeout_s", 10))
+                                                     join_timeout_s=config.get("join_timeout_s", 10),
+                                                     environment_id=config.get("environment_id", "calendar"))
         runtime = ManagedEpisode(self, episode)
         with self.lock:
             self.episodes.add(runtime)
@@ -120,7 +124,8 @@ class RuntimeManager:
                 url = f"{self.io.base_url}/episodes/{episode.episode_id}/join"
                 if spec["runtime"] == "local_process":
                     policy = {"type": "scripted", "harness": "scripted"} if scripted else spec
-                    runtime.children.append(LocalProcessLauncher(url, seat.ticket, policy))
+                    options = {"environment_id": episode.environment_id} if episode.environment_id != "calendar" else {}
+                    runtime.children.append(LocalProcessLauncher(url, seat.ticket, policy, **options))
                 else:
                     runtime.descriptors.append(write_descriptor(self.provisioning_dir, episode, seat, url))
             return runtime
@@ -136,11 +141,12 @@ class RuntimeManager:
 
 
 class EnvironmentApp:
-    def __init__(self, specs):
+    def __init__(self, specs, *, network=None):
         self.registry = EpisodeRegistry()
+        self.network = network
         self.specs = {(spec.endpoint, spec.name): spec for spec in specs}
         self.managers = {}
-        for endpoint in ("env", "comm"):
+        for endpoint in ("env", "comm", "lifecycle"):
             server = Server(f"a2a-{endpoint}")
             self._bind(server, endpoint)
             self.managers[endpoint] = StreamableHTTPSessionManager(server, stateless=True, json_response=True)
@@ -158,7 +164,8 @@ class EnvironmentApp:
             async def __call__(self, scope, receive, send):
                 params = scope["path_params"]
                 try:
-                    outer.registry.get(params["episode_id"])
+                    if params["endpoint"] != "lifecycle":
+                        outer.registry.get(params["episode_id"])
                     manager = outer.managers[params["endpoint"]]
                 except (AuthorizationError, KeyError):
                     await JSONResponse({"code": "unavailable_endpoint"}, status_code=404)(scope, receive, send)
@@ -174,6 +181,9 @@ class EnvironmentApp:
     def _bind(self, server, endpoint):
         @server.list_tools()
         async def list_tools():
+            if endpoint == "lifecycle":
+                return [Tool(name="complete_turn", description="Report immutable terminal outcome",
+                             inputSchema=TurnFinished.model_json_schema())]
             return [Tool(name=spec.name, description=f"Resolves: {spec.resolves}",
                          inputSchema=spec.input_model.model_json_schema())
                     for spec in self.specs.values() if spec.endpoint == endpoint]
@@ -183,10 +193,19 @@ class EnvironmentApp:
             try:
                 request_context = server.request_context
                 request = request_context.request
-                episode = self.registry.get(request.path_params["episode_id"])
                 authorization = request.headers.get("authorization", "")
                 if not authorization.startswith("Bearer "):
                     raise AuthorizationError("capability required")
+                if endpoint == "lifecycle":
+                    if name != "complete_turn":
+                        raise ValueError("unknown lifecycle tool")
+                    finished = TurnFinished.model_validate(arguments)
+                    if finished.episode_id != request.path_params["episode_id"]:
+                        raise AuthorizationError("wrong episode identity")
+                    receipt = await asyncio.to_thread(self.registry.lifecycle.finish, authorization[7:], finished)
+                    return CallToolResult(content=[TextContent(type="text", text=receipt.model_dump_json())],
+                                          structuredContent=receipt.model_dump(mode="json"))
+                episode = self.registry.get(request.path_params["episode_id"])
                 claims = self.registry.capabilities.verify(authorization[7:], episode_id=episode.episode_id,
                                                           attempt_id=episode.attempt_id)
                 with episode.lock:
@@ -203,6 +222,9 @@ class EnvironmentApp:
             except AuthorizationError:
                 outcome = ToolOutcome(status="rejected", resolves="read_only", code="unauthorized",
                                       reason="capability is not authorized for this call")
+            except (ValueError, ValidationError):
+                outcome = ToolOutcome(status="rejected", resolves="read_only", code="invalid_completion",
+                                      reason="lifecycle report is invalid or conflicting")
             return CallToolResult(content=[TextContent(type="text", text=outcome.model_dump_json())],
                                   structuredContent=outcome.model_dump(mode="json"),
                                   isError=outcome.status == "rejected")
@@ -211,7 +233,8 @@ class EnvironmentApp:
         try:
             context = self.registry.get(request.path_params["episode_id"])
             parsed = JoinRequest.model_validate_json(await request.body())
-            result = await join(context, parsed, str(request.base_url).rstrip("/"))
+            base_url = self.network.advertised_origin if self.network and self.network.advertised_origin else str(request.base_url).rstrip("/")
+            result = await join(context, parsed, base_url, network=self.network)
             return JSONResponse(result.model_dump(mode="json"))
         except (ValueError, ValidationError, TimeoutError):
             return JSONResponse({"code": "admission_rejected", "message": "invalid admission or callback"}, status_code=400)

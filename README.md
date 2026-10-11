@@ -150,7 +150,7 @@ python scripts/release_check.py        # release-hazard scan, no network
 ```
 
 None need API keys, a server, or cloud credentials. CI runs the same suite on
-3.11 and 3.12, plus the cross-environment smoke test, every per-environment runtime release,
+Python 3.12, plus the cross-environment smoke test, every per-environment runtime release,
 package builds, and a full Compose bring-up that asserts the trace, OTel,
 artifact, leaderboard, and replay APIs.
 

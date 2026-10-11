@@ -20,6 +20,14 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .nav-link span { color: var(--faint); font-family: var(--font-data); font-size: 10px; }
 .rail-note { border-top: 1px solid var(--rule); bottom: 20px; color: var(--muted); font-size: 11px; left: 16px; line-height: 1.5; position: absolute; right: 16px; }
 .rail-note p { margin: 9px 0 0; }
+.session-account { border-top: 1px solid var(--rule); margin-top: 22px; padding-top: 4px; }
+.session-name { font-size: 12px; margin: 5px 0; overflow-wrap: anywhere; }
+.session-account button { border: 0; background: transparent; padding: 0; }
+.session-card { max-width: 640px; padding: 24px; }
+.session-card > p { max-width: 60ch; margin: 12px 0 20px; }
+.session-dev { margin-top: 24px; }
+.session-dev > p { font-size: 12px; margin-bottom: 8px; }
+.google-sign-in { min-height: 44px; }
 
 .main-content { max-width: 1180px; min-width: 0; padding: 23px 32px 72px; width: 100%; }
 .crumb { color: var(--muted); font-family: var(--font-data); font-size: 12px; margin: 0 0 14px; }
@@ -188,7 +196,37 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
 .specialised-viewer { background: var(--card); border: 1px solid var(--rule); border-radius: 5px; height: 30rem; margin-bottom: 12px; width: 100%; }
 .episode-footnote { margin: 0 0 14px; }
 
+.workflow-section { padding-bottom: 16px; }
+.workflow-toolbar { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 12px; margin-bottom: 12px; }
+.workflow-body { display: grid; grid-template-columns: minmax(0, 1fr) 240px; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+.workflow-canvas { height: 460px; min-width: 0; background: var(--sunk); }
+.workflow-canvas .react-flow { --xy-node-background-color-default: var(--card); --xy-node-color-default: var(--ink); --xy-node-border-default: 1px solid var(--rule-strong); --xy-edge-stroke-default: var(--muted); --xy-edge-label-background-color-default: var(--card); --xy-edge-label-color-default: var(--ink); --xy-controls-button-background-color-default: var(--card); --xy-controls-button-color-default: var(--ink); --xy-controls-button-background-color-hover-default: var(--sunk); }
+.workflow-node strong { display: block; font-family: var(--font-data); font-size: 12px; }
+.workflow-node span, .workflow-node small { display: block; font-size: 11px; margin-top: 3px; }
+.workflow-node-agent_call { border-top: 3px solid var(--accent) !important; }
+.workflow-node-decision { border-style: dashed !important; }
+.workflow-node.selected { outline: 2px solid var(--accent); }
+.workflow-canvas .react-flow__handle { visibility: hidden; pointer-events: none; }
+.workflow-canvas .react-flow__edge-text { font-family: var(--font-data); font-size: 11px; }
+.workflow-back-edge .react-flow__edge-path { stroke-dasharray: 6 4; stroke-width: 2; }
+.workflow-inspector { border-left: 1px solid var(--rule); padding: 14px; min-width: 0; overflow-wrap: anywhere; }
+.workflow-inspector h3 { margin: 0 0 10px; font-family: var(--font-head); font-weight: 500; }
+.workflow-inspector h4 { margin-bottom: 5px; }
+.workflow-inspector ul { padding-left: 16px; }
+.workflow-inspector .text-link { text-align: left; }
+.workflow-outline { margin-top: 16px; }
+.workflow-outline summary { color: var(--accent); cursor: pointer; }
+.workflow-outline summary:focus-visible { outline: 2px solid var(--accent); }
+.workflow-outline ol { padding-left: 22px; }
+.workflow-outline li { padding: 8px 0; border-bottom: 1px solid var(--rule); overflow-wrap: anywhere; }
+.workflow-outline li > span { display: block; font-family: var(--font-data); font-size: 11px; color: var(--muted); margin-top: 4px; }
+.workflow-outline button[aria-pressed="true"] { outline: 2px solid var(--accent); }
+.workflow-digest { overflow-wrap: anywhere; font-size: 10px; }
+
 @media (max-width: 760px) {
+  .workflow-body { grid-template-columns: minmax(0, 1fr); }
+  .workflow-inspector { border-left: 0; border-top: 1px solid var(--rule); }
+  .workflow-canvas { height: 420px; }
   .shell { grid-template-columns: minmax(0, 1fr); }
   .rail { border-bottom: 1px solid var(--rule); border-right: 0; height: auto; padding: 14px 18px; position: static; }
   .rail nav { display: flex; gap: 6px; }

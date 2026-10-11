@@ -1,0 +1,36 @@
+services:
+  runtime-environment:
+    command: ["python", "tests/runtime/negotiation_environment.py"]
+    environment:
+      NEGOTIATION_MODE: ${NEGOTIATION_MODE:-heuristic}
+    volumes:
+      - runtime-seat-1:/provision/seat-1
+    depends_on:
+      runtime-second:
+        condition: service_healthy
+  runtime-agent:
+    image: a2a-negotiation-agent:local
+    build:
+      dockerfile: tests/runtime/negotiation-agent.Dockerfile
+    command: ["python", "/opt/runtime/negotiation_agent.py", "--origin", "http://runtime-agent:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      NEGOTIATION_MODE: ${NEGOTIATION_MODE:-heuristic}
+  runtime-second:
+    profiles: [agent-runtime]
+    image: a2a-negotiation-agent:local
+    command: ["python", "/opt/runtime/negotiation_agent.py", "--origin", "http://runtime-second:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+      NEGOTIATION_MODE: ${NEGOTIATION_MODE:-heuristic}
+    volumes:
+      - runtime-seat-1:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-second:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 3s
+volumes:
+  runtime-seat-1:

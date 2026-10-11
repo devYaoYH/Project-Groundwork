@@ -2,7 +2,7 @@
 name = "a2a-judge"
 version = "0.1.0"
 description = "LLM-as-judge analysis layer for a2a-engine episodes."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
     "pydantic>=2.6",

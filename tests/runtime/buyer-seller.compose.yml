@@ -1,0 +1,36 @@
+services:
+  runtime-environment:
+    command: ["python", "tests/runtime/buyer_seller_environment.py"]
+    environment:
+      BARGAIN_MODE: ${BARGAIN_MODE:-scripted}
+    volumes:
+      - runtime-seat-1:/provision/seat-1
+    depends_on:
+      runtime-buyer:
+        condition: service_healthy
+  runtime-agent:
+    image: a2a-buyer-seller-agent:local
+    build:
+      dockerfile: tests/runtime/buyer-seller-agent.Dockerfile
+    command: ["python", "/opt/runtime/buyer_seller_agent.py", "--origin", "http://runtime-agent:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      BARGAIN_MODE: ${BARGAIN_MODE:-scripted}
+  runtime-buyer:
+    profiles: [agent-runtime]
+    image: a2a-buyer-seller-agent:local
+    command: ["python", "/opt/runtime/buyer_seller_agent.py", "--origin", "http://runtime-buyer:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+      BARGAIN_MODE: ${BARGAIN_MODE:-scripted}
+    volumes:
+      - runtime-seat-1:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-buyer:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 3s
+volumes:
+  runtime-seat-1:

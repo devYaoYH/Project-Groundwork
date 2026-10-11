@@ -1,0 +1,14 @@
+name: buyer_seller_runtime_smoke
+storage: {backend: sqlite, path: /data/a2a.db}
+defaults:
+  environment_id: buyer_seller
+  num_items: 1
+  seller_cost: 10
+  buyer_value: 40
+  max_rounds: 2
+  seed: 2
+  agents:
+    - {id: seller, type: scripted, runtime: external}
+    - {id: buyer, type: scripted, runtime: external}
+cells:
+  - {label: isolated, count: 2}

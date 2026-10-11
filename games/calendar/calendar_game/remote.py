@@ -11,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pydantic import Field, StrictInt
 
 from a2a_engine.comm import RoutingContext
-from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocation, WireModel
-from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcher
+from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocation, TurnInvocationV2, WireModel, PROTOCOL_VERSION_V2
+from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcher, TurnDispatcherV2
 from a2a_engine.remote.turns import ToolSpec, TurnRecorder
 from calendar_game.agents import BaseClient, DecideResult, ReflectionResult, TokenUsage, TurnResult
 from calendar_game.prompts import build_reflection_message, build_round_start_message, build_system_prompt
@@ -65,14 +65,15 @@ class CalendarRuntimeContext:
 
 class RemoteSeatClient(BaseClient):
     def __init__(self, runtime, seat_id, router, *, turn_timeout_s=120, clock=time.monotonic,
-                 private_prompts=False):
+                 private_prompts=False, request_timeout_s=2):
         self.runtime = runtime
         self.seat = runtime.episode.seats[seat_id]
         self.router = router
         self.clock = clock
         self.turn_timeout_s = turn_timeout_s
         self.private_prompts = private_prompts
-        self.dispatcher = TurnDispatcher(runtime.io, clock=clock)
+        self.request_timeout_s = request_timeout_s
+        self._select_dispatcher()
         self.meeting = None
         self.round_num = 0
         self.penalty = 0
@@ -82,6 +83,14 @@ class RemoteSeatClient(BaseClient):
         self.completed_records = []
         self.reflection_lock = threading.Lock()
 
+    def _select_dispatcher(self):
+        selected_type = TurnDispatcherV2 if self.seat.protocol_version == PROTOCOL_VERSION_V2 else TurnDispatcher
+        if isinstance(getattr(self, "dispatcher", None), selected_type):
+            return
+        self.dispatcher = (TurnDispatcherV2(self.runtime.io, self.runtime.environment.registry.lifecycle, clock=self.clock,
+                                            request_timeout_s=self.request_timeout_s, network=self.runtime.environment.network)
+                           if self.seat.protocol_version == PROTOCOL_VERSION_V2 else TurnDispatcher(self.runtime.io, clock=self.clock))
+
     def _timeout(self, phase):
         if isinstance(self.turn_timeout_s, dict):
             return self.turn_timeout_s.get(phase, 120)
@@ -89,16 +98,22 @@ class RemoteSeatClient(BaseClient):
 
     def _invocation(self, kind, *, observation=None, prompt=None, phase=None, inbox=None):
         root = f"{self.runtime.io.base_url}/episodes/{self.runtime.episode.episode_id}"
-        return TurnInvocation(episode_id=self.runtime.episode.episode_id, seat=self.seat.seat,
+        v2 = self.seat.protocol_version == PROTOCOL_VERSION_V2
+        extra = {"environment_id": self.runtime.episode.environment_id, "attempt_id": self.runtime.episode.attempt_id,
+                 "operation": {"register": "register", "round_start": "observe", "turn": "act",
+                               "reflect": "reflect", "episode_end": "episode_end"}[kind]} if v2 else {}
+        return (TurnInvocationV2 if v2 else TurnInvocation)(episode_id=self.runtime.episode.episode_id, seat=self.seat.seat,
+                              **extra,
                               turn_id=uuid.uuid4().hex, kind=kind, phase=phase,
                               deadline=datetime.now(timezone.utc) + timedelta(seconds=self._timeout(phase or kind)),
                               observation=observation or {}, prompt=prompt, inbox=inbox or [],
-                              mcp={name: f"{root}/{name}/mcp" for name in ("env", "comm")})
+                              mcp={name: f"{root}/{name}/mcp" for name in (("env", "comm", "lifecycle") if v2 else ("env", "comm"))})
 
     def register(self, agent_id, game_config):
         if agent_id != self.seat.seat:
             raise ValueError("remote seat identity mismatch")
         self.runtime.episode.wait_ready(agent_id)
+        self._select_dispatcher()
         self.config = game_config
         config = dataclasses.asdict(game_config)
         deadline = self.clock() + self._timeout("register")
@@ -248,11 +263,17 @@ class RemoteSeatClient(BaseClient):
     def voluntary_decide(self, meeting, calendar_render):
         return self._act(DecideResult)
 
-    def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None):
+    def prepare_reflection(self, target_agent_id, num_slots, round_num=None):
         deadline = self.clock() + self._timeout("REFLECTION")
         invocation = self._invocation("reflect", phase="REFLECTION", observation={
             "target_agent_id": target_agent_id, "num_slots": num_slots, "round": round_num,
         }, prompt=build_reflection_message(target_agent_id, num_slots, round_num))
+        return invocation, deadline
+
+    def reflect_calendar_belief(self, target_agent_id, num_slots, round_num=None, *, prepared=None):
+        invocation, deadline = prepared or self.prepare_reflection(target_agent_id, num_slots, round_num)
+        if self.clock() >= deadline:
+            return None
         if not self.reflection_lock.acquire(timeout=max(0, deadline - self.clock())):
             return None
         try:

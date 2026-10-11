@@ -1,0 +1,49 @@
+services:
+  runtime-environment:
+    profiles: [agent-runtime]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: a2a-comm-local:latest
+    command: ["python", "-m", "a2a_engine.remote.probe"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-seat-0:/provision/seat-0
+    networks: [agent-runtime]
+    depends_on:
+      runtime-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-environment:8000/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 3s
+
+  runtime-agent:
+    profiles: [agent-runtime]
+    build:
+      context: .
+      dockerfile: a2a-agent/runtime/Dockerfile
+    image: a2a-agent-runtime:local
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-seat-0:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-agent:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 3s
+
+volumes:
+  runtime-seat-0:
+
+networks:
+  agent-runtime:
+    internal: true

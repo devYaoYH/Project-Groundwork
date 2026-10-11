@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Chip } from "./Chip";
+import { EnvironmentWorkflow } from "./EnvironmentWorkflow";
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
@@ -68,6 +69,7 @@ export function EnvironmentDetail({ id }: { id: string }) {
         {detail ? <Link className="button" href={`/environments/${id}/items/`}>Item bank</Link> : null}
       </header>
       {error ? <p className="notice notice-error">{error}</p> : null}
+      <EnvironmentWorkflow id={id} />
       {detail ? (
         <>
           <section className="card section-card">

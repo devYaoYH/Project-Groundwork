@@ -213,6 +213,9 @@ class LocalLauncher:
         if launch.mode == "dry_run":
             command.append("--dry-run")
         env = dict(os.environ)
+        env["A2A_LAUNCH_ID"] = launch.id
+        env["A2A_RUNNER_LAUNCH_ID"] = launch.id
+        env["A2A_TRACE_DB"] = launch.trace_database
         env.setdefault("A2A_CAPTURE_CONTENT", "true")
         env.setdefault("OTEL_TRACES_EXPORTER", "file")
         env.setdefault(
@@ -223,7 +226,6 @@ class LocalLauncher:
         # context appends its own episode suffix.  The URL stays outside all
         # persisted experiment/trace metadata.
         if env.get("A2A_REDIS_URL"):
-            env["A2A_LAUNCH_ID"] = launch.id
             env["A2A_REDIS_STREAM_PREFIX"] = f"a2a:launch:{launch.id}"
         process = subprocess.Popen(
             command,
@@ -566,6 +568,10 @@ class ControlPlane:
             })
         return environments
 
+    def environment_workflow(self, environment_id: str) -> dict[str, Any]:
+        from a2a_engine.workflow import environment_workflow
+        return environment_workflow(environment_id)
+
     def environment_detail(self, environment_id: str) -> dict[str, Any]:
         declaration = self._declaration(environment_id)
         release = self._release_for(environment_id, None)
@@ -718,6 +724,8 @@ class ControlPlane:
         from a2a_engine.llm.factory import (
             detect_provider, env_var_for_provider, get_api_key_for_provider,
         )
+        from a2a_engine.remote.compose import compose_enabled, credential_present
+        isolated = compose_enabled()
 
         path = self._workspace_path(yaml_path)
         spec = load_experiment(path)
@@ -753,7 +761,8 @@ class ControlPlane:
                     # A scripted agent needs no credential; an ADC provider
                     # needs one but not from the release.
                     "credential_env_var": env_var or None,
-                    "credential_present": bool(get_api_key_for_provider(provider)) if env_var else None,
+                    "credential_present": (credential_present(provider, index) if isolated else
+                                           bool(get_api_key_for_provider(provider))) if env_var else None,
                 })
 
         missing = sorted({
@@ -768,7 +777,8 @@ class ControlPlane:
             "missing_credentials": missing,
             "declares_agents": declares_agents,
             "ready_for_live": (not missing) if declares_agents else None,
-            "readiness_note": None if declares_agents else (
+            "readiness_note": ("Credentials are checked in the isolated agent services, not the viewer."
+                               if isolated else None) if declares_agents else (
                 "This configuration does not declare agents, so the environment supplies "
                 "its own defaults and the models it will call cannot be checked "
                 "before launch."

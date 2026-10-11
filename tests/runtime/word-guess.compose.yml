@@ -1,0 +1,25 @@
+services:
+  runtime-environment:
+    command: ["python", "tests/runtime/word_guess_environment.py"]
+    volumes:
+      - runtime-seat-1:/provision/seat-1
+    depends_on:
+      runtime-host:
+        condition: service_healthy
+  runtime-host:
+    profiles: [agent-runtime]
+    image: a2a-agent-runtime:local
+    command: ["python", "-m", "a2a_agent.service", "--origin", "http://runtime-host:8001", "--environment-origin", "http://runtime-environment:8000"]
+    environment:
+      OTEL_SDK_DISABLED: "true"
+      LANGCHAIN_TRACING_V2: "false"
+    volumes:
+      - runtime-seat-1:/provision:ro
+    networks: [agent-runtime]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://runtime-host:8001/health', timeout=2).read()"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+volumes:
+  runtime-seat-1:

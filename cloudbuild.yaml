@@ -1,0 +1,26 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
+  - name: gcr.io/cloud-builders/docker
+    id: platform-tests
+    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', 'tests/platform', '-q']
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
+  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    id: publish
+    entrypoint: bash
+    args: ['deploy/run_python.sh', 'deploy/release.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '--source-sha', '${_SOURCE_SHA}', '--oauth-client-id', '${_GOOGLE_OAUTH_CLIENT_ID}']
+  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    id: verify-hosted
+    entrypoint: bash
+    args: ['deploy/run_python.sh', 'deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}']
+substitutions:
+  _REGION: us-central1
+  _SOURCE_SHA: ''
+  _GOOGLE_OAUTH_CLIENT_ID: ''
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

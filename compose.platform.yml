@@ -1,0 +1,44 @@
+name: groundwork-platform
+services:
+  api:
+    image: groundwork-platform:local
+    build:
+      context: .
+      dockerfile: Dockerfile.platform
+    environment:
+      PLATFORM_BACKEND: local
+      PLATFORM_DATA_DIR: /data
+      PLATFORM_WORKSPACE: /workspace
+      PLATFORM_DEV_AUTH: "true"
+      SESSION_SECRET: local-development-only-change-for-real-google-login
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      PLATFORM_STATIC_DIR: /opt/groundwork-web
+    ports:
+      - "127.0.0.1:${PLATFORM_PORT:-8080}:8080"
+    volumes:
+      - platform-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8080/api/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  worker:
+    image: groundwork-platform:local
+    command: ["python", "-m", "cloud_platform.worker"]
+    environment:
+      PLATFORM_BACKEND: local
+      PLATFORM_DATA_DIR: /data
+      PLATFORM_WORKSPACE: /workspace
+      A2A_RUNTIME_MODE: loopback
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+    volumes:
+      - platform-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  platform-data:

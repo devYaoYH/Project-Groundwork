@@ -9,6 +9,7 @@ Environment-agnostic: no environment-specific prompt formatting lives here.
 
 import asyncio
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 import logging
 import random
@@ -191,10 +192,16 @@ class LLMClient(BaseModel):
             self._limiter = RateLimiter(self.request_cooldown)
         return self._limiter
 
-    def oneshot(self, messages: list[dict], **kw) -> str:
+    def oneshot(self, messages: list[dict], *, deadline: datetime | None = None, **kw) -> str:
         """One-shot completion, retried on transient failures."""
-        result = call_with_retry(
-            lambda: call_llm_oneshot(
+        def request():
+            timeout = kw.get("timeout", 300)
+            if deadline is not None:
+                remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+                if remaining <= 0:
+                    raise ValueError("provider invocation deadline expired")
+                timeout = min(timeout, remaining)
+            return call_llm_oneshot(
                 api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
                 model=self.model, messages=messages,
                 max_tokens=kw.get("max_tokens", self.max_tokens),
@@ -202,8 +209,11 @@ class LLMClient(BaseModel):
                 vertex_adc_file=kw.get("vertex_adc_file", self.vertex_adc_file),
                 gcp_project=kw.get("gcp_project", self.gcp_project),
                 gcp_location=kw.get("gcp_location", self.gcp_location),
-                **{k: v for k, v in kw.items() if k not in _CLIENT_OVERRIDES},
-            ),
+                timeout=timeout,
+                **{k: v for k, v in kw.items() if k not in _CLIENT_OVERRIDES and k != "timeout"},
+            )
+        result = call_with_retry(
+            request,
             self.retry,
             limiter=self._rate_limiter(),
         )
@@ -421,6 +431,7 @@ def call_llm_oneshot(
             elif api_format == "vertexai":
                 text, _ = _oneshot_vertexai(model, messages, effective_max, temperature,
                                             thinking_budget,
+                                            timeout=timeout,
                                             adc_file=vertex_adc_file,
                                             project=gcp_project,
                                             location=gcp_location)
@@ -466,6 +477,7 @@ def _get_vertexai_client(
     project: str | None = None,
     location: str | None = None,
     adc_file: str | None = None,
+    timeout: float | None = None,
 ):
     if _google_genai is None:
         raise RuntimeError("google-genai not installed. Run: uv add google-genai")
@@ -479,6 +491,7 @@ def _get_vertexai_client(
         credentials=credentials,
         project=gcp_project,
         location=gcp_location,
+        **({"http_options": {"timeout": max(1, int(timeout * 1000))}} if timeout is not None else {}),
     )
 
 
@@ -692,8 +705,9 @@ def _oneshot_vertexai(
     adc_file: str | None = None,
     project: str | None = None,
     location: str | None = None,
+    timeout: float = 300,
 ):
-    client = _get_vertexai_client(project=project, location=location, adc_file=adc_file)
+    client = _get_vertexai_client(project=project, location=location, adc_file=adc_file, timeout=timeout)
     system_instruction, contents = _messages_to_vertexai(messages)
     cfg = {}
     if max_tokens is not None: cfg["max_output_tokens"] = max_tokens

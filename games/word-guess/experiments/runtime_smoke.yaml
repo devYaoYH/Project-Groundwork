@@ -1,0 +1,12 @@
+name: word_guess_runtime_smoke
+storage: {backend: sqlite, path: /data/a2a.db}
+defaults:
+  environment_id: word_guess
+  secret_word: dog
+  max_turns: 4
+  seed: 1
+  agents:
+    - {id: guesser, type: scripted, runtime: external, role: guesser}
+    - {id: host, type: scripted, runtime: external, role: host}
+cells:
+  - {label: isolated, count: 2}

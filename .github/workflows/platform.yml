@@ -1,0 +1,51 @@
+name: Platform release
+on:
+  pull_request:
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'web/lib/environments.ts', 'web/lib/environment-ids.json', '.github/workflows/platform.yml']
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: platform-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv venv
+      - run: uv pip install pip -r requirements-platform.txt
+      - run: uv run python scripts/install_workspace.py
+      - run: uv run python scripts/export_environment_ids.py
+      - run: uv run python -m pytest cloud_platform/tests tests/platform -q
+      - run: docker compose -f compose.platform.yml config --quiet
+  deploy:
+    if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Submit tested source to Cloud Build
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+        run: >-
+          gcloud builds submit . --project "$GCP_PROJECT" --region "$GCP_REGION"
+          --config cloudbuild.yaml
+          --service-account "projects/$GCP_PROJECT/serviceAccounts/groundwork-build@$GCP_PROJECT.iam.gserviceaccount.com"
+          --gcs-source-staging-dir "gs://$GCP_PROJECT-groundwork-build-source/source"
+          --substitutions "_REGION=$GCP_REGION,_SOURCE_SHA=$GITHUB_SHA,_GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"

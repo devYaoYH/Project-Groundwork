@@ -10,6 +10,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from a2a_engine.remote.dispatch import loopback_url, deliver_with_retry
+from a2a_engine.remote.network import connect_mcp, mcp_call
 
 
 @asynccontextmanager
@@ -23,7 +24,7 @@ async def connect(url, capability, *, timeout=30):
                 yield session
 
 
-async def execute(invocation, calls):
+async def execute(invocation, calls, *, network=None):
     outcomes = []
     remaining = (invocation.deadline - datetime.now(timezone.utc)).total_seconds()
     if remaining <= 0:
@@ -32,9 +33,28 @@ async def execute(invocation, calls):
     async with asyncio.timeout(remaining):
         for index, (endpoint, name, arguments) in enumerate(calls):
             async def call(timeout):
-                async with connect(invocation.mcp[endpoint], invocation.capability, timeout=timeout) as session:
+                connection = (connect(invocation.mcp[endpoint], invocation.capability, timeout=timeout)
+                              if invocation.protocol_version == "a2a-turns/1" else
+                              connect_mcp(invocation.mcp[endpoint], invocation.capability, timeout=timeout, network=network))
+                async with connection as session:
                     result = await session.call_tool(name, arguments,
                                                      meta={"a2a/call_id": f"{invocation.turn_id}:{index}"})
                     return result.structuredContent
             outcomes.append(await deliver_with_retry(call, deadline=deadline))
     return outcomes
+
+
+async def report_completion(invocation, finished, *, network=None, grace_s=5):
+    from a2a_engine.remote.contract import CompletionReceipt
+    deadline = time.monotonic() + max(0, (invocation.deadline - datetime.now(timezone.utc)).total_seconds()) + grace_s
+
+    async def report(remaining):
+        result = await mcp_call(invocation.mcp["lifecycle"], invocation.lifecycle_credential,
+                                "complete_turn", finished.model_dump(mode="json"),
+                                timeout=min(2, remaining), network=network)
+        receipt = CompletionReceipt.model_validate(result)
+        if any(getattr(receipt, key) != value for key, value in invocation.identity().model_dump().items()):
+            raise ValueError("invalid receipt")
+        return receipt
+
+    return await deliver_with_retry(report, deadline=deadline)

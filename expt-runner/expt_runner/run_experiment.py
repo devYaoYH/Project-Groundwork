@@ -30,7 +30,10 @@ import argparse
 import json
 import logging
 import os
+import signal
+import sqlite3
 import sys
+import threading
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
@@ -92,6 +95,8 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
     # episodes, so anything written per episode has to stay top level; a nested
     # mutation would leak across siblings.
     cfg = dict(resolved_cfg)
+    from a2a_engine.remote.compose import runtime_config
+    cfg = runtime_config(cfg)
     # A locked research design is expanded once by the control plane. The
     # execution YAML contains one already-materialised episode per runner cell
     # plus this small marker, so the runner consumes the exact config that was
@@ -106,6 +111,13 @@ def _make_run_context(experiment_name: str, cell_id: str, resolved_cfg: dict,
     cfg["episode_id"] = str(planned.get("episode_id")) if planned else (
         f"{experiment_name}.{cell_id}.{episode_idx}"
     )
+    if not planned and os.environ.get("A2A_RUNNER_LAUNCH_ID") and os.environ.get("A2A_TRACE_DB"):
+        with sqlite3.connect(os.environ["A2A_TRACE_DB"]) as db:
+            row = db.execute("SELECT attempt FROM attempts WHERE launch_id = ? AND episode_id = ?",
+                             (os.environ["A2A_RUNNER_LAUNCH_ID"], cfg["episode_id"])).fetchone()
+        if row is None:
+            raise ValueError("runner episode has no matching launch attempt")
+        attempt = planned_attempt = int(row[0])
     cfg.setdefault("environment_id", cfg.get("environment_id"))
     cfg.setdefault("git_hash", git_hash(Path.cwd()))
 
@@ -266,12 +278,12 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
     sink_token = current_event_sink.set(sink)
     try:
         with ExitStack() as stack:
-            if environment_id == "calendar" and not ctx.get("runtime_manager") and any(
+            if not ctx.get("runtime_manager") and any(
                 agent.get("runtime", "in_process") != "in_process" for agent in cfg.get("agents", [])
             ):
-                from a2a_engine.remote.server import RuntimeManager
-                from calendar_game.remote import CALENDAR_TOOLS
-                manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=
+                from a2a_engine.remote.compose import create_runtime_manager
+                from a2a_engine.workflow_runtime import runtime_capability
+                manager = stack.enter_context(create_runtime_manager(runtime_capability(environment_id).tools, provisioning_dir=
                     os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"))
                 ctx = {**ctx, "runtime_manager": manager}
             return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
@@ -283,7 +295,9 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
 
 def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
           episode_uid: str, persist: bool, dry_run: bool) -> str:
-    kwargs = {"runtime_manager": ctx["runtime_manager"]} if environment_id == "calendar" and ctx.get("runtime_manager") else {}
+    from a2a_engine.workflow_runtime import runtime_capability
+    capability = runtime_capability(environment_id) if ctx.get("runtime_manager") else None
+    kwargs = capability.bind(ctx["runtime_manager"]) if capability else {}
     environment = spec.cls(config=cfg, dry_run=dry_run, **kwargs)
 
     tracer = get_tracer()
@@ -331,6 +345,8 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
         raise TypeError(
             f"Environment {environment_id} returned {type(trace).__name__}, expected EpisodeTrace"
         )
+    if getattr(ctx.get("runtime_manager"), "cancelled", False):
+        raise RuntimeError("runtime launch cancelled")
     trace.episode_uid = episode_uid
 
     if not persist:
@@ -382,21 +398,25 @@ def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
 def _run_contexts(contexts, store, results_dir, *, max_workers, on_result, on_error):
     from a2a_engine.remote.seats import validate_runtimes
     from a2a_engine.adapters import resolve_bindings
-    remote = False
+    remote_environments = set()
     for ctx in contexts:
         cfg = ctx["config"]
         specs = validate_runtimes(cfg, scripted=ctx["dry_run"])
         if cfg.get("environment_id") == "calendar":
             resolve_bindings(cfg, specs)
-        remote |= any(spec.get("runtime", "in_process") != "in_process" for spec in specs)
+        if any(spec.get("runtime", "in_process") != "in_process" for spec in specs):
+            remote_environments.add(cfg.get("environment_id"))
     with ExitStack() as stack:
-        manager = None
-        if remote:
-            from a2a_engine.remote.server import RuntimeManager
-            from calendar_game.remote import CALENDAR_TOOLS
+        managers = {}
+        if remote_environments:
+            from a2a_engine.remote.compose import create_runtime_manager
+            from a2a_engine.workflow_runtime import runtime_capability
             directory = os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"
-            manager = stack.enter_context(RuntimeManager(CALENDAR_TOOLS, provisioning_dir=directory))
-        items = [{**ctx, **({"runtime_manager": manager} if manager else {})} for ctx in contexts]
+            for environment_id in sorted(remote_environments):
+                managers[environment_id] = stack.enter_context(create_runtime_manager(
+                    runtime_capability(environment_id).tools, provisioning_dir=directory))
+        items = [{**ctx, **({"runtime_manager": managers[ctx["config"]["environment_id"]]}
+                           if ctx["config"]["environment_id"] in managers else {})} for ctx in contexts]
         return run_with_parallelism(fn=lambda ctx: _run_one(ctx, store, results_dir), items=items,
                                     max_workers=max_workers, on_result=on_result, on_error=on_error)
 
@@ -545,6 +565,25 @@ def _smoke_test(spec, store, storage_cfg: dict, resolve_hooks: dict,
 
 
 def main(argv: list[str] | None = None) -> int:
+    from a2a_engine.remote.compose import cancel_active_episodes, compose_enabled
+    if not compose_enabled() or threading.current_thread() is not threading.main_thread():
+        return _main(argv)
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+
+    def cancel(sig, frame):
+        cancel_active_episodes()
+        raise SystemExit(128 + sig)
+
+    try:
+        for sig in previous:
+            signal.signal(sig, cancel)
+        return _main(argv)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run an a2a-engine experiment YAML.")
     parser.add_argument("yaml_path", help="Path to experiment YAML file")
     parser.add_argument("--max-parallelism", type=int, default=4)

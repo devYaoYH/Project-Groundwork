@@ -24,20 +24,29 @@ jobs:
       # a half-written document must never throw in the editor.
       - run: npm test
         working-directory: web
+      - run: npx tsc --noEmit
+        working-directory: web
       - run: npm run build
+        working-directory: web
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: >-
+          uv pip install -e a2a-engine -e a2a-agent -e expt-runner
+          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:browser
         working-directory: web
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
       - run: uv venv
       - run: >-
           uv pip install -e a2a-engine -e a2a-agent -e a2a-judge -e expt-runner
@@ -50,6 +59,7 @@ jobs:
           PYTHONPATH: games/negotiation
       - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
       - run: uv run python scripts/export_turn_contract.py --check
+      - run: uv run python scripts/export_turn_contract.py --protocol-version a2a-turns/2 --check
       - run: >-
           uv run a2a-run games/calendar/experiments/mcp_mixed_smoke.yaml --smoke-test
           --max-parallelism 2 --results-dir results/mcp-smoke
@@ -67,6 +77,31 @@ jobs:
           for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
             uv build "$package" --out-dir dist
           done
+      - name: Export from ordinary installed wheels without credentials
+        run: >-
+          uv run --no-project
+          --with ./dist/a2a_engine-0.1.0-py3-none-any.whl
+          --with ./dist/a2a_agent-0.1.0-py3-none-any.whl
+          --with ./dist/a2a_judge-0.1.0-py3-none-any.whl
+          --with ./dist/expt_runner-0.1.0-py3-none-any.whl
+          --with ./dist/buyer_seller-0.1.0-py3-none-any.whl
+          --with ./dist/calendar_environment-0.1.0-py3-none-any.whl
+          --with ./dist/negotiation_environment-0.1.0-py3-none-any.whl
+          --with ./dist/word_guess-0.1.0-py3-none-any.whl
+          python scripts/check_runtime_packages.py
+
+  runtime-containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install pytest
+      - name: Require all real game, transport, CLI and viewer containers
+        run: uv run pytest tests/runtime -q
 
   local-stack:
     runs-on: ubuntu-latest

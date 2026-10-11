@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PROTOCOL_VERSION = "a2a-turns/1"
+PROTOCOL_VERSION_V2 = "a2a-turns/2"
 MAX_BODY_BYTES = 262144
 
 
@@ -115,7 +116,76 @@ class CapabilityClaims(WireModel):
     exp: float
 
 
-def contract_schemas() -> dict:
+class TurnIdentity(WireModel):
+    protocol_version: Literal["a2a-turns/2"] = PROTOCOL_VERSION_V2
+    environment_id: str = Field(min_length=1, max_length=128)
+    episode_id: str = Field(min_length=1, max_length=128)
+    attempt_id: str = Field(min_length=1, max_length=128)
+    seat: int = Field(strict=True, ge=0)
+    turn_id: str = Field(min_length=1, max_length=128)
+
+
+class HelloV2(Hello):
+    protocol_version: Literal["a2a-turns/2"] = PROTOCOL_VERSION_V2
+    environment_id: str
+    attempt_id: str
+
+
+class JoinResponseV2(JoinResponse):
+    protocol_version: Literal["a2a-turns/2"] = PROTOCOL_VERSION_V2
+    environment_id: str
+    attempt_id: str
+    seat_secret: str = Field(repr=False)
+
+
+class TurnInvocationV2(TurnIdentity):
+    kind: Literal["register", "round_start", "turn", "reflect", "episode_end"]
+    operation: Literal["register", "observe", "act", "reflect", "episode_end", "probe",
+                       "initialize_session", "reset_context", "project_update", "error_feedback",
+                       "cheap_talk", "decide_allocation", "notify_round_result"]
+    phase: str | None = Field(default=None, max_length=128)
+    parent_phase: str | None = Field(default=None, max_length=128)
+    deadline: datetime
+    observation: dict = Field(default_factory=dict)
+    prompt: str | None = None
+    inbox: list[dict] = Field(default_factory=list)
+    mcp: dict[str, str]
+    capability: str | None = Field(default=None, repr=False)
+    lifecycle_credential: str | None = Field(default=None, repr=False)
+
+    @field_validator("deadline")
+    @classmethod
+    def aware_deadline(cls, value):
+        return TurnInvocation.aware_deadline(value)
+
+    def identity(self):
+        return TurnIdentity.model_validate({key: getattr(self, key) for key in TurnIdentity.model_fields})
+
+
+class TurnAcceptance(TurnIdentity):
+    status: Literal["accepted", "rejected"]
+    reason_code: Literal["busy", "capacity", "conflict", "expired", "invalid", "registration_required", "ended"] | None = None
+
+
+class TurnFinished(TurnIdentity):
+    status: Literal["succeeded", "failed"]
+    failure_code: Literal["execution_failed", "deadline", "cancelled"] | None = None
+    telemetry: Telemetry = Field(default_factory=Telemetry)
+    reflection: dict | None = None
+
+
+class CompletionReceipt(TurnIdentity):
+    disposition: Literal["recorded", "duplicate", "closed"]
+
+
+def contract_schemas(protocol_version=PROTOCOL_VERSION) -> dict:
+    if protocol_version == PROTOCOL_VERSION_V2:
+        return {model.__name__: model.model_json_schema() for model in (
+            JoinRequest, HelloV2, HelloAcceptance, JoinResponseV2, TurnInvocationV2,
+            TurnAcceptance, TurnFinished, CompletionReceipt, ToolOutcome, ProtocolError, CapabilityClaims,
+        )}
+    if protocol_version != PROTOCOL_VERSION:
+        raise ValueError("unsupported protocol version")
     return {model.__name__: model.model_json_schema() for model in (
         JoinRequest, Hello, HelloAcceptance, JoinResponse, TurnInvocation,
         TurnCompletion, ToolOutcome, ProtocolError, CapabilityClaims,
