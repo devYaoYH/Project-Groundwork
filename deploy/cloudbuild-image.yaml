@@ -3,7 +3,7 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
   - name: gcr.io/cloud-builders/docker
-    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', '-q']
+    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', 'tests/platform', '-q']
 images: ['${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
 substitutions:
   _REGION: us-central1

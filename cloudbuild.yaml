@@ -4,7 +4,7 @@ steps:
     args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
   - name: gcr.io/cloud-builders/docker
     id: platform-tests
-    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', '-q']
+    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', 'tests/platform', '-q']
   - name: gcr.io/cloud-builders/docker
     id: push
     args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']

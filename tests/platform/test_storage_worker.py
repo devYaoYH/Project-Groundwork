@@ -118,7 +118,8 @@ def test_artifacts_immutable_and_path_safe(tmp_path):
             artifacts.put(key, b"x")
 
 
-def test_worker_scripted_scientific_identity_and_duplicate_delivery(tmp_path):
+@pytest.mark.parametrize("mode", ["smoke", "live"])
+def test_worker_scripted_scientific_identity_and_duplicate_delivery(tmp_path, mode):
     from local_stack.control_plane import ControlPlane
     class Noop:
         def launch(self, *_args, **_kwargs): pass
@@ -127,7 +128,7 @@ def test_worker_scripted_scientific_identity_and_duplicate_delivery(tmp_path):
     control.launcher = Noop()
     experiment = control.create_experiment(name="worker-test", release_id="buyer_seller", design_text=DESIGN)
     control.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
-    launch = control.launch_experiment(experiment.id, mode="smoke")
+    launch = control.launch_experiment(experiment.id, mode=mode)
     artifacts = ArtifactStore(data_dir=tmp_path / "store")
     repository = Repository(data_dir=tmp_path / "store")
     snapshot = tmp_path / "snapshot.sqlite"

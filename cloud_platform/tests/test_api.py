@@ -165,3 +165,28 @@ def test_repeat_attempts_keep_prior_evidence_and_release_pin(platform):
         row["episode_id"] for row in all_episodes if row["attempt"] == 2}
     assert {row["id"] for row in first_episodes}.issubset({row["id"] for row in all_episodes})
     assert alice.get(f"/api/launches/{second['id']}").json()["status"] == "COMPLETED"
+
+
+def test_export_size_preflight_rejects_before_artifact_download(platform, monkeypatch):
+    application, control, _ = platform
+    alice = sign_in(application, "Alice")
+    experiment = create_experiment(alice)
+    monkeypatch.setattr(control.artifacts, "size", lambda key: 101 * 1024 * 1024)
+    def forbidden_read(key):
+        raise AssertionError("Export downloaded an oversized artifact before checking limits")
+    monkeypatch.setattr(control.artifacts, "get", forbidden_read)
+    response = alice.post(f"/api/experiments/{experiment['id']}/export", json={})
+    assert response.status_code == 400
+    assert "100 MiB" in response.json()["error"]
+    assert control.repo.list("exports", owner_id="local:alice") == []
+
+
+@pytest.mark.parametrize("design", ["parameters:\n  nested:\n    api_key: secret-value", "parameters:\n  access_token: secret-value", "[invalid"])
+def test_design_cannot_embed_credentials_or_invalid_yaml(platform, design):
+    application, _, _ = platform
+    alice = sign_in(application, "Alice")
+    release = alice.get("/api/releases").json()["releases"][0]
+    response = alice.post("/api/experiments", json={"name": "Unsafe design", "release_id": release["id"],
+                                                  "design_text": design})
+    assert response.status_code == 400
+    assert "secret-value" not in response.text

@@ -216,7 +216,7 @@ class BuyerSellerGame:
                     raise ValueError("buyer_seller remote seats require runtime context")
                 from .remote import RemoteBargainingAgent
                 agent = RemoteBargainingAgent(self.runtime, seat)
-            elif self.dry_run:
+            elif self.dry_run or agent_cfg.get("type") == "scripted":
                 agent = (_ScriptedSeller(cfg.seller_cost, self.opening_price, cfg.max_rounds) if seat == 0
                          else _ScriptedBuyer(cfg.buyer_value, cfg.buyer_patience, cfg.max_rounds))
             else:

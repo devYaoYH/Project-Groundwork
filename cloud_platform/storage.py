@@ -311,6 +311,14 @@ class ArtifactStore:
             return self.bucket.blob(key).download_as_bytes()
         return (self.root / key).read_bytes()
 
+    def size(self, key: str) -> int:
+        key = self._key(key)
+        if self.backend == "gcp":
+            blob = self.bucket.blob(key)
+            blob.reload()
+            return int(blob.size)
+        return (self.root / key).stat().st_size
+
     def keys(self, prefix: str = "") -> list[str]:
         if prefix:
             self._key(prefix)

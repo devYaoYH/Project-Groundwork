@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,10 +128,13 @@ class Worker:
                 process = subprocess.Popen(command, cwd=self.workspace, env=env, stdout=log,
                                            stderr=subprocess.STDOUT, start_new_session=True)
                 cancelled = False
+                timed_out = False
+                deadline = time.monotonic() + 3600
                 try:
                     while process.poll() is None:
                         record = self.repository.get("launches", identifier) or {}
-                        if self.stopping.is_set() or record.get("status") in {"CANCELLING", "INTERRUPTED"} or record.get("cancel_requested"):
+                        timed_out = time.monotonic() >= deadline
+                        if timed_out or self.stopping.is_set() or record.get("status") in {"CANCELLING", "INTERRUPTED"} or record.get("cancel_requested"):
                             cancelled = record.get("status") == "CANCELLING" or bool(record.get("cancel_requested"))
                             os.killpg(process.pid, signal.SIGTERM)
                             try:
@@ -151,6 +155,8 @@ class Worker:
                     db.execute("UPDATE launches SET status='CANCELLING' WHERE id=?", (identifier,))
             control._finish_launch(identifier, code)
             detail = control.launch_detail(identifier)
+            if timed_out:
+                detail["launch"].update(status="FAILED", error="launch exceeded its 3600-second duration limit")
             if self.stopping.is_set() and not cancelled:
                 detail["launch"].update(status="INTERRUPTED", error="worker stopped before completion")
             # SQLite backup includes committed WAL content in a standalone

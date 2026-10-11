@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import uuid
 import zipfile
+import yaml
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +22,31 @@ from pathlib import Path
 from local_stack.control_plane import ControlPlane, Launch
 from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.registry import get_environment_spec
+from a2a_engine.provenance import pinned_participants
+from cloud_platform.budget import apply_policy
 from cloud_platform.storage import Repository, ArtifactStore
+
+MAX_EXPORT_LAUNCHES = 20
+MAX_EXPORT_ARTIFACTS = 10000
+MAX_EXPORT_BYTES = 100 * 1024 * 1024
+
+
+def reject_credentials(value, seen=None):
+    """Platform-funded designs cannot carry credentials into frozen evidence."""
+    forbidden = {"api_key", "secret", "access_token", "refresh_token", "client_secret", "password"}
+    seen = seen if seen is not None else set()
+    if isinstance(value, (dict, list)):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).lower() in forbidden:
+                raise ValueError("Credentials must be supplied by the platform, not experiment designs")
+            reject_credentials(child, seen)
+    elif isinstance(value, list):
+        for child in value:
+            reject_credentials(child, seen)
 
 
 def now():
@@ -92,6 +117,11 @@ class PlatformControl:
             raise ValueError("Choose a checked-in experiment template")
         if design_text is not None and (not isinstance(design_text, str) or len(design_text) > 200000):
             raise ValueError("Design document is too large")
+        if design_text is not None:
+            try:
+                reject_credentials(yaml.safe_load(design_text))
+            except yaml.YAMLError as exc:
+                raise ValueError("Design YAML is invalid") from exc
         with tempfile.TemporaryDirectory() as directory:
             cp = self.compiler(directory)
             cp.seed_installed_releases()
@@ -122,9 +152,22 @@ class PlatformControl:
                         configs.append(config)
             if not configs or len(configs) > 1000:
                 raise ValueError("An experiment must contain 1–1000 planned episodes")
+            policy = apply_policy(configs)
+            for config in configs:
+                config["provenance"]["participants"] = pinned_participants(config)
+            if exp.design_text:
+                # Effective platform limits are part of the resolved execution
+                # plan; preserve the authored roster/design separately.
+                grouped = {}
+                for config in configs:
+                    grouped.setdefault(config["provenance"]["cell_id"], []).append(config)
+                with cp._session() as db:
+                    for cell_id, cell_configs in grouped.items():
+                        db.execute("UPDATE cells SET episode_configs=? WHERE experiment_id=? AND cell_id=?",
+                                   (json.dumps(cell_configs, sort_keys=True), exp.id, cell_id))
             data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
                     "image_digest": self.image_digest, "job_name": self.job_name,
-                    "status": "READY", "launch_ordinal": 0}
+                    "status": "READY", "launch_ordinal": 0, "platform_policy": policy}
             key = f"experiments/{exp.id}/compiler.db"
             self.artifacts.put(key, snapshot(cp.path))
             data["snapshot_key"] = key
@@ -205,30 +248,45 @@ class PlatformControl:
     def export(self, identifier, owner_id):
         exp = self.owned("experiments", identifier, owner_id)
         launches = self.repo.list("launches", owner_id=owner_id, experiment_id=identifier)
+        if len(launches) > MAX_EXPORT_LAUNCHES:
+            raise ValueError(f"An export is limited to {MAX_EXPORT_LAUNCHES} launches")
         if any(row["status"] in {"QUEUED", "RUNNING", "DISPATCHED", "DISPATCHING"} for row in launches):
             raise ValueError("Wait for active launches to finish before exporting their artifacts")
         metadata = {"experiment": exp, "launches": launches,
                     "attempts": self.repo.list("attempts", owner_id=owner_id, experiment_id=identifier),
                     "episodes": self.repo.list("episodes", owner_id=owner_id, experiment_id=identifier),
                     "exported_at": now(), "schema_version": 1}
+        metadata_bytes = json.dumps(metadata, indent=2).encode()
+        metric_csv = io.StringIO()
+        writer = csv.writer(metric_csv)
+        writer.writerow(["experiment_id", "launch_id", "episode_uid", "status", "metrics_json"])
+        for episode in metadata["episodes"]:
+            writer.writerow([identifier, episode["launch_id"], episode.get("episode_uid", episode.get("id")),
+                             episode.get("status"), json.dumps(episode.get("metrics", {}), sort_keys=True)])
+        metric_bytes = metric_csv.getvalue().encode()
+        prefixes = [f"experiments/{identifier}/"] + [f"launches/{launch['id']}/" for launch in launches]
+        keys = []
+        total_size = len(metadata_bytes) + len(metric_bytes)
+        for prefix in prefixes:
+            for key in self.artifacts.keys(prefix):
+                keys.append(key)
+                if len(keys) > MAX_EXPORT_ARTIFACTS:
+                    raise ValueError(f"An export is limited to {MAX_EXPORT_ARTIFACTS} artifacts")
+                total_size += self.artifacts.size(key)
+                if total_size > MAX_EXPORT_BYTES:
+                    raise ValueError("An export is limited to 100 MiB of uncompressed evidence")
+        if total_size > MAX_EXPORT_BYTES:
+            raise ValueError("An export is limited to 100 MiB of uncompressed evidence")
         content = io.BytesIO()
         checksums = {}
         with zipfile.ZipFile(content, "w", zipfile.ZIP_DEFLATED) as archive:
             def add(key, data):
                 checksums[key] = hashlib.sha256(data).hexdigest()
                 archive.writestr(key, data)
-            add("metadata.json", json.dumps(metadata, indent=2).encode())
-            metric_csv = io.StringIO()
-            writer = csv.writer(metric_csv)
-            writer.writerow(["experiment_id", "launch_id", "episode_uid", "status", "metrics_json"])
-            for episode in metadata["episodes"]:
-                writer.writerow([identifier, episode["launch_id"], episode.get("episode_uid", episode.get("id")),
-                                 episode.get("status"), json.dumps(episode.get("metrics", {}), sort_keys=True)])
-            add("metrics.csv", metric_csv.getvalue().encode())
-            prefixes = [f"experiments/{identifier}/"] + [f"launches/{launch['id']}/" for launch in launches]
-            for prefix in prefixes:
-                for key in self.artifacts.keys(prefix):
-                    add(key, self.artifacts.get(key))
+            add("metadata.json", metadata_bytes)
+            add("metrics.csv", metric_bytes)
+            for key in keys:
+                add(key, self.artifacts.get(key))
             archive.writestr("checksums.json", json.dumps(checksums, indent=2))
         export_id = str(uuid.uuid4())
         key = f"exports/{export_id}/experiment.zip"

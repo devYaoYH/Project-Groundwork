@@ -32,6 +32,17 @@ def events_of(trace, kind):
     return [e for e in trace.events if e.type == kind]
 
 
+def test_live_scripted_roster_does_not_create_llm_clients(monkeypatch):
+    def forbidden(_config):
+        raise AssertionError("scripted participants must never create an LLM client")
+    monkeypatch.setattr("buyer_seller.game.make_llm_client", forbidden)
+    config = BuyerSellerConfig(seed=41, agents=[{"type": "scripted", "binding": "seller-baseline"},
+                                               {"type": "scripted", "binding": "buyer-baseline"}])
+    trace = BuyerSellerGame(config, dry_run=False).run()
+    assert trace.events
+    assert events_of(trace, "game_end")[-1].data["reason"] in {SOLD_OUT, DEADLINE}
+
+
 # --- information asymmetry (SPEC §5) ---------------------------------------
 
 

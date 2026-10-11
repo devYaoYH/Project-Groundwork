@@ -1,7 +1,7 @@
 name: Platform release
 on:
   pull_request:
-    paths: ['cloud_platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', '.github/workflows/platform.yml']
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', '.github/workflows/platform.yml']
   push:
     # Temporary explicit branch for the first end-to-end deployment verification.
     # Remove after merge and remove its Workload Identity provider trust too.
@@ -23,7 +23,7 @@ jobs:
       - run: uv venv
       - run: uv pip install pip -r requirements-platform.txt
       - run: uv run python scripts/install_workspace.py
-      - run: uv run python -m pytest cloud_platform/tests -q
+      - run: uv run python -m pytest cloud_platform/tests tests/platform -q
       - run: docker compose -f compose.platform.yml config --quiet
   deploy:
     if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
