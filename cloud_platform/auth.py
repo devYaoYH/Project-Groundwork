@@ -90,7 +90,12 @@ class Auth:
 
     def config(self, request: Request | None = None) -> tuple[dict[str, Any], str]:
         session = self._read("session", request.cookies.get(SESSION_COOKIE)) if request else None
-        nonce = session.get("csrf") if session else secrets.token_urlsafe(32)
+        challenge = self._read("csrf", request.cookies.get(CSRF_COOKIE)) if request else None
+        # Tabs share cookies: refreshing config must retain the challenge a
+        # previous tab already holds. An authenticated session owns its nonce.
+        nonce = session.get("csrf") if session else challenge.get("nonce") if challenge else None
+        if not isinstance(nonce, str) or not nonce:
+            nonce = secrets.token_urlsafe(32)
         claims = {"nonce": nonce, "exp": int(time.time()) + self.session_ttl}
         return ({"google_client_id": self.client_id, "dev_auth": self.dev_auth, "csrf_token": nonce},
                 self._cookie(CSRF_COOKIE, self._sign("csrf", claims), self.session_ttl))

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
+import { useSession } from "./Session";
 import {
   DesignValidation,
   EnvironmentDetail,
@@ -25,6 +26,7 @@ import { parseClientDesign, validateClientDesign } from "../lib/validate";
 const SETTLE_MS = 600;
 
 export function DesignEditor() {
+  const { isPlatform } = useSession();
   const search = useSearchParams();
   const id = search.get("id") || "";
   const [experiment, setExperiment] = useState<Experiment | null>(null);
@@ -81,6 +83,7 @@ export function DesignEditor() {
   const plan = serverResult?.plan;
   const canLock = Boolean(experiment && serverResult?.valid && clientErrors.length === 0 && !experiment.locked_at);
   const locked = Boolean(experiment?.locked_at);
+  const requiresLock = isPlatform && !locked;
 
   async function saveDraft() {
     if (!experiment || locked || !dirty || busy || savingRef.current) return;
@@ -154,6 +157,10 @@ export function DesignEditor() {
 
   async function launch(mode: "live" | "smoke" | "dry_run") {
     if (!experiment) return;
+    if (requiresLock) {
+      setMessage("Lock the preregistration before launching an experiment.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -173,7 +180,7 @@ export function DesignEditor() {
     <>
       <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: experiment.name, href: `/experiment/?id=${encodeURIComponent(experiment.id)}` }, { label: "design" }]} />
       <header className="page-heading page-heading-split">
-        <div><h1>{experiment.name}</h1><p>The authored document compiles to disposable episode configs. {locked ? "This preregistration is locked. Fork it to make an editable draft." : "Lock before a live launch."}</p></div>
+        <div><h1>{experiment.name}</h1><p>The authored document compiles to disposable episode configs. {locked ? "This preregistration is locked. Fork it to make an editable draft." : isPlatform ? "Lock before launching an experiment." : "Lock before a live launch."}</p></div>
         <div className="launch-actions">
           {locked ? <button className="button button-primary" onClick={fork} disabled={busy || forking}>{forking ? "Forking..." : "Fork design"}</button> : null}
           <Link className="button" href={`/experiment/?id=${encodeURIComponent(experiment.id)}`}>Experiment</Link>
@@ -198,7 +205,7 @@ export function DesignEditor() {
         </div>
         <div className="design-column">
           <section className="card section-card"><div className="section-heading"><h2>Compiles to</h2><p>One cell per combination of factored levels.</p></div><div className="metric-grid"><div className="metric"><span>cells</span><strong>{plan?.cells.length ?? "-"}</strong></div><div className="metric"><span>episodes</span><strong>{plan?.episodes_planned ?? "-"}</strong></div></div>{plan?.preview_episode_config ? <ConfigDisclosure value={JSON.stringify(plan.preview_episode_config, null, 2)} /> : null}</section>
-          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>Smoke and dry-run inspect a draft. Live execution requires its lock.</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
+          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>{isPlatform ? "Lock the preregistration before any launch, including smoke and dry run." : "Smoke and dry-run inspect a draft. Live execution requires its lock."}</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid || requiresLock}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid || requiresLock}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
         </div>
       </section>
     </>

@@ -31,6 +31,9 @@ def static_response(request):
         else:
             raise HTTPException(404, 'Not found')
         relative = relative or 'index.html'
+    if request.url.path.startswith(("/environment-assets/", "/environment-replays/")):
+        if Path(relative).suffix and Path(relative).suffix.lower() not in {".html", ".css", ".js", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".woff", ".woff2"}:
+            raise HTTPException(404, "Not found")
     path = (root / relative).resolve()
     if path.is_dir():
         path = (path / 'index.html').resolve()

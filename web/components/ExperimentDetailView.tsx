@@ -8,7 +8,7 @@ import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
 import { ReplicationHistory } from "./ReplicationHistory";
-import { EpisodeSummary, ExperimentDetail, MetricSummary, downloadExperiment, getExperiment, listEpisodes } from "../lib/api";
+import { EpisodeSummary, ExperimentDetail, MetricSummary, prepareExperimentExport, getExperiment, listEpisodes } from "../lib/api";
 import { groupReplicationExecutions, replicationProgress } from "../lib/replications";
 import { useSession } from "./Session";
 
@@ -40,6 +40,7 @@ export function ExperimentDetailView() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [preparedExport, setPreparedExport] = useState<{ experimentId: string; downloadUrl: string } | null>(null);
   const { isPlatform } = useSession();
 
   useEffect(() => {
@@ -69,6 +70,7 @@ export function ExperimentDetailView() {
   if (error) return <p className="notice notice-error">{error}</p>;
   if (!detail) return <p className="empty-state">Loading experiment...</p>;
   const experiment = detail.experiment;
+  const downloadUrl = preparedExport?.experimentId === experiment.id ? preparedExport.downloadUrl : null;
   const cells = detail.cells ?? [];
   const cellEvidence = detail.cell_evidence ?? [];
   const launches = detail.launches ?? [];
@@ -86,10 +88,14 @@ export function ExperimentDetailView() {
         <div className="launch-actions">
           {isPlatform ? <button className="button" disabled={exporting} onClick={async () => {
             setExporting(true); setExportError(null);
-            try { await downloadExperiment(experiment.id); }
+            try {
+              const exported = await prepareExperimentExport(experiment.id);
+              setPreparedExport({ experimentId: experiment.id, downloadUrl: exported.download_url });
+            }
             catch (reason) { setExportError(reason instanceof Error ? reason.message : "Unable to export results"); }
             finally { setExporting(false); }
-          }}>{exporting ? "Preparing export…" : "Download results"}</button> : null}
+          }}>{exporting ? "Preparing export…" : downloadUrl ? "Refresh export" : "Download results"}</button> : null}
+          {isPlatform && downloadUrl ? <a className="button" href={downloadUrl} download={`experiment-${experiment.id}.zip`}>Download ZIP</a> : null}
           {experiment.design_text ? <Link className="button button-primary" href={`/design/?id=${encodeURIComponent(experiment.id)}`}>Open design</Link> : null}
         </div>
       </header>

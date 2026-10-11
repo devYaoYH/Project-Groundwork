@@ -34,3 +34,26 @@ fails oversized requests explicitly; asynchronous export Jobs and sharded
 launch scheduling remain follow-up work. Deployment and operational verification
 are recorded separately from implementation; this changelog does not assert that
 Google login or a hosted experiment has passed until those checks are completed.
+
+## Deployment verification checkpoint — 2026-10-11
+
+- Google sign-in succeeded on the hosted control service with the real web OAuth
+  client; hosted development login is disabled and unauthenticated private routes
+  return 401.
+- The first hosted scripted study completed two episodes through Cloud Tasks and
+  the digest-pinned Cloud Run Job. Its Firestore metadata and private GCS export
+  joined correctly; all 44 exported artifact checksums passed. The authenticated
+  browser download endpoint returned the complete ZIP with HTTP 200.
+- The restored interface passed its original browser workflow regressions. A
+  rebuilt local Compose stack completed two episodes, verified 44 export checksums,
+  and passed 17 anonymous/cross-user/CSRF checks.
+- Fixed anonymous cross-tab CSRF challenge reuse. Added explicit hosted draft
+  lock requirements and reusable same-origin ZIP links, with real HTTP download
+  regression coverage.
+
+This checkpoint's hosted execution used source `4ee748d74cee9bdf6312a286d36495b3457654d1`.
+The final interface release and CI publication are verified separately in the PR;
+these checks do not claim that a paid model-provider call or a second Google
+account was exercised. The hosted study used scripted agents. Drafts need to be
+locked before hosted smoke, dry-run, or live execution; the standalone local
+control plane retains its original draft smoke behavior.

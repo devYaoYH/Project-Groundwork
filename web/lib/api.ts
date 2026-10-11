@@ -395,19 +395,11 @@ export function createDesignExperiment(name: string, releaseId: string, designTe
   });
 }
 
-export async function downloadExperiment(id: string): Promise<void> {
+export async function prepareExperimentExport(id: string): Promise<{ id: string; download_url: string }> {
   const exported = await request<{ id: string; download_url: string }>(`/api/experiments/${encodeURIComponent(id)}/export`, {
     method: "POST", body: JSON.stringify({}),
   });
-  const path = `/api/exports/${encodeURIComponent(exported.id)}/download`;
-  const response = await fetch(`${baseUrl}${path}`, { credentials: "same-origin" });
-  if (!response.ok) {
-    if (response.status === 401) notifySessionExpired();
-    throw new Error("Your export could not be downloaded.");
-  }
-  const blobUrl = URL.createObjectURL(await response.blob());
-  const link = document.createElement("a"); link.href = blobUrl; link.download = `experiment-${id}.zip`;
-  link.click(); setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  return { id: exported.id, download_url: `/api/exports/${encodeURIComponent(exported.id)}/download` };
 }
 
 export function saveDesign(id: string, designText: string): Promise<Experiment> {

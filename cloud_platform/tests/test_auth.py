@@ -42,6 +42,39 @@ def local_auth():
 
 
 @pytest.mark.asyncio
+async def test_config_reuses_prelogin_challenge_across_tabs():
+    auth = local_auth()
+    original_csrf, cookies = challenge(auth)
+    config, header = auth.config(request(cookies=cookies))
+    cookies.update([cookie_value(header)])
+    assert config["csrf_token"] == original_csrf
+    alice, _ = await auth.login_dev(request(cookies=cookies, csrf=original_csrf, body={"user": "Alice"}))
+    assert alice["owner_id"] == "local:alice"
+
+
+def test_config_replaces_expired_prelogin_challenge():
+    auth = local_auth()
+    expired = auth._sign("csrf", {"nonce": "expired-challenge", "exp": time.time() - 1})
+    config, header = auth.config(request(cookies={CSRF_COOKIE: expired}))
+    assert config["csrf_token"] != "expired-challenge"
+    assert auth.require_csrf(request(cookies=dict([cookie_value(header)]), csrf=config["csrf_token"])) == config["csrf_token"]
+
+
+@pytest.mark.asyncio
+async def test_config_session_nonce_takes_precedence_over_another_valid_challenge():
+    auth = local_auth()
+    csrf, cookies = challenge(auth)
+    _, session_header = await auth.login_dev(request(cookies=cookies, csrf=csrf, body={"user": "Alice"}))
+    alternate_csrf, alternate_cookies = challenge(auth)
+    assert alternate_csrf != csrf
+    alternate_cookies.update([cookie_value(session_header)])
+    config, csrf_header = auth.config(request(cookies=alternate_cookies))
+    assert config["csrf_token"] == csrf
+    alternate_cookies.update([cookie_value(csrf_header)])
+    assert auth.require_csrf(request(cookies=alternate_cookies, csrf=csrf)) == csrf
+
+
+@pytest.mark.asyncio
 async def test_dev_login_and_session_expiry():
     auth = local_auth()
     csrf, cookies = challenge(auth)

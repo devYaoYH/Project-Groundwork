@@ -12,6 +12,22 @@ from a2a_engine.manifest import EpisodeManifest
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from negotiation_game.game import NegotiationGame
 
+
+class BrowserStackHandler(LocalStackHandler):
+    def do_GET(self):
+        # Browser downloads use a separate request that page.route cannot mock.
+        if self.path == "/api/exports/browser-test-export/download":
+            empty_zip = bytes.fromhex("504b0506") + bytes(18)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", 'attachment; filename="experiment-export-test.zip"')
+            self.send_header("Content-Length", str(len(empty_zip)))
+            self.end_headers()
+            self.wfile.write(empty_zip)
+            return
+        super().do_GET()
+
+
 with TemporaryDirectory(prefix="workflow-browser-") as directory:
     LocalStackHandler.database = Path(directory) / "a2a.db"
     LocalStackHandler.workspace = ROOT
@@ -24,7 +40,7 @@ with TemporaryDirectory(prefix="workflow-browser-") as directory:
     manifest = EpisodeManifest.from_run(config=config, experiment_name='workflow-browser', cell_id='cell',
         episode_idx=0, episode_uid=trace.episode_uid)
     SQLiteEpisodeStore(path=LocalStackHandler.database).put_episode(trace, manifest)
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), LocalStackHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", 8765), BrowserStackHandler)
     try:
         server.serve_forever()
     finally:
