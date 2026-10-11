@@ -24,6 +24,13 @@ def grant(project, member, role):
              "--role", role, "--condition=None", "--quiet"], capture=True)
 
 
+def service_url(project, region, name="groundwork-control"):
+    number = command(["projects", "describe", project, "--format=value(projectNumber)"], capture=True)
+    if not number.isdigit():
+        raise ValueError("Could not resolve the Google Cloud project number")
+    return f"https://{name}-{number}.{region}.run.app"
+
+
 def service_account(project, name):
     email = f"{name}@{project}.iam.gserviceaccount.com"
     if not exists(["iam", "service-accounts", "describe", email, "--project", project]):

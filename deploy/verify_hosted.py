@@ -77,7 +77,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     url = args.url
     if args.project:
-        from common import command
-        url = command(["run", "services", "describe", "groundwork-control", "--project", args.project,
-                       "--region", args.region, "--format=value(status.url)"], capture=True)
+        from common import service_url
+        url = service_url(args.project, args.region)
     verify(url, args.source_sha)

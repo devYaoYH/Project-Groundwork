@@ -105,6 +105,37 @@ def test_reconciliation_does_not_override_concurrent_heartbeat(tmp_path, monkeyp
     assert repo.get("quotas", "alice")["active"] == 1
 
 
+@pytest.mark.parametrize("status", ["QUEUED", "DISPATCHING", "DISPATCHED"])
+def test_boot_failure_expires_after_fifteen_minutes_without_reexecution(tmp_path, status):
+    repo = Repository(data_dir=tmp_path)
+    current = datetime.now(UTC)
+    repo.admit_launch({"id": "boot-failed", "owner_id": "alice", "experiment_id": "exp",
+                       "created_at": (current - timedelta(seconds=901)).isoformat()})
+    repo.claim("launches", "boot-failed", {"QUEUED"}, {"status": status})
+    repo.admit_launch({"id": "still-starting", "owner_id": "alice", "experiment_id": "exp",
+                       "created_at": (current - timedelta(seconds=899)).isoformat()})
+    expired = repo.reconcile_stale(current)
+    assert [r["id"] for r in expired] == ["boot-failed"]
+    assert "did not start" in expired[0]["error"]
+    assert repo.get("launches", "still-starting")["status"] == "QUEUED"
+    assert repo.get("quotas", "alice")["active"] == 1
+    assert Worker(repo, ArtifactStore(data_dir=tmp_path)).run_once("boot-failed") is False
+
+
+def test_boot_timeout_does_not_override_concurrent_worker_start(tmp_path, monkeypatch):
+    repo = Repository(data_dir=tmp_path)
+    current = datetime.now(UTC)
+    repo.admit_launch({"id": "starting", "owner_id": "alice", "experiment_id": "exp",
+                       "created_at": (current - timedelta(seconds=901)).isoformat()})
+    original = repo.claim
+    def racing_claim(kind, identifier, statuses, patch, **kwargs):
+        original("launches", "starting", {"QUEUED"}, {"status": "RUNNING", "started_at": current.isoformat(), "heartbeat_at": current.isoformat()})
+        return original(kind, identifier, statuses, patch, **kwargs)
+    monkeypatch.setattr(repo, "claim", racing_claim)
+    assert repo.reconcile_stale(current) == []
+    assert repo.get("launches", "starting")["status"] == "RUNNING"
+
+
 def test_artifacts_immutable_and_path_safe(tmp_path):
     artifacts = ArtifactStore(data_dir=tmp_path)
     artifacts.put("launches/a/file.json", b"{}")

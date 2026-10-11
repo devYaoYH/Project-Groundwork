@@ -62,7 +62,12 @@ receives these references during deployment. `groundwork-session` is generated
 by bootstrap and available only to the control API.
 
 Create a Google Web OAuth client and add the deployed Cloud Run URL as an
-authorized JavaScript origin. A client ID is required for deployment; its client
+authorized JavaScript origin. Use the deterministic URL
+`https://groundwork-control-1011791564032.us-central1.run.app` for this project;
+deployment output reports it as `service_url`, and Cloud Tasks and CI verification
+use the same URL. Cloud Run also reports a hashed infrastructure URL, which needs
+its own authorized OAuth origin if used for browser login.
+A client ID is required for deployment; its client
 secret is unnecessary for Google Identity Services token login. Build the first
 image with the checked-in build-only config before initializing service IAM:
 

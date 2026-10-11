@@ -172,7 +172,8 @@ class Repository:
             return result
 
     def reconcile_stale(self, now: datetime | str | None = None, *, threshold_seconds: int = 180,
-                        owner_id: str | None = None, launch_id: str | None = None) -> list[dict]:
+                        boot_timeout_seconds: int = 900, owner_id: str | None = None,
+                        launch_id: str | None = None) -> list[dict]:
         """Expire a dead worker's claim without automatically repeating spend.
 
         Cloud event objects and immutable plans remain untouched. A concurrent
@@ -180,6 +181,8 @@ class Repository:
         """
         if threshold_seconds < 60:
             raise ValueError("stale threshold must be at least 60 seconds")
+        if boot_timeout_seconds < 60:
+            raise ValueError("boot timeout must be at least 60 seconds")
         current = datetime.fromisoformat(now) if isinstance(now, str) else now or datetime.now(UTC)
         if current.tzinfo is None:
             current = current.replace(tzinfo=UTC)
@@ -187,9 +190,10 @@ class Repository:
         records = [self.get("launches", launch_id)] if launch_id else self.list("launches", owner_id=owner_id)
         interrupted = []
         for record in records:
-            if not record or record.get("status") not in {"RUNNING", "CANCELLING"} or (owner_id is not None and record.get("owner_id") != owner_id):
+            if not record or record.get("status") not in ACTIVE or (owner_id is not None and record.get("owner_id") != owner_id):
                 continue
-            timestamp = record.get("heartbeat_at") or record.get("started_at")
+            boot_pending = record["status"] in {"QUEUED", "DISPATCHING", "DISPATCHED"}
+            timestamp = record.get("created_at") if boot_pending else record.get("heartbeat_at") or record.get("started_at")
             if not timestamp:
                 continue
             try:
@@ -198,12 +202,14 @@ class Repository:
                     heartbeat = heartbeat.replace(tzinfo=UTC)
             except (TypeError, ValueError):
                 continue
-            if heartbeat >= cutoff:
+            deadline = current - timedelta(seconds=boot_timeout_seconds) if boot_pending else cutoff
+            if heartbeat >= deadline:
                 continue
-            expected = {"heartbeat_at": record.get("heartbeat_at"), "started_at": record.get("started_at")}
+            expected = {key: record.get(key) for key in ("heartbeat_at", "started_at", "created_at", "execution_name")}
+            reason = "Worker did not start within its admission deadline" if boot_pending else "Worker heartbeat expired"
             result = self.claim("launches", record["id"], {record["status"]}, {
                 "status": "INTERRUPTED", "ended_at": current.isoformat(),
-                "error": "Worker heartbeat expired; evidence preserved, explicit retry required",
+                "error": reason + "; evidence preserved, explicit retry required",
                 "evidence_complete": False}, expected_fields=expected)
             if result:
                 interrupted.append(result)

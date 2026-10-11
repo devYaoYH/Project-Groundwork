@@ -24,9 +24,6 @@ services:
       retries: 30
   worker:
     image: groundwork-platform:local
-    build:
-      context: .
-      dockerfile: Dockerfile.platform
     command: ["python", "-m", "cloud_platform.worker"]
     environment:
       PLATFORM_BACKEND: local

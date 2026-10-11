@@ -6,7 +6,7 @@ the groundwork-build identity and cannot change IAM or read provider secrets.
 import argparse
 import json
 import re
-from common import command, exists
+from common import command, exists, service_url
 
 
 def main():
@@ -37,6 +37,7 @@ def main():
     # Keep both image identities addressable rather than updating an old Job.
     job = "groundwork-ep-" + args.source_sha[:12] + "-" + digest.removeprefix("sha256:")[:12]
     api = "groundwork-control"
+    public_url = service_url(project, region, api)
     common_env = {
         "PLATFORM_BACKEND": "gcp", "GOOGLE_CLOUD_PROJECT": project,
         "PLATFORM_REGION": region, "PLATFORM_BUCKET": f"{project}-groundwork-artifacts",
@@ -63,12 +64,9 @@ def main():
     command(job_args)
     api_env = {**common_env, "GOOGLE_OAUTH_CLIENT_ID": args.oauth_client_id,
                "PLATFORM_TASK_QUEUE": "groundwork-dispatch",
+               "PLATFORM_DISPATCH_AUDIENCE": public_url,
                "PLATFORM_DISPATCH_SA": f"groundwork-dispatch@{project}.iam.gserviceaccount.com",
                "PLATFORM_STATIC_DIR": "/opt/groundwork-web"}
-    if exists(["run", "services", "describe", api, "--project", project, "--region", region]):
-        api_env["PLATFORM_DISPATCH_AUDIENCE"] = command(
-            ["run", "services", "describe", api, "--project", project, "--region", region,
-             "--format=value(status.url)"], capture=True)
     api_args = ["run", "deploy", api, "--project", project, "--region", region,
                 "--image", image, "--service-account", f"groundwork-api@{project}.iam.gserviceaccount.com",
                 "--port=8080", "--cpu=1", "--memory=1Gi", "--concurrency=8", "--max-instances=4",
@@ -79,10 +77,8 @@ def main():
     command(api_args)
     url = command(["run", "services", "describe", api, "--project", project, "--region", region,
                    "--format=value(status.url)"], capture=True)
-    if api_env.get("PLATFORM_DISPATCH_AUDIENCE") != url:
-        command(["run", "services", "update", api, "--project", project, "--region", region,
-                 "--update-env-vars", f"PLATFORM_DISPATCH_AUDIENCE={url}", "--quiet"])
-    print(json.dumps({"service_url": url, "job": job, "source_sha": args.source_sha,
+    print(json.dumps({"service_url": public_url, "infrastructure_url": url,
+                      "dispatch_audience": public_url, "job": job, "source_sha": args.source_sha,
                       "image": image, "digest": digest}, indent=2))
 
 
