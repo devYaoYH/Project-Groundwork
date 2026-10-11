@@ -15,12 +15,11 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
-from dataclasses import asdict
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cloud_platform.storage import ACTIVE, TERMINAL, ArtifactStore, Repository
+from cloud_platform.storage import ACTIVE, ArtifactStore, Repository
 
 
 def now():
@@ -48,7 +47,8 @@ class Worker:
             if not claimed:
                 continue
             try:
-                self._execute(claimed)
+                with self.heartbeat(claimed["id"]):
+                    self._execute(claimed)
             except Exception as exc:
                 # A retry must never re-execute an already claimed attempt.
                 # Transient publication failures leave durable events intact.
@@ -56,6 +56,27 @@ class Worker:
                 raise
             return True
         return False
+
+    @contextmanager
+    def heartbeat(self, launch_id):
+        """Keep the claim alive during slow runner and artifact operations."""
+        finished = threading.Event()
+        def beat():
+            while not finished.wait(15):
+                try:
+                    result = self.repository.claim("launches", launch_id, {"RUNNING", "CANCELLING"}, {"heartbeat_at": now()})
+                    if result is None:
+                        break
+                except Exception:
+                    import logging
+                    logging.warning("worker heartbeat unavailable for launch %s", launch_id)
+        thread = threading.Thread(target=beat, name=f"heartbeat-{launch_id}", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            finished.set()
+            thread.join(timeout=1)
 
     def _execute(self, launch):
         from local_stack.control_plane import ControlPlane
@@ -109,7 +130,7 @@ class Worker:
                 try:
                     while process.poll() is None:
                         record = self.repository.get("launches", identifier) or {}
-                        if self.stopping.is_set() or record.get("status") == "CANCELLING" or record.get("cancel_requested"):
+                        if self.stopping.is_set() or record.get("status") in {"CANCELLING", "INTERRUPTED"} or record.get("cancel_requested"):
                             cancelled = record.get("status") == "CANCELLING" or bool(record.get("cancel_requested"))
                             os.killpg(process.pid, signal.SIGTERM)
                             try:
@@ -117,7 +138,6 @@ class Worker:
                             except subprocess.TimeoutExpired:
                                 os.killpg(process.pid, signal.SIGKILL)
                             break
-                        self.repository.claim("launches", identifier, {"RUNNING"}, {"heartbeat_at": now()})
                         self.stopping.wait(1)
                     code = process.wait()
                 finally:

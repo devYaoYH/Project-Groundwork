@@ -99,9 +99,11 @@ pushes validate, submit Cloud Build, test the built image, push Artifact Registr
 and deploy a digest-pinned release for all experimenters. All checked-in game
 packages declaring `a2a_engine.environments` are automatically installed.
 
-For first verification before merge, pass `--verification-branch codex/BRANCH`
-to trust exactly that workflow branch, push the reviewed implementation, and run
-`gh workflow run platform.yml --ref codex/BRANCH`. After merge, rerun the command
+For first verification before merge, pass `--verification-branch codex/platform-deployment`
+to trust exactly that workflow branch, then push the reviewed implementation.
+The workflow has a temporary explicit push trigger for this branch because a
+new manual workflow cannot be dispatched before it exists on the default branch.
+After merge, remove the temporary push trigger and rerun the configuration command
 without that flag to remove the temporary trust. Protect `main` with required
 reviews and CI checks appropriate to the repository's contributor model.
 
@@ -121,6 +123,14 @@ its artifacts, and a GitHub workflow records a successful Cloud Build deployment
 Image digests and source SHA are recorded in the deployment output and release
 metadata. Retain old Jobs while experiments reference them; do not rewrite old
 release images.
+
+```sh
+python deploy/verify_hosted.py --project cicl-487801 --source-sha FULL_COMMIT
+```
+
+CI runs this health, Google login configuration, and unauthenticated-denial check
+after publication. Real Google login and completed experiment/export checks still
+require an authenticated end-to-end run.
 
 ## Current limits
 

@@ -2,6 +2,8 @@
 import json
 import os
 import subprocess
+import time
+import sys
 
 GCLOUD = os.environ.get("GCLOUD", "gcloud")
 
@@ -25,8 +27,23 @@ def grant(project, member, role):
 def service_account(project, name):
     email = f"{name}@{project}.iam.gserviceaccount.com"
     if not exists(["iam", "service-accounts", "describe", email, "--project", project]):
-        command(["iam", "service-accounts", "create", name, "--project", project,
-                 "--display-name", name, "--quiet"])
+        arguments = [GCLOUD, "iam", "service-accounts", "create", name, "--project", project,
+                     "--display-name", name, "--quiet"]
+        for attempt in range(3):
+            result = subprocess.run(arguments, text=True, capture_output=True)
+            if result.returncode == 0:
+                break
+            # Concurrent bootstrap or a completed create with an interrupted
+            # response is already successful; do not create another identity.
+            if exists(["iam", "service-accounts", "describe", email, "--project", project]):
+                break
+            exhausted = "RESOURCE_EXHAUSTED" in result.stderr or "Quota exceeded" in result.stderr
+            if not exhausted or attempt == 2:
+                print(result.stderr, file=sys.stderr)
+                raise subprocess.CalledProcessError(result.returncode, arguments,
+                                                    output=result.stdout, stderr=result.stderr)
+            print(f"Service-account creation quota reached; retrying {name} in 60 seconds", file=sys.stderr)
+            time.sleep(60)
     return email
 
 

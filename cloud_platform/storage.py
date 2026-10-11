@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from contextlib import contextmanager
 from typing import Any
@@ -129,17 +130,20 @@ class Repository:
         return [r for r in records if (owner_id is None or r.get("owner_id") == owner_id)
                 and (experiment_id is None or r.get("experiment_id") == experiment_id)]
 
-    def claim(self, kind: str, identifier: str, expected_statuses, patch: dict) -> dict | None:
+    def claim(self, kind: str, identifier: str, expected_statuses, patch: dict, *, expected_fields: dict | None = None) -> dict | None:
         """Compare and update a document atomically; duplicate deliveries lose."""
         _identifier(kind); _identifier(identifier)
         def update(data, read_quota, write_quota):
             if not data or data.get("status") not in expected_statuses:
+                return None
+            if expected_fields and any(data.get(key) != value for key, value in expected_fields.items()):
                 return None
             result = {**data, **patch}
             if kind == "launches" and data.get("_admitted") and data.get("status") not in TERMINAL and result.get("status") in TERMINAL:
                 quota = read_quota(data["owner_id"]) or {"active": 0}
                 write_quota(data["owner_id"], {**quota, "active": max(0, quota.get("active", 0) - 1)})
             return result
+
         if self.backend == "gcp":
             from google.cloud import firestore
             @firestore.transactional
@@ -166,6 +170,48 @@ class Repository:
             if result is not None:
                 db.execute("UPDATE documents SET data=? WHERE kind=? AND id=?", (json.dumps(result), kind, identifier))
             return result
+
+    def reconcile_stale(self, now: datetime | str | None = None, *, threshold_seconds: int = 180,
+                        owner_id: str | None = None, launch_id: str | None = None) -> list[dict]:
+        """Expire a dead worker's claim without automatically repeating spend.
+
+        Cloud event objects and immutable plans remain untouched. A concurrent
+        heartbeat wins against reconciliation even after the list was read.
+        """
+        if threshold_seconds < 60:
+            raise ValueError("stale threshold must be at least 60 seconds")
+        current = datetime.fromisoformat(now) if isinstance(now, str) else now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        cutoff = current - timedelta(seconds=threshold_seconds)
+        records = [self.get("launches", launch_id)] if launch_id else self.list("launches", owner_id=owner_id)
+        interrupted = []
+        for record in records:
+            if not record or record.get("status") not in {"RUNNING", "CANCELLING"} or (owner_id is not None and record.get("owner_id") != owner_id):
+                continue
+            timestamp = record.get("heartbeat_at") or record.get("started_at")
+            if not timestamp:
+                continue
+            try:
+                heartbeat = datetime.fromisoformat(timestamp)
+                if heartbeat.tzinfo is None:
+                    heartbeat = heartbeat.replace(tzinfo=UTC)
+            except (TypeError, ValueError):
+                continue
+            if heartbeat >= cutoff:
+                continue
+            expected = {"heartbeat_at": record.get("heartbeat_at"), "started_at": record.get("started_at")}
+            result = self.claim("launches", record["id"], {record["status"]}, {
+                "status": "INTERRUPTED", "ended_at": current.isoformat(),
+                "error": "Worker heartbeat expired; evidence preserved, explicit retry required",
+                "evidence_complete": False}, expected_fields=expected)
+            if result:
+                interrupted.append(result)
+                for attempt in self.list("attempts", owner_id=result["owner_id"], experiment_id=result["experiment_id"]):
+                    if attempt.get("launch_id") == result["id"]:
+                        self.claim("attempts", attempt["id"], {"QUEUED", "RUNNING"}, {
+                            "status": "INTERRUPTED", "ended_at": current.isoformat(), "error": result["error"]})
+        return interrupted
 
     def admit_launch(self, data: dict, *, max_active: int = 2, max_episodes: int = 100) -> dict:
         """Reserve per-owner capacity and create the launch in one transaction."""
