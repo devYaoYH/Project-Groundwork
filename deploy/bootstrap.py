@@ -15,6 +15,7 @@ def main():
              "artifactregistry.googleapis.com", "firestore.googleapis.com",
              "cloudtasks.googleapis.com", "secretmanager.googleapis.com",
              "iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com",
+             "cloudresourcemanager.googleapis.com",
              "--project", project, "--quiet"])
     accounts = {name: service_account(project, f"groundwork-{name}")
                 for name in ("api", "worker", "dispatch", "build", "ci")}

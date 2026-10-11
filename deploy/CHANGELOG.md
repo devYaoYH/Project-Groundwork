@@ -57,3 +57,11 @@ these checks do not claim that a paid model-provider call or a second Google
 account was exercised. The hosted study used scripted agents. Drafts need to be
 locked before hosted smoke, dry-run, or live execution; the standalone local
 control plane retains its original draft smoke behavior.
+
+## CI publication API prerequisite
+
+- Enabled Cloud Resource Manager during bootstrap. CI resolves the project
+  number to publish the stable Cloud Run URL registered for Google login; this
+  lookup requires the API to be enabled. The existing deployment identity's
+  Cloud Run Developer role already provides the project read permission, so
+  this fix requires no broader IAM grant.
