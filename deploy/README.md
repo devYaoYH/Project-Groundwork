@@ -122,6 +122,18 @@ gcloud builds submit . --project cicl-487801 --region us-central1 \
   --substitutions _SOURCE_SHA=FULL_COMMIT,_GOOGLE_OAUTH_CLIENT_ID=CLIENT.apps.googleusercontent.com
 ```
 
+Workload Identity Federation permits impersonation of `groundwork-ci`; API
+permissions still come from that service account's roles. Bootstrap grants CI
+Cloud Build submission, use of the build identity, access to its source bucket,
+and `roles/serviceusage.serviceUsageConsumer`. Its source-bucket access includes
+bucket metadata read (`roles/storage.legacyBucketReader`) in addition to object
+upload: `gcloud builds submit` checks bucket existence before uploading source.
+Both CI and the build identity
+require that last role to consume enabled project APIs; a successful OIDC
+exchange alone does not prove that a build can be submitted. Provider-secret
+metadata access is granted to the build identity on each configured secret,
+while secret value access belongs to the worker only.
+
 Verify that unauthenticated private requests fail, two experimenters cannot read
 each other's metadata or exports, a scripted hosted launch completes and persists
 its artifacts, and a GitHub workflow records a successful Cloud Build deployment.

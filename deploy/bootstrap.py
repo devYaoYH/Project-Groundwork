@@ -52,6 +52,9 @@ def main():
     for name in ("api", "worker"):
         bucket_grant(project, artifact_bucket, f"serviceAccount:{accounts[name]}", "roles/storage.objectAdmin")
     bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.objectAdmin")
+    # builds submit checks source bucket metadata before uploading; object roles
+    # do not include storage.buckets.get. Scope the extra read to this bucket.
+    bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.legacyBucketReader")
     bucket_grant(project, source_bucket, f"serviceAccount:{accounts['build']}", "roles/storage.objectViewer")
     session_secret = "groundwork-session"
     if not exists(["secrets", "describe", session_secret, "--project", project]):

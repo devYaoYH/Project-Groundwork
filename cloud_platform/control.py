@@ -152,7 +152,20 @@ class PlatformControl:
                         configs.append(config)
             if not configs or len(configs) > 1000:
                 raise ValueError("An experiment must contain 1–1000 planned episodes")
+            adaptations = {}
+            if design_text is None:
+                # Checked-in templates also serve the standalone external-seat
+                # runner. Hosted execution owns agent lifetime, so those trusted
+                # declarations become child processes of the episode worker.
+                for config in configs:
+                    for index, agent in enumerate(config.get("agents", [])):
+                        if agent.get("runtime") == "external":
+                            participant = str(agent.get("id") or agent.get("name") or f"participant_{index}")
+                            adaptations[participant] = {"participant_id": participant,
+                                                        "from_runtime": "external", "to_runtime": "local_process"}
+                            agent["runtime"] = "local_process"
             policy = apply_policy(configs)
+            policy["runtime_adaptations"] = [adaptations[key] for key in sorted(adaptations)]
             for config in configs:
                 config["provenance"]["participants"] = pinned_participants(config)
             if exp.design_text:

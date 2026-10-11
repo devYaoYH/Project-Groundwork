@@ -190,3 +190,48 @@ def test_design_cannot_embed_credentials_or_invalid_yaml(platform, design):
                                                   "design_text": design})
     assert response.status_code == 400
     assert "secret-value" not in response.text
+
+
+@pytest.mark.parametrize("mode,expected_episodes", [("smoke", 1), ("live", 2)])
+def test_trusted_external_template_runs_agent_child_processes(platform, mode, expected_episodes):
+    application, control, worker = platform
+    alice = sign_in(application, "Alice")
+    releases = alice.get("/api/releases").json()["releases"]
+    release = next(row for row in releases if row["environment_id"] == "buyer_seller")
+    response = alice.post("/api/experiments", json={"name": "Colocated trusted agents", "release_id": release["id"],
+                                                   "yaml_path": "games/buyer-seller/experiments/runtime_smoke.yaml"})
+    assert response.status_code == 201, response.text
+    experiment = response.json()
+    assert experiment["platform_policy"]["runtime_adaptations"] == [
+        {"participant_id": "buyer", "from_runtime": "external", "to_runtime": "local_process"},
+        {"participant_id": "seller", "from_runtime": "external", "to_runtime": "local_process"}]
+    frozen = json.loads(control.artifacts.get(experiment["frozen_plan_key"]))
+    assert all(agent["runtime"] == "local_process" for config in frozen for agent in config["agents"])
+    original = control.artifacts.get(f"experiments/{experiment['id']}/input.yaml")
+    assert b"runtime: external" in original
+    admitted = alice.post(f"/api/experiments/{experiment['id']}/launch", json={"mode": mode})
+    assert admitted.status_code == 202, admitted.text
+    launch = admitted.json()
+    assert worker.run_once(launch["id"])
+    completed = alice.get(f"/api/launches/{launch['id']}").json()
+    assert completed["status"] == "COMPLETED", completed
+    episodes = control.repo.list("episodes", owner_id="local:alice", experiment_id=experiment["id"])
+    assert len(episodes) == expected_episodes
+    assert all(row["status"] == "COMPLETED" for row in episodes)
+    for episode in episodes:
+        trace = alice.get(f"/api/episodes/{episode['id']}").json()
+        assert trace["events"]
+        assert all(agent["runtime"] == "local_process" for agent in trace["config"]["agents"])
+
+
+def test_user_design_external_runtime_is_rejected(platform):
+    application, _, _ = platform
+    alice = sign_in(application, "Alice")
+    releases = alice.get("/api/releases").json()["releases"]
+    release = next(row for row in releases if row["environment_id"] == "buyer_seller")
+    design = (WORKSPACE / "local_stack/tests/buyer_seller_design_smoke.yaml").read_text()
+    design = design.replace("kind: scripted", "kind: scripted\n    runtime: external")
+    response = alice.post("/api/experiments", json={"name": "Unsupported external agents", "release_id": release["id"],
+                                                   "design_text": design})
+    assert response.status_code == 400
+    assert "runtime" in response.json()["error"]
