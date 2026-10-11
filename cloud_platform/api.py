@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import asyncio
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -17,6 +16,7 @@ from cloud_platform.auth import Auth
 from cloud_platform.control import PlatformControl
 from cloud_platform.static import static_response
 from cloud_platform.viewer import Viewer
+from cloud_platform.streaming import launch_events
 
 
 def enqueue(control, launch):
@@ -155,7 +155,7 @@ def create_app(control=None, auth=None):
                 return JSONResponse(await run_in_threadpool(control.lock_design, identifier, owner, await body(request)))
             return JSONResponse(await run_in_threadpool(viewer.experiment, identifier, owner))
         if path.startswith("/api/launches/"):
-            launch = control.owned("launches", identifier, owner)
+            launch = await run_in_threadpool(control.owned, "launches", identifier, owner)
             if path.endswith("/cancel"):
                 if launch["status"] not in {"QUEUED", "DISPATCHED", "RUNNING"}:
                     raise HTTPException(409, "Launch has already ended")
@@ -166,19 +166,11 @@ def create_app(control=None, auth=None):
                 await run_in_threadpool(enqueue, control, launch)
             if path.endswith("/events"):
                 last = int(request.headers.get("last-event-id", request.query_params.get("after_id", "0")))
-                async def events():
-                    cursor = last
-                    for _ in range(20):
-                        detail = await run_in_threadpool(viewer.launch, identifier, owner)
-                        for event in detail["runner_logs"]:
-                            if int(event["id"]) > cursor:
-                                cursor = int(event["id"])
-                                yield f"id: {cursor}\nevent: {event['kind']}\ndata: {json.dumps(event)}\n\n"
-                        yield f"event: launch.status\ndata: {json.dumps(detail['launch'])}\n\n"
-                        if detail["status"] not in {"QUEUED", "DISPATCHING", "DISPATCHED", "RUNNING", "CANCELLING"}:
-                            return
-                        await asyncio.sleep(1)
-                return StreamingResponse(events(), media_type="text/event-stream")
+                if last < 0:
+                    raise ValueError("Log cursor must be nonnegative")
+                return StreamingResponse(launch_events(viewer, identifier, owner, last,
+                    request=request, authenticate=auth.authenticate), media_type="text/event-stream",
+                    headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
             return JSONResponse(await run_in_threadpool(viewer.launch, identifier, owner))
         if path == "/api/episodes":
             return JSONResponse(await run_in_threadpool(viewer.episodes, owner, request.query_params))
@@ -249,7 +241,8 @@ def create_app(control=None, auth=None):
     @application.middleware("http")
     async def security_headers(request, call_next):
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = ("no-store, no-transform"
+            if response.headers.get("Content-Type", "").startswith("text/event-stream") else "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"

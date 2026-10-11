@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import subprocess
+import sys
+import time
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -210,3 +213,93 @@ def test_remote_event_sink_fails_closed(monkeypatch, tmp_path):
         sink.write(Event(type="message"))
     sink.close()
     assert (tmp_path / "events.jsonl").read_text()
+
+
+@pytest.mark.parametrize("publication_fails_once", [False, True])
+def test_worker_live_logs_and_exact_attempt_progress_precede_final_evidence(tmp_path, monkeypatch, publication_fails_once):
+    """A real blocking child proves visibility does not await runner exit."""
+    from cloud_platform.control import PlatformControl
+    repository = Repository(backend="local", data_dir=tmp_path / "store")
+    artifacts = ArtifactStore(backend="local", data_dir=tmp_path / "store")
+    control = PlatformControl(repository, artifacts, workspace=WORKSPACE)
+    release = next(row for row in control.releases() if row["environment_id"] == "buyer_seller")
+    experiment = control.create_experiment("alice", {"name": "live visibility", "release_id": release["id"], "design_text": DESIGN})
+    launch = control.launch(experiment["id"], "alice", {"mode": "live"})
+    progress_gate, finish_gate = tmp_path / "progress", tmp_path / "finish"
+    script = '''
+import json, sqlite3, sys, time, pathlib, yaml
+database, plan, progress_gate, finish_gate = sys.argv[1:]
+config = yaml.safe_load(pathlib.Path(plan).read_text())["cells"][0]["config"]
+config.pop("_design_episode")
+provenance = config["provenance"]
+def insert(attempt, uid):
+    with sqlite3.connect(database) as db:
+        db.execute("INSERT INTO episodes (episode_uid, episode_id, environment_id, experiment_id, cell_id, attempt, status, config, events, final_state, metrics, manifest) VALUES (?,?,?,?,?,?,'COMPLETED',?,'[]','{}','{}','{}')",
+            (uid, config["episode_id"], config["environment_id"], provenance["experiment_id"], provenance["cell_id"], attempt, json.dumps(config)))
+insert(provenance["attempt"] + 99, "wrong-attempt")
+for number in range(250): print("progress diagnostic %03d " % number + "x" * 256)
+print("runner started; waiting for provider")
+while not pathlib.Path(progress_gate).exists(): time.sleep(.05)
+insert(provenance["attempt"], "current-attempt")
+print("current attempt result committed")
+while not pathlib.Path(finish_gate).exists(): time.sleep(.05)
+print("runner finished")
+'''
+    original_popen = subprocess.Popen
+    def blocking_runner(command, **kwargs):
+        assert kwargs["env"]["PYTHONUNBUFFERED"] == "1"
+        database = command[command.index("--storage-path") + 1]
+        return original_popen([sys.executable, "-c", script, database, command[3], str(progress_gate), str(finish_gate)], **kwargs)
+    monkeypatch.setattr("cloud_platform.worker.subprocess.Popen", blocking_runner)
+    original_put = artifacts.put
+    failures = []
+    def possibly_failing_put(key, content, **kwargs):
+        if publication_fails_once and key.endswith("/live-detail.json") and not failures:
+            failures.append(key)
+            raise RuntimeError("observational upload temporarily unavailable")
+        return original_put(key, content, **kwargs)
+    monkeypatch.setattr(artifacts, "put", possibly_failing_put)
+    worker = Worker(repository, artifacts, workspace=WORKSPACE)
+    def await_snapshot(line):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            record = repository.get("launches", launch["id"])
+            if record.get("live_detail_key"):
+                detail = json.loads(artifacts.get(record["live_detail_key"]))
+                if any(line in event["payload"]["line"] for event in detail["runner_logs"]):
+                    return record, detail
+            time.sleep(.05)
+        raise AssertionError(f"live snapshot did not contain {line!r}")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(worker.run_once, launch["id"])
+        try:
+            initial, detail = await_snapshot("runner started")
+            assert initial["status"] == detail["launch"]["status"] == "RUNNING"
+            assert detail["provisional"] and detail["progress"]["completed"] == 0
+            assert detail["logs_truncated"] is True
+            assert 0 < len(detail["runner_logs"]) <= 200
+            assert len(json.dumps(detail["runner_logs"]).encode()) <= 64 * 1024
+            assert detail["log_start_id"] > 4  # long output was trimmed to a tail
+            assert [event["id"] for event in detail["runner_logs"]] == sorted(event["id"] for event in detail["runner_logs"])
+            assert detail["attempts"][0]["episode_uid"] is None  # mismatched ordinal cannot join
+            assert not initial.get("evidence_complete") and not initial.get("detail_key")
+            assert repository.list("episodes", owner_id="alice") == []
+            progress_gate.touch()
+            current, detail = await_snapshot("current attempt result committed")
+            assert not pending.done()
+            assert current["status"] == detail["launch"]["status"] == "RUNNING"
+            assert detail["progress"]["completed"] == 1 and detail["attempts"][0]["episode_uid"] == "current-attempt"
+            assert detail["log_start_id"] == detail["runner_logs"][0]["id"]
+            assert len({event["id"] for event in detail["runner_logs"]}) == len(detail["runner_logs"])
+            assert not current.get("evidence_complete") and repository.list("episodes", owner_id="alice") == []
+        finally:
+            progress_gate.touch()
+            finish_gate.touch()
+        assert pending.result(timeout=15)
+    completed = repository.get("launches", launch["id"])
+    assert completed["status"] == "COMPLETED" and completed["evidence_complete"]
+    final = json.loads(artifacts.get(completed["detail_key"]))
+    assert final["attempts"][0]["episode_uid"] == "current-attempt"
+    assert sum("runner started" in row["payload"]["line"] for row in final["runner_logs"]) == 1
+    assert [row["episode_uid"] for row in repository.list("episodes", owner_id="alice")] == ["current-attempt"]
+    assert bool(failures) == publication_fails_once

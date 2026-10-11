@@ -7,6 +7,20 @@ The control pane cannot access model-provider credentials. Hosting preserves the
 existing experiment UI, design editor, environment/item views, launch progress,
 episode lanes, and replay screens; Google login wraps that interface.
 
+Launch inspection streams runner output and provisional episode progress while
+the worker executes. Publication and stream polling each occur about every two
+seconds, so output typically appears within a few seconds rather than waiting
+for the launch to finish. The live view retains the newest 200 log entries within
+64 KiB; the complete `runner.log` remains in the final export. Streams resume
+using stable log IDs after disconnections and stop when the launch ends or the
+application session expires. Episode trace links become available when final
+evidence has been published.
+
+Experiments created before live logs were introduced retain their original
+digest-pinned worker. Fork and lock an existing design to run it on the current
+release with live logs. An existing launch cannot acquire this feature during
+execution; completed launches still show their persisted output.
+
 ## Local first
 
 ```sh

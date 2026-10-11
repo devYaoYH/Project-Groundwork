@@ -150,15 +150,27 @@ class Viewer:
 
     def launch(self, identifier, owner):
         record = self.control.owned("launches", identifier, owner)
-        attempts = [row for row in self.control.repo.list("attempts", owner_id=owner, experiment_id=record["experiment_id"]) if row["launch_id"] == identifier]
+        if "live_logs" not in record and self.control.repo.backend == "gcp":
+            record = {**record, "live_logs": False}
+        detail = {}
+        # The worker publishes a bounded, provisional view while it runs. The
+        # canonical immutable result always wins once final evidence is ready.
+        key = record.get("detail_key") or record.get("live_detail_key")
+        if key:
+            detail = json.loads(self.control.artifacts.get(key))
+        attempts = detail.get("attempts")
+        if attempts is None:
+            attempts = [row for row in self.control.repo.list("attempts", owner_id=owner, experiment_id=record["experiment_id"]) if row["launch_id"] == identifier]
         for attempt in attempts:
             attempt.setdefault("episode_uid", None)
             attempt.setdefault("redis_stream", f"a2a:launch:{identifier}:episode:{attempt['episode_id']}")
-        detail = {}
-        if record.get("detail_key"):
-            detail = json.loads(self.control.artifacts.get(record["detail_key"]))
+        logs = detail.get("runner_logs", [])
         return {**record, "launch": record, "attempts": attempts,
-                "progress": record.get("progress") or self.progress(attempts), "runner_logs": detail.get("runner_logs", [])}
+                "progress": detail.get("progress") or record.get("progress") or self.progress(attempts),
+                "runner_logs": logs, "provisional": bool(key and not record.get("detail_key")),
+                "live_updated_at": record.get("live_updated_at"),
+                "logs_truncated": bool(detail.get("logs_truncated", False)),
+                "log_start_id": logs[0]["id"] if logs else None}
 
     def episodes(self, owner, query):
         allowed = {"experiment_id", "experiment_name", "cell_id", "environment_id", "episode_id", "release_id", "item_id", "status"}

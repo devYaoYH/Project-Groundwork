@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import signal
 import sqlite3
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +27,96 @@ from cloud_platform.storage import ACTIVE, ArtifactStore, Repository
 
 def now():
     return datetime.now(UTC).isoformat()
+
+
+class _LiveDetailPublisher:
+    """Bounded observational snapshots, separate from final scientific evidence."""
+
+    def __init__(self, worker, control, launch_id, log_path):
+        self.worker, self.control = worker, control
+        self.launch_id, self.log_path = launch_id, log_path
+        self.key = f"launches/{launch_id}/live-detail.json"
+        self.offset = 0
+        self.pending = b""
+
+    def consume_logs(self, *, final=False):
+        try:
+            self._consume_logs(final=final)
+        except Exception:
+            logging.warning("live runner log read unavailable for launch %s; will retry", self.launch_id, exc_info=True)
+
+    def _consume_logs(self, *, final=False):
+        with self.log_path.open("rb") as source:
+            source.seek(self.offset)
+            while True:
+                chunk = source.read(256 * 1024)
+                self.offset += len(chunk)
+                lines = (self.pending + chunk).split(b"\n")
+                self.pending = lines.pop()
+                for line in lines:
+                    self.control._line(self.launch_id, line.decode("utf-8", errors="replace").rstrip("\r"))
+                # A malformed endless stdout line must not grow worker memory.
+                # The complete bytes still remain in immutable runner.log.
+                if len(self.pending) > 64 * 1024:
+                    self.control._line(self.launch_id, self.pending[:64 * 1024].decode("utf-8", errors="replace") + " [long line truncated]")
+                    self.pending = b""
+                if not final or not chunk:
+                    break
+        if final and self.pending:
+            self.control._line(self.launch_id, self.pending.decode("utf-8", errors="replace"))
+            self.pending = b""
+
+    def publish(self):
+        """Publish only joined provisional attempts; failures never stop inference."""
+        try:
+            record = self.worker.repository.get("launches", self.launch_id)
+            if not record or record["status"] not in {"RUNNING", "CANCELLING"}:
+                return
+            with self.control._session() as db:
+                rows = db.execute("""
+                    SELECT a.*, e.episode_uid, e.status AS trace_status, e.ended_at AS trace_ended_at
+                    FROM attempts a LEFT JOIN episodes e ON e.episode_uid = (
+                        SELECT episode_uid FROM episodes
+                        WHERE episode_id = a.episode_id AND attempt = a.attempt
+                        ORDER BY created_at DESC, episode_uid DESC LIMIT 1)
+                    WHERE a.launch_id = ? ORDER BY a.cell_id, a.episode_idx
+                """, (self.launch_id,)).fetchall()
+                logs = db.execute("SELECT * FROM launch_events WHERE launch_id=? AND kind='runner.log' ORDER BY id DESC LIMIT 201",
+                                  (self.launch_id,)).fetchall()
+            attempts = []
+            for row in rows:
+                attempt = {**asdict(self.control._attempt(row)), "episode_uid": row["episode_uid"],
+                           "redis_stream": f"a2a:launch:{self.launch_id}:episode:{row['episode_id']}"}
+                if row["trace_status"] == "COMPLETED":
+                    attempt.update(status="COMPLETED", ended_at=row["trace_ended_at"])
+                attempts.append(attempt)
+            tail, size = [], 2
+            logs_truncated = len(logs) > 200
+            for row in logs[:200]:
+                entry = dict(row)
+                entry["payload"] = json.loads(entry["payload"])
+                line = str(entry["payload"].get("line", ""))
+                if len(line) > 4096:
+                    logs_truncated = True
+                entry["payload"]["line"] = line[:4096]
+                count = len(json.dumps(entry).encode()) + 2
+                if size + count > 64 * 1024:
+                    logs_truncated = True
+                    break
+                tail.append(entry)
+                size += count
+            tail.reverse()
+            from cloud_platform.viewer import Viewer
+            updated = now()
+            detail = {"launch": record, "attempts": attempts, "progress": Viewer.progress(attempts),
+                      "runner_logs": tail, "provisional": True, "live_updated_at": updated,
+                      "logs_truncated": logs_truncated,
+                      "log_start_id": tail[0]["id"] if tail else 0}
+            self.worker.artifacts.put(self.key, json.dumps(detail, sort_keys=True).encode(), immutable=False)
+            self.worker.repository.claim("launches", self.launch_id, {"RUNNING", "CANCELLING"},
+                                         {"live_detail_key": self.key, "live_updated_at": updated})
+        except Exception:
+            logging.warning("live detail publication unavailable for launch %s; will retry", self.launch_id, exc_info=True)
 
 
 class Worker:
@@ -115,7 +207,7 @@ class Worker:
                        A2A_TRACE_DB=str(database), A2A_RUNTIME_MODE="loopback",
                        A2A_PROVISIONING_DIR=str(root / "private-joins"),
                        A2A_OTEL_TRACES_FILE=str(results / "otel-spans.jsonl"),
-                       OTEL_TRACES_EXPORTER="file", A2A_CAPTURE_CONTENT="true")
+                       OTEL_TRACES_EXPORTER="file", A2A_CAPTURE_CONTENT="true", PYTHONUNBUFFERED="1")
             env.update(A2A_DURABLE_EVENT_SINK="cloud_platform.storage:durable_event_write",
                        A2A_DURABLE_EVENT_PREFIX=prefix + "/events",
                        PLATFORM_BACKEND=self.artifacts.backend)
@@ -124,13 +216,20 @@ class Worker:
             log_path = root / "runner.log"
             control._mark_launch_started(identifier)
             with log_path.open("w") as log:
+                live = _LiveDetailPublisher(self, control, identifier, log_path)
+                live.publish()
                 process = subprocess.Popen(command, cwd=self.workspace, env=env, stdout=log,
                                            stderr=subprocess.STDOUT, start_new_session=True)
                 cancelled = False
                 timed_out = False
                 deadline = time.monotonic() + 3600
+                next_publication = 0.0
                 try:
                     while process.poll() is None:
+                        if time.monotonic() >= next_publication:
+                            live.consume_logs()
+                            live.publish()
+                            next_publication = time.monotonic() + 2
                         record = self.repository.get("launches", identifier) or {}
                         timed_out = time.monotonic() >= deadline
                         if timed_out or self.stopping.is_set() or record.get("status") in {"CANCELLING", "INTERRUPTED"} or record.get("cancel_requested"):
@@ -147,13 +246,13 @@ class Worker:
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGKILL)
                         process.wait()
-            for line in log_path.read_text().splitlines():
-                control._line(identifier, line)
+            live.consume_logs(final=True)
             if cancelled:
                 with control._session() as db:
                     db.execute("UPDATE launches SET status='CANCELLING' WHERE id=?", (identifier,))
             control._finish_launch(identifier, code)
             detail = control.launch_detail(identifier)
+            live.publish()
             if timed_out:
                 detail["launch"].update(status="FAILED", error="launch exceeded its 3600-second duration limit")
             if self.stopping.is_set() and not cancelled:

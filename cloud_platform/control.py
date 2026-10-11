@@ -184,7 +184,7 @@ class PlatformControl:
                     db.execute("UPDATE cells SET episode_configs=? WHERE experiment_id=? AND cell_id=?",
                                (json.dumps(cell_configs, sort_keys=True), exp.id, cell_id))
         data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
-                "image_digest": self.image_digest, "job_name": self.job_name,
+                "image_digest": self.image_digest, "job_name": self.job_name, "live_logs": True,
                 "status": "READY", "launch_ordinal": 0, "platform_policy": policy}
         prefix = f"experiments/{exp.id}" if previous is None else f"experiments/{exp.id}/locked/{uuid.uuid4()}"
         key = f"{prefix}/compiler.db"
@@ -206,7 +206,7 @@ class PlatformControl:
         revision = str(uuid.uuid4())
         prefix = f"experiments/{exp.id}/drafts/{revision}"
         data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
-                "image_digest": self.image_digest, "job_name": self.job_name,
+                "image_digest": self.image_digest, "job_name": self.job_name, "live_logs": True,
                 "status": "DRAFT", "launch_ordinal": 0,
                 "snapshot_key": f"{prefix}/compiler.db"}
         self.artifacts.put(data["snapshot_key"], snapshot(cp.path))
@@ -335,6 +335,7 @@ class PlatformControl:
             self.artifacts.put(f"{prefix}/plan.yaml", plan)
             data = {**asdict(launch), "owner_id": owner_id, "source_sha": exp["source_sha"],
                     "image_digest": exp["image_digest"], "job_name": exp["job_name"],
+                    "live_logs": self.repo.backend == "local" or bool(exp.get("live_logs", False)),
                     "source_snapshot_key": f"{prefix}/input.db", "snapshot_key": f"{prefix}/input.db",
                     "plan_key": f"{prefix}/plan.yaml", "episode_count": len(detail["attempts"]),
                     "artifact_prefix": prefix, "dispatch_status": "PENDING"}

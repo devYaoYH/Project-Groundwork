@@ -1,5 +1,21 @@
 # Platform deployment changelog
 
+## Live launch logs and progress — 2026-10-11
+
+- Publish unbuffered runner output and provisional episode progress during
+  execution, through a private snapshot refreshed about every two seconds.
+  Snapshots retain the newest 200 log entries within 64 KiB; the full runner
+  output and final scientific evidence remain in immutable launch artifacts.
+- Stream authenticated launch logs into the existing launch inspection screen,
+  with stable log IDs, reconnect/resume, connection status, and terminal closure
+  after the final output and progress arrive. Short stream sessions and durable
+  backing storage allow reconnection to any control-service instance.
+- Keep ownership checks on both initial reads and streams. Session expiry stops
+  a live stream; provisional progress cannot make a launch evidence-complete.
+- Earlier experiments retain their pinned worker release. Fork their design to
+  use the new live-log worker; existing results and execution provenance remain
+  available under their original release.
+
 ## Initial platform implementation
 
 - Added a separate local Docker Compose control API and durable worker, with
