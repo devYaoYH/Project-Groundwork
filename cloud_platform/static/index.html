@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Groundwork · Experiment control</title>
+  <style>
+    :root { color-scheme: light; font: 15px/1.5 system-ui, sans-serif; color: #172b3b; background: #f3f6f8; }
+    * { box-sizing: border-box; } body { margin: 0; } header { background: #172b3b; color: white; padding: 22px max(24px, calc((100vw - 1160px)/2)); display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    h1 { font-size: 23px; margin: 0; } h2 { font-size: 19px; margin: 0 0 16px; } h3 { font-size: 17px; margin: 0; } p { margin: 8px 0 18px; } main { max-width: 1208px; margin: 28px auto; padding: 0 24px; }
+    .grid { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(350px, 1.25fr); gap: 24px; } .card { background: white; border: 1px solid #dce5ec; border-radius: 12px; padding: 24px; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; } input, select, textarea { width: 100%; padding: 10px 12px; font: inherit; color: inherit; background: white; border: 1px solid #b8c8d5; border-radius: 6px; } textarea { min-height: 180px; font: 13px/1.5 ui-monospace, monospace; }
+    button, .button { cursor: pointer; display: inline-block; border: 1px solid #1b6579; border-radius: 6px; padding: 9px 15px; font: inherit; font-weight: 600; color: white; background: #1b6579; text-decoration: none; }
+    button.secondary { color: #1b6579; background: white; } button:disabled { opacity: .5; cursor: wait; } button:focus-visible, a:focus-visible { outline: 3px solid #dbab28; outline-offset: 3px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; } .muted { color: #5b6e7d; font-size: 14px; } header .muted { color: #c2d3dd; } .hidden { display: none !important; } #login { max-width: 520px; margin: 60px auto; }
+    #notice { padding: 12px 16px; border-radius: 8px; margin-bottom: 18px; border: 1px solid #b3d6e5; background: #e9f6fc; overflow-wrap: anywhere; } #notice.error { background: #fff1ee; border-color: #e8bbb3; color: #822a1d; }
+    .experiment { border-bottom: 1px solid #e1e9ee; padding: 16px 0; } .experiment:first-child { padding-top: 0; } .experiment:last-child { border: 0; padding-bottom: 0; } .experiment .row { margin-top: 12px; }
+    .badge { display: inline-block; background: #eef3f6; color: #435b6b; border-radius: 20px; padding: 2px 9px; font-size: 12px; } .launch { display: flex; align-items: start; justify-content: space-between; gap: 10px; font-size: 13px; padding: 10px 0; border-bottom: 1px solid #edf0f3; } code { overflow-wrap: anywhere; font-size: 12px; }
+    .metrics { margin-top: 16px; } details { margin: 18px 0; } summary { cursor: pointer; font-weight: 600; } footer { margin: 20px 0; }
+    @media(max-width: 800px) { .grid { grid-template-columns: 1fr; } header { align-items: start; } main { padding: 0 16px; } .card { padding: 20px; } }
+  </style>
+</head>
+<body>
+<header><div><h1>Groundwork</h1><div class="muted">Experiment control</div></div><div id="account" class="row hidden"><span id="account-name"></span><button id="logout" class="secondary">Sign out</button></div></header>
+<main>
+  <div id="notice" role="status" class="hidden"></div>
+  <section id="login" class="card hidden"><h2>Your experiment workspace</h2><p>Sign in with Google to create experiments, follow their progress, and download your results.</p><div id="google-login"></div><div id="dev-login" class="hidden"><p class="muted">Local development identities</p><div class="row"><button data-user="Alice">Continue as Alice</button><button data-user="Bob" class="secondary">Continue as Bob</button></div></div></section>
+  <section id="workspace" class="grid hidden">
+    <article class="card"><h2>Create an experiment</h2><p class="muted">Environments are available to every experimenter. Experiment metadata and results belong to your account.</p>
+      <form id="create-form"><label for="name">Experiment name</label><input id="name" required maxlength="120" placeholder="My first experiment">
+        <label for="release">Environment release</label><select id="release" required></select>
+        <label for="template">Experiment template</label><select id="template"></select>
+        <details><summary>Use a custom design</summary><p class="muted">A custom design replaces the selected template.</p><label for="design">Design YAML</label><textarea id="design" spellcheck="false" placeholder="Paste a validated experiment design"></textarea></details>
+        <button id="create" type="submit">Create experiment</button>
+      </form>
+    </article>
+    <article class="card"><div class="row" style="justify-content:space-between;margin-bottom:16px"><h2 style="margin:0">Your experiments</h2><button id="refresh" class="secondary">Refresh</button></div><div id="experiments"><p class="muted">Loading experiments…</p></div></article>
+  </section>
+  <footer class="muted">Agent credentials are supplied by the platform. They are never included in downloads.</footer>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const state = {csrf: '', config: null, user: null, releases: [], timer: null, exports: new Map()};
+  function message(text, error = false) { $('notice').textContent = text; $('notice').className = error ? 'error' : ''; }
+  function clearMessage() { $('notice').className = 'hidden'; }
+  async function api(path, method = 'GET', data) {
+    const headers = {Accept: 'application/json'};
+    if (method !== 'GET') { headers['Content-Type'] = 'application/json'; headers['X-CSRF-Token'] = state.csrf; }
+    const response = await fetch(path, {method, headers, credentials: 'same-origin', body: data === undefined ? undefined : JSON.stringify(data)});
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) { if (response.status === 401 && state.user) showLogin(); throw new Error(body.detail || body.error || `Request failed (${response.status})`); }
+    return body;
+  }
+  function button(text, action, secondary = false) { const node = document.createElement('button'); node.textContent = text; if (secondary) node.className = 'secondary'; node.addEventListener('click', async () => { node.disabled = true; try { await action(); } catch (err) { message(err.message, true); } finally { node.disabled = false; } }); return node; }
+  function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; }
+  function showLogin() { state.user = null; $('workspace').classList.add('hidden'); $('account').classList.add('hidden'); $('login').classList.remove('hidden'); if (state.timer) clearTimeout(state.timer); }
+  async function signedIn(body) { state.user = body.user || body.principal || body; $('account-name').textContent = state.user.display_name || state.user.email || 'Experimenter'; $('account').classList.remove('hidden'); $('login').classList.add('hidden'); $('workspace').classList.remove('hidden'); clearMessage(); await loadReleases(); await loadExperiments(); }
+  async function loadReleases() {
+    const body = await api('/api/releases'); state.releases = body.releases || [];
+    $('release').replaceChildren();
+    state.releases.forEach(release => { const option = document.createElement('option'); option.value = release.id; option.textContent = `${release.environment_id} · ${release.version || release.id}`; $('release').append(option); });
+    updateTemplates(); if (!state.releases.length) message('No environment releases are available yet.');
+  }
+  function updateTemplates() {
+    $('template').replaceChildren(); const release = state.releases.find(item => item.id === $('release').value);
+    (release?.experiments || release?.available_experiments || []).forEach(template => { const option = document.createElement('option'); const path = typeof template === 'string' ? template : (template.yaml_path || template.path); if (!path) return; option.value = path; option.textContent = typeof template === 'string' ? path.split('/').pop() : (template.name || path.split('/').pop()); $('template').append(option); });
+    if (!$('template').options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'Provide a custom design below'; $('template').append(option); }
+  }
+  async function loadExperiments() {
+    if (!state.user) return;
+    const body = await api('/api/experiments'); const experiments = body.experiments || []; $('experiments').replaceChildren();
+    if (!experiments.length) $('experiments').append(text('p', 'Create an experiment to begin.', 'muted'));
+    for (const experiment of experiments) {
+      const card = document.createElement('div'); card.className = 'experiment'; card.append(text('h3', experiment.name)); card.append(text('div', `${experiment.environment_id || ''} · ${experiment.created_at || ''}`, 'muted'));
+      const actions = document.createElement('div'); actions.className = 'row';
+      for (const mode of ['smoke', 'live']) actions.append(button(mode === 'smoke' ? 'Run smoke test' : 'Launch experiment', async () => { const launch = await api(`/api/experiments/${encodeURIComponent(experiment.id)}/launch`, 'POST', {mode, max_parallelism: 1}); message(`${mode === 'smoke' ? 'Smoke test' : 'Experiment'} queued: ${(launch.launch || launch).id}`); await loadExperiments(); }, mode === 'smoke'));
+      actions.append(button('Download results', async () => { const exported = await api(`/api/experiments/${encodeURIComponent(experiment.id)}/export`, 'POST', {}); await downloadExport(exported); }, true)); card.append(actions);
+      const detail = await api(`/api/experiments/${encodeURIComponent(experiment.id)}`);
+      for (const launch of detail.launches || detail.experiment?.launches || []) { const row = document.createElement('div'); row.className = 'launch'; const identity = document.createElement('div'); identity.append(text('code', launch.id)); if (launch.error) identity.append(text('div', launch.error, 'muted')); row.append(identity, text('span', launch.status, 'badge')); card.append(row); }
+      $('experiments').append(card);
+    }
+    if (state.timer) clearTimeout(state.timer); state.timer = setTimeout(() => loadExperiments().catch(err => message(err.message, true)), 10000);
+  }
+  async function downloadExport(body) {
+    const exported = body.export || body;
+    const url = exported.download_url || exported.download || `/api/exports/${encodeURIComponent(exported.id)}/download`;
+    if (!url.startsWith('/api/exports/')) throw new Error('Unexpected export download address');
+    const response = await fetch(url, {credentials: 'same-origin'});
+    if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || error.error || 'Export is not ready yet. Try downloading again after the experiment finishes.'); }
+    const blobUrl = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = blobUrl; link.download = exported.filename || `experiment-${exported.experiment_id || exported.id}.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(blobUrl), 60000); message('Your results download is ready.');
+  }
+  $('release').addEventListener('change', updateTemplates);
+  $('refresh').addEventListener('click', () => loadExperiments().catch(err => message(err.message, true)));
+  $('create-form').addEventListener('submit', async event => { event.preventDefault(); $('create').disabled = true; try { const payload = {name: $('name').value.trim(), release_id: $('release').value}; const design = $('design').value.trim(); if (design) payload.design_text = design; else { payload.yaml_path = $('template').value; if (!payload.yaml_path) throw new Error('Select a template or provide a design.'); } await api('/api/experiments', 'POST', payload); message('Experiment created. Run a smoke test or launch it when ready.'); $('name').value = ''; await loadExperiments(); } catch (err) { message(err.message, true); } finally { $('create').disabled = false; } });
+  $('logout').addEventListener('click', async () => { try { await api('/auth/logout', 'POST', {}); showLogin(); const config = await api('/auth/config'); state.csrf = config.csrf_token; clearMessage(); } catch (err) { message(err.message, true); } });
+  document.querySelectorAll('[data-user]').forEach(node => node.addEventListener('click', async () => { try { await signedIn(await api('/auth/dev', 'POST', {user: node.dataset.user})); } catch (err) { message(err.message, true); } }));
+  async function initialize() {
+    state.config = await api('/auth/config'); state.csrf = state.config.csrf_token;
+    if (state.config.dev_auth) $('dev-login').classList.remove('hidden');
+    if (state.config.google_client_id) { const script = document.createElement('script'); script.src = 'https://accounts.google.com/gsi/client'; script.async = true; script.onload = () => { google.accounts.id.initialize({client_id: state.config.google_client_id, callback: async result => { try { await signedIn(await api('/auth/google', 'POST', {credential: result.credential})); } catch (err) { message(err.message, true); } }}); google.accounts.id.renderButton($('google-login'), {theme: 'outline', size: 'large'}); }; script.onerror = () => message('Google sign-in could not load. Check your connection and refresh.', true); document.head.append(script); }
+    try { await signedIn(await api('/auth/me')); } catch (err) { showLogin(); if (!state.config.dev_auth && !state.config.google_client_id) message('Google sign-in has not been configured.', true); }
+  }
+  initialize().catch(err => message(err.message, true));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Build-only bootstrap path; owner initializes the public service policy once.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
+  - name: gcr.io/cloud-builders/docker
+    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', '-q']
+images: ['${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
+substitutions:
+  _REGION: us-central1
+  _SOURCE_SHA: ''
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s
