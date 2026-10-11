@@ -27,6 +27,9 @@ episode parallelism. Job runtime is limited to one hour and automatic retries
 are disabled. Scientific retries create explicit attempts. Agents within a
 launch share resources and are trusted repository code. There are no external
 agent callbacks, user-provided containers, or cross-user sharing yet.
+Authored `local_process` rosters currently support Calendar baseline scripted
+agents; other registered games use `in_process` rosters under the existing
+compiler validation.
 
 Exports currently run synchronously within an authenticated request and have a
 size/count cap to stay within Cloud Run memory and request duration. The platform
@@ -65,3 +68,6 @@ control plane retains its original draft smoke behavior.
   lookup requires the API to be enabled. The existing deployment identity's
   Cloud Run Developer role already provides the project read permission, so
   this fix requires no broader IAM grant.
+- Selected the Cloud SDK image's maintained CA bundle for bundled Python. This
+  preserves HTTPS certificate verification while allowing the CI health and
+  authentication boundary checker to validate the published service.

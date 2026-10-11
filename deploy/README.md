@@ -181,3 +181,6 @@ increasing scale. External human/agent callbacks and direct per-seat hosting are
 future work. A future scheduler can shard immutable plans across Job tasks while
 preserving attempt IDs. Owner-based access is implemented by the backend; there is
 no cross-user leaderboard or collaboration sharing in this initial release.
+Authored `local_process` rosters currently support Calendar baseline scripted
+agents; other registered games use `in_process` rosters, as enforced by the
+existing design compiler.
