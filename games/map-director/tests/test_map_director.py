@@ -334,3 +334,32 @@ def test_typed_release_matches_installed_declaration():
     assert release.roles == DECLARATION.roles
     assert release.required_modalities == DECLARATION.required_modalities
     assert release.item_policy.item_bank_sha256 == BANK.item_bank_sha256
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+def test_default_visual_assets_survive_read_only_workspace_and_persistence(tmp_path, monkeypatch, compiled):
+    import shutil
+    from a2a_engine.episode_media import episode_images, read_episode_image
+    from a2a_engine.manifest import EpisodeManifest
+    from a2a_engine.storage.sqlite import SQLiteEpisodeStore
+
+    workspace = tmp_path / "readonly-workspace"
+    workspace.mkdir(mode=0o555)
+    monkeypatch.chdir(workspace)
+    config = {"asset_root": str(BANK.asset_store.root)} if compiled else {}
+    environment = MapDirectorEnvironment(config, dry_run=True)
+    try:
+        trace = environment.run()
+        assert trace.metrics["success"] == [True, True]
+        assert list(workspace.iterdir()) == []
+        database = tmp_path / "sink" / "trace.db"
+        store = SQLiteEpisodeStore(path=database)
+        manifest = EpisodeManifest.from_run(config=trace.config.model_dump(), experiment_name="readonly",
+            cell_id="map", episode_idx=0, episode_uid=trace.episode_uid)
+        store.put_episode(trace, manifest)
+        for image in episode_images(trace):
+            payload, mime = read_episode_image(trace, image.sha256, database.parent / "assets")
+            assert payload and mime == "image/png"
+    finally:
+        shutil.rmtree(environment.config.asset_root)
+        workspace.chmod(0o755)

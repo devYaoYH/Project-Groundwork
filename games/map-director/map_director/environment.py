@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+import tempfile
 import uuid
 from pathlib import Path
 from pydantic import Field, model_validator
@@ -24,7 +25,7 @@ class MapDirectorConfig(EpisodeConfigBase):
     item_id: str = "discrepant_pair"
     discrepancy: str = "missing_renamed+duplicate"
     required_modalities: list[str] = Field(default_factory=lambda: ["text", "image"])
-    asset_root: str = "results/map_director_assets"
+    asset_root: str | None = None
     image_assets: list[dict] = Field(default_factory=list)
     item_bank_sha256: str = BANK.item_bank_sha256
 
@@ -69,8 +70,10 @@ class MapDirectorEnvironment:
         self.tasks = BANK.get(self.config.item_id).raw["tasks"]
         # Compiled designs point initial images at the immutable bank.
         # Runtime overlays belong in the evidence store, not the installed package.
-        if Path(self.config.asset_root).resolve() == BANK.asset_store.root:
-            self.config.asset_root = "results/map_director_assets"
+        if self.config.asset_root is None or Path(self.config.asset_root).resolve() == BANK.asset_store.root:
+            # Installed packages and Compose workspaces can be read-only. Keep
+            # generated observations available until the evidence store copies them.
+            self.config.asset_root = tempfile.mkdtemp(prefix="groundwork-map-director-assets-")
         self.store = AssetStore(self.config.asset_root)
         for image in BANK.assets:
             self.store.put(BANK.asset_store.read(image), image.mime_type)
