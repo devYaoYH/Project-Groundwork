@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 
 _ID = re.compile(r"^[a-z][a-z0-9_.-]*$")
@@ -61,6 +61,15 @@ class ParameterConfig(_StrictModel):
     fixed: bool = False
     source: Literal["design", "item"] = "design"
     item_key: str | None = None          # bank column, when it is not ``name``
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def numeric_domain_from_yaml(cls, value, info):
+        # YAML/JSON encode a numeric interval as an array. Preserve categorical
+        # lists while normalizing intervals to the tuple used by validation.
+        if info.data.get("type") in {"integer", "continuous"} and isinstance(value, list):
+            return tuple(value)
+        return value
 
     @model_validator(mode="after")
     def _domain_matches_type(self) -> "ParameterConfig":
@@ -142,6 +151,8 @@ class EngineConfig(_StrictModel):
 
 
 class RoleConfig(_StrictModel):
+    required_modalities: set[str] = Field(default_factory=lambda: {"text"})
+
     id: str
     count: int = Field(default=1, ge=1)
     accepts: list[Literal["llm", "scripted", "human"]] = Field(
@@ -149,6 +160,11 @@ class RoleConfig(_StrictModel):
     )
     scripted_bindings: dict[str, str] = Field(default_factory=dict)
     description: str = ""
+
+
+    @field_serializer("required_modalities")
+    def stable_modalities(self, value):
+        return sorted(value)
 
     @field_validator("accepts")
     @classmethod
@@ -260,6 +276,11 @@ class ReleaseDeclaration(_StrictModel):
     parameters: list[ParameterConfig] = Field(default_factory=list)
     item_policy: ItemPolicy | None = None
     oracle_version: str | None = None
+    required_modalities: set[str] = Field(default_factory=lambda: {"text"})
+
+    @field_serializer("required_modalities")
+    def stable_modalities(self, value):
+        return sorted(value)
 
     @field_validator("id")
     @classmethod
@@ -312,6 +333,9 @@ class AgentConfig(_StrictModel):
     type: str = "llm"
     runtime: Literal["in_process", "local_process", "external"] = "in_process"
     harness: Literal["scripted", "structured_output"] | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    required_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    asset_root: str | None = None
     model: str | None = None
     api_format: str | None = None
     temperature: float | None = None
@@ -322,6 +346,9 @@ class AgentConfig(_StrictModel):
         base = self.model_dump(exclude={"role", "config"}, exclude_none=True)
         if "runtime" not in self.model_fields_set:
             base.pop("runtime", None)
+        for key in ("capabilities", "required_modalities", "asset_root"):
+            if key not in self.model_fields_set:
+                base.pop(key, None)
         result = {**base, **self.config}
         from .remote.seats import validate_runtime
         validate_runtime(result)
@@ -425,7 +452,9 @@ def load_release_declaration(path: str | Path) -> ReleaseDeclaration:
         bank_path = (path.parent / config.item_policy.bank_path).resolve()
         if not bank_path.is_file():
             raise FileNotFoundError(f"release item bank does not exist: {bank_path}")
-        actual = _sha256_file(bank_path)
+        from .items import ItemBank
+        bank = ItemBank.load(bank_path)
+        actual = bank.item_bank_sha256
         if actual != config.item_policy.item_bank_sha256:
             raise ValueError(
                 "release item bank digest mismatch: "
@@ -440,6 +469,10 @@ def load_experiment_config(path: str | Path) -> tuple[ExperimentConfig, ReleaseD
     experiment = ExperimentConfig.model_validate(_read_yaml(path))
     release = load_release_declaration(path.parent / experiment.release)
     _validate_agent_roles(experiment, release)
+    from .modalities import validate_seat
+    for agent in experiment.agents:
+        role = next((role for role in release.roles if role.id == agent.role), None)
+        validate_seat(agent.as_game_config(), release.required_modalities | (role.required_modalities if role else set()))
     return experiment, release
 
 

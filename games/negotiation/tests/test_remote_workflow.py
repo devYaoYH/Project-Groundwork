@@ -3,6 +3,7 @@ import runpy
 from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -109,10 +110,14 @@ def test_real_local_process_mixed_seat_preserves_mapping():
         assert not manager.episodes
 
 
-@pytest.mark.parametrize('mode', ['missing', 'failed', 'expiry', 'staged_failed', 'staged_expiry'])
-def test_failed_remote_operation_never_resolves_or_completes_episode(mode):
+@pytest.mark.parametrize('mode,staging_delay', [
+    ('missing', 0), ('failed', 0), ('expiry', 0), ('staged_failed', 0),
+    ('staged_expiry', 0), ('staged_expiry', .3),
+], ids=['missing', 'failed', 'expiry', 'staged_failed', 'staged_expiry', 'staged_expiry_slow_staging'])
+def test_failed_remote_operation_never_resolves_or_completes_episode(mode, staging_delay):
     from a2a_agent.mcp_client import execute
     from a2a_engine.remote.server import ManagedEpisode, RuntimeManager
+    expired = Event()
     with ExitStack() as stack:
         manager = stack.enter_context(RuntimeManager(NEGOTIATION_TOOLS))
         episode = manager.environment.registry.provision('failure', [0, 1], environment_id='negotiation')
@@ -126,11 +131,13 @@ def test_failed_remote_operation_never_resolves_or_completes_episode(mode):
             async def calls(invocation, original=original):
                 if invocation.operation == 'cheap_talk':
                     if mode.startswith('staged'):
+                        await asyncio.sleep(staging_delay)
                         await execute(invocation, await original(invocation))
                     if mode in {'failed', 'staged_failed'}:
                         raise RuntimeError('private provider details')
                     if mode in {'expiry', 'staged_expiry'}:
-                        await asyncio.sleep(2)
+                        expired.set()
+                        await asyncio.Event().wait()
                     if mode == 'missing':
                         return []
                 return await original(invocation)
@@ -144,7 +151,20 @@ def test_failed_remote_operation_never_resolves_or_completes_episode(mode):
         def make_agents():
             agents.extend(original_make())
             if 'expiry' in mode:
-                agents[0].timeout_s = .2
+                dispatcher = agents[0].dispatcher
+                original_dispatch = dispatcher.dispatch
+
+                def dispatch(seat, invocation, recorder=None, **kwargs):
+                    if invocation.operation == 'cheap_talk':
+                        deadline = recorder.deadline
+                        started = recorder.clock()
+                        # Advance the worker clock only after the policy has staged
+                        # its candidate, regardless of real MCP startup latency.
+                        clock = lambda: deadline + 1 if expired.is_set() else started
+                        recorder.clock = dispatcher.clock = clock
+                    return original_dispatch(seat, invocation, recorder, **kwargs)
+
+                dispatcher.dispatch = dispatch
             return agents
         game._make_agents = make_agents
         with pytest.raises(RuntimeError, match='negotiation runtime (operation failed|candidate missing)') as error:
@@ -156,6 +176,10 @@ def test_failed_remote_operation_never_resolves_or_completes_episode(mode):
             assert len([r for r in agents[0].records[-1] if 'action' in r]) == 1
         recorder = episode.seats[1].recorder
         assert recorder.closed
+        assert recorder.invocation.operation == 'cheap_talk'
+        if 'expiry' in mode:
+            assert expired.is_set() and recorder.closed_by == 'deadline'
+            assert recorder.completion is None
         assert recorder.call(NEGOTIATION_TOOLS[0], {'value': '{}'}, 'late').code == 'closed_turn'
 
 

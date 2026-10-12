@@ -1,4 +1,4 @@
-"""Generate the local release catalogue from all installed game packages."""
+"""Generate the shared release catalogue from all installed game packages."""
 import argparse
 import json
 import sys

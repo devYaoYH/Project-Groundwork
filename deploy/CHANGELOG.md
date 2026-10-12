@@ -1,5 +1,56 @@
 # Platform deployment changelog
 
+## Public onboarding and coding-agent setup — 2026-10-12
+
+- Render the landing page without login, including while authentication is
+  loading or unavailable. Workspace pages and private API access retain their
+  session and ownership checks.
+- Add copyable prompts for local setup and game authoring, manual Docker Compose
+  commands, and links to the installation guide, development skill, and
+  contributor instructions. Clipboard failures provide selectable prompt text.
+- Add repository `AGENTS.md`, a root skill entry point, and the installable
+  `skills/groundwork-development` workflow. Document the separate local API,
+  worker, and runtime stack, isolated checkout settings, Python development,
+  scripted verification, and preservation of existing data.
+- Fix scaffold imports to load the generated `environment.py`. Verify a fresh
+  scaffold with its generated tests and scripted SQLite execution/readback.
+- Serialize local Compose descriptor publication with cancellation cleanup so
+  provisioning cannot leave descriptor files after an episode is cancelled.
+  Reserve descriptor ownership before writing so single-worker signal exits
+  also clean up published files. Cover both paths with deterministic regressions.
+
+## Hosted Firestore catalogue — 2026-10-11
+
+- Publish build-generated environment declarations and checked-in template paths
+  to the shared `groundwork_catalogues` Firestore collection before API rollout.
+  Pin each revision to an immutable content hash, read it once per process, and
+  reuse the SQL-free catalogue adapter for hosted catalogue routes.
+- Preserve local file-backed Compose staging, per-owner experiment counts and
+  private compiler/evidence snapshots. Missing or corrupt hosted snapshots fail
+  explicitly; requests cannot silently rebuild a temporary catalogue database.
+- Add a create/get-only build publisher role and document the one-time bootstrap
+  prerequisite. Publication verifies read-back and rejects snapshots above 900 KB.
+  Old snapshots remain available for rollback. This PR stages code and tests; it
+  does not change live GCP permissions or claim a hosted deployment.
+
+
+## Catalog publication with scoped storage access — 2026-10-11
+
+- Publish runtime bindings through an exact-object GCS JSON API upload with
+  `ifGenerationMatch=0`. Avoid the bucket-wide object listing performed by
+  `gcloud storage cp`, preserving the build identity's catalog-prefix grants.
+- Accept an existing catalog only when its bytes match the expected content
+  hash. Upload or verification failures stop publication before API rollout.
+
+
+## First runtime publication lookup — 2026-10-11
+
+- Recognize the exact `gcloud artifacts docker images describe` diagnostic
+  `Image not found.` when the first immutable runtime tag has not been published.
+  Build the missing runtime while continuing to reject permission, network and
+  other lookup failures before any publication or API rollout.
+
+
 ## Independent runtime and worker pins — 2026-10-11
 
 - Keep each experiment's runtime image, source SHA and frozen plan immutable while

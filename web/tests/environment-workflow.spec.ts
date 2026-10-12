@@ -254,20 +254,25 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
   });
 }
 
-test('persisted Negotiation replay remains usable beside lanes/transcript', async ({ page, request }) => {
+test('persisted Negotiation chat shares the lanes cursor without a replay iframe', async ({ page, request }) => {
   const uid = 'workflow-browser-negotiation';
   const detail = await (await request.get(`/api/episodes/${uid}`)).json();
   expect(detail.episode.metrics.num_rounds).toBe(2);
   await page.goto(`/episode/?uid=${uid}`);
   await expect(page.getByRole('heading', { name: 'Transcript', exact: true })).toBeVisible();
   await expect(page.locator('.transcript-line')).toHaveCount(detail.cursor_max);
-  const frame = page.frameLocator('iframe[title="negotiation replay"]');
-  await expect(frame.locator('#liveGameId')).toHaveText(uid);
+  await expect(page.locator('iframe')).toHaveCount(0);
+  await expect(page.locator('.chat-left .chat-message').first()).toBeVisible();
+  await expect(page.locator('.chat-right .chat-message').first()).toBeVisible();
+  const cursor = page.getByRole('slider', { name: 'Episode cursor' });
+  await expect(cursor).toHaveValue(String(detail.cursor_max - 1));
   await page.getByRole('button', { name: 'Step back', exact: true }).click();
+  await expect(cursor).toHaveValue(String(detail.cursor_max - 2));
   await page.getByRole('button', { name: 'Step', exact: true }).click();
-  await expect(frame.locator('#liveStatus')).toHaveText(`${detail.cursor_max}/${detail.cursor_max} events`);
-  await expect(frame.locator('#liveRounds')).toContainText('Round');
-  await expect(frame.locator('#humanInputBar')).toBeHidden();
+  await expect(cursor).toHaveValue(String(detail.cursor_max - 1));
+  await expect(page.locator('.scrubber .mono')).toHaveText(`${detail.cursor_max}/${detail.cursor_max}`);
+  await page.locator('.chat-payload summary').first().click();
+  await expect(cursor).toHaveValue(String(detail.cursor_max - 1));
 });
 
 for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {

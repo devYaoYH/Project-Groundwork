@@ -115,6 +115,9 @@ class RuntimeManager:
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
                                                      join_timeout_s=config.get("join_timeout_s", 10),
                                                      environment_id=config.get("environment_id", "calendar"))
+        for index, spec in remote.items():
+            episode.seats[index].required_modalities = set(spec.get("required_modalities", config.get("required_modalities", ["text"])))
+            episode.seats[index].asset_root = config.get("asset_root")
         runtime = ManagedEpisode(self, episode)
         with self.lock:
             self.episodes.add(runtime)

@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterator
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
+from a2a_engine.content import ContentPart, TextPart, parts
 from a2a_engine.schemas import ParticipantBinding, EpisodeTrace
 
 
@@ -27,6 +28,7 @@ class GameMessage(BaseModel):
     turn: int
     speaker: str
     text: str
+    content: str | list[ContentPart] | None = None
     timestamp: datetime
 
 
@@ -72,10 +74,13 @@ class EpisodeRecord(BaseModel):
             data = ev.data or {}
             speaker = data.get("speaker")
             text = data.get("text")
+            content = data.get("content")
             if ev.type == "message" or (speaker and text is not None):
-                if speaker is None or text is None:
+                if speaker is None or (text is None and content is None):
                     continue
-                out.append(GameMessage(turn=turn, speaker=str(speaker), text=str(text), timestamp=ev.timestamp))
+                if text is None:
+                    text = "\n".join(part.text for part in parts(content) if isinstance(part, TextPart))
+                out.append(GameMessage(turn=turn, speaker=str(speaker), text=str(text), content=content, timestamp=ev.timestamp))
                 turn += 1
         return out
 

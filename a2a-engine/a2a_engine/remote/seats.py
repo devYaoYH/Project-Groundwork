@@ -26,6 +26,8 @@ def validate_runtime(spec: dict) -> str:
 
 
 def validate_runtimes(config, *, scripted=False):
+    from a2a_engine.modalities import validate_config
+    validate_config(config)
     specs = config.get("agents", [])
     for spec in specs:
         runtime = validate_runtime(spec)
@@ -69,7 +71,7 @@ class LocalProcessLauncher:
                 required += ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]
             env.update({key: os.environ[key] for key in required if key in os.environ})
             fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
-                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra") if key in spec}
+                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra", "capabilities") if key in spec}
             env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
         options = ["--environment-id", environment_id] if environment_id != "calendar" else []
         self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness,
@@ -86,6 +88,10 @@ class LocalProcessLauncher:
             self.process.wait(timeout=5)
 
 
+def descriptor_path(directory, episode, seat):
+    return Path(directory) / f"{episode.episode_id}-seat-{seat.seat}.json"
+
+
 def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     from .joinlink import encode_join_link
     descriptor = {"join_url": join_url, "seat": seat.seat,
@@ -100,7 +106,7 @@ def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise ValueError("provisioning directory must be owner-only")
-    path = directory / f"{episode.episode_id}-seat-{seat.seat}.json"
+    path = descriptor_path(directory, episode, seat)
     temporary = directory / f".descriptor-{uuid.uuid4().hex}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -126,6 +132,9 @@ class ExternalSeat:
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
     recorder: object = field(default=None, repr=False)
     protocol_version: str = "a2a-turns/1"
+    required_modalities: set[str] = field(default_factory=lambda: {"text"})
+    input_modalities: set[str] = field(default_factory=lambda: {"text"})
+    asset_root: str | None = field(default=None, repr=False)
 
 
 class EpisodeContext:

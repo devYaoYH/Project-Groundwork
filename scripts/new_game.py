@@ -66,7 +66,7 @@ Importing this package registers the environment via ``environment.py``'s ``regi
 side effect. See ``SPEC.md`` for the protocol.
 """
 
-from {snake}.game import {cls}Config, {cls}Environment
+from {snake}.environment import {cls}Config, {cls}Environment
 
 __all__ = ["{cls}Config", "{cls}Environment"]
 '''
@@ -314,7 +314,7 @@ Test the rules of the environment, not the behavior of a model.
 
 from __future__ import annotations
 
-from {snake}.game import {cls}Config, {cls}Environment
+from {snake}.environment import {cls}Config, {cls}Environment
 
 
 def run(**overrides):

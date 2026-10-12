@@ -82,6 +82,23 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json(self._control().environment_workflow(environment_id))
             except KeyError:
                 return self._json({"error": "environment not found"}, 404)
+        if parsed.path.startswith("/api/environments/") and "/assets/" in parsed.path:
+            environment_id, digest = parsed.path.removeprefix("/api/environments/").split("/assets/", 1)
+            try:
+                payload, mime = self._control().environment_asset(unquote(environment_id), digest)
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # The researcher may navigate away while an image loads.
+                return
+            except (KeyError, ValueError, FileNotFoundError):
+                return self._json({"error": "asset unavailable"}, 404)
         if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/items"):
             environment_id = unquote(
                 parsed.path.removeprefix("/api/environments/").removesuffix("/items").rstrip("/")
@@ -143,6 +160,27 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json(self._episode_page(parse_qs(parsed.query)))
             except ValueError as exc:
                 return self._json({"error": str(exc)}, 400)
+        if parsed.path.startswith("/api/episodes/") and "/assets/" in parsed.path:
+            uid, digest = parsed.path.removeprefix("/api/episodes/").split("/assets/", 1)
+            try:
+                from a2a_engine.episode_media import read_episode_image
+                trace = self._store().get_episode(unquote(uid))
+                if trace is None:
+                    raise KeyError("episode unavailable")
+                payload, mime = read_episode_image(trace, digest, self.database.parent / "assets")
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # A view switch can cancel an in-flight image request.
+                return
+            except (KeyError, ValueError, FileNotFoundError):
+                return self._json({"error": "asset unavailable"}, 404)
         if parsed.path.startswith("/api/episodes/") and parsed.path.endswith("/observability"):
             episode_uid = unquote(parsed.path.removeprefix("/api/episodes/").removesuffix("/observability"))
             payload = self._observability(episode_uid)

@@ -1,9 +1,13 @@
 """Deployment preserves legacy pins and creates immutable infrastructure pairs."""
 import copy
+import hashlib
+import io
 import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
@@ -89,20 +93,35 @@ def test_existing_runtime_source_tag_is_reused_without_rebuild(tmp_path, monkeyp
     assert (tmp_path / "runtime-image").read_text() == tag.rsplit(":", 1)[0] + "@" + NEW_DIGEST
 
 
-def test_runtime_lookup_permission_failure_aborts_instead_of_overwriting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("diagnostic", [
+    "PERMISSION_DENIED",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Connection reset by peer",
+    "PERMISSION_DENIED: Image not found.",
+    "Network error while checking NOT_FOUND status",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Image not found. Access denied.",
+])
+def test_runtime_lookup_failure_aborts_instead_of_overwriting(tmp_path, monkeypatch, diagnostic):
     runtime_cli(tmp_path, monkeypatch)
     def denied(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["gcloud"], stderr="PERMISSION_DENIED")
+        raise subprocess.CalledProcessError(1, ["gcloud"], stderr=diagnostic)
     monkeypatch.setattr(prepare_runtime, "command", denied)
     with pytest.raises(RuntimeError, match="refusing to rebuild or overwrite"):
         prepare_runtime.main()
     assert not (tmp_path / "runtime-image").exists()
 
 
-def test_only_explicit_runtime_not_found_selects_build(tmp_path, monkeypatch):
+@pytest.mark.parametrize("diagnostic", [
+    "NOT_FOUND: Requested entity was not found",
+    "ERROR: (gcloud.artifacts.docker.images.describe) NOT_FOUND: Requested entity was not found",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Image not found.\n\n"
+    "A valid container image can be referenced by tag or digest, has the format of\n"
+    "  LOCATION-docker.DOMAIN/PROJECT-ID/REPOSITORY-ID/IMAGE:tag\n"
+    "  LOCATION-docker.DOMAIN/PROJECT-ID/REPOSITORY-ID/IMAGE@sha256:digest\n",
+])
+def test_only_explicit_runtime_not_found_selects_build(tmp_path, monkeypatch, diagnostic):
     tag = runtime_cli(tmp_path, monkeypatch)
     def missing(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["gcloud"], stderr="NOT_FOUND: Requested entity was not found")
+        raise subprocess.CalledProcessError(1, ["gcloud"], stderr=diagnostic)
     monkeypatch.setattr(prepare_runtime, "command", missing)
     prepare_runtime.main()
     assert not (tmp_path / "runtime-existing").exists()
@@ -150,3 +169,147 @@ def test_hosted_verifier_reads_catalog_and_pair_without_executing(monkeypatch):
     release.task_spec(manifest)["containers"][0]["env"].append({"name": "OPENAI_API_KEY", "value": "invalid-worker-mount"})
     with pytest.raises(AssertionError, match="provider credentials"):
         verify_hosted.verify_runtime_bindings("project", "us-central1", NEW_SOURCE)
+
+
+def test_release_passes_published_catalogue_pin_to_revision(monkeypatch):
+    pin = "c" * 64
+    monkeypatch.setattr(sys, "argv", ["release", "--project", "project", "--image", WORKER_IMAGE,
+        "--source-sha", NEW_SOURCE, "--runtime-image", NEW_IMAGE, "--runtime-source-sha", NEW_SOURCE,
+        "--oauth-client-id", "test.apps.googleusercontent.com", "--catalogue-sha256", pin])
+    monkeypatch.setattr(release, "exists", lambda args: False)
+    monkeypatch.setattr(release, "service_url", lambda *args: "https://test.run.app")
+    monkeypatch.setattr(release, "publish_catalog", lambda *args: None)
+    calls = []
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        if arguments[:3] == ["run", "jobs", "list"]:
+            return "[]"
+        return ""
+    monkeypatch.setattr(release, "command", run)
+    release.main()
+    deployed = next(args for args in calls if args[:2] == ["run", "deploy"])
+    variables = deployed[deployed.index("--set-env-vars") + 1]
+    assert "PLATFORM_CATALOGUE_SHA256=" + pin in variables.split(",")
+    monkeypatch.setattr(sys, "argv", sys.argv[:-1] + ["latest"])
+    calls.clear()
+    with pytest.raises(ValueError, match="published catalogue content hash"):
+        release.main()
+    assert not calls
+
+
+def test_build_publishes_tested_image_catalogue_before_api_rollout():
+    build = yaml.safe_load((Path(__file__).resolve().parents[2] / "cloudbuild.yaml").read_text())
+    steps = build["steps"]
+    order = {step["id"]: index for index, step in enumerate(steps)}
+    assert order["platform-tests"] < order["push"] < order["publish-catalogue"] < order["publish"]
+    publication = steps[order["publish-catalogue"]]
+    image_build = steps[order["build"]]
+    assert publication["name"] == image_build["args"][image_build["args"].index("-t") + 1]
+    assert publication["entrypoint"] == "python"
+    assert publication["args"][:2] == ["-m", "cloud_platform.publish_catalogue"]
+    assert "--catalogue-sha256" in steps[order["publish"]]["args"][-1]
+    assert ".platform-build/catalogue-sha256" in steps[order["publish"]]["args"][-1]
+
+
+def catalog_upload_fixture():
+    catalog = release.binding_catalog(WORKER_IMAGE, NEW_SOURCE,
+        {NEW_DIGEST: {"runtime_image": NEW_IMAGE, "runtime_source_sha": NEW_SOURCE}})
+    payload = json.dumps(catalog, sort_keys=True, separators=(",", ":")).encode()
+    key = f"platform/runtime-bindings/{WORKER_DIGEST[7:]}/{hashlib.sha256(payload).hexdigest()}.json"
+    return key, payload
+
+
+def test_catalog_upload_uses_exact_object_create_precondition_and_private_token(monkeypatch, capsys):
+    key, payload = catalog_upload_fixture()
+    commands, requests = [], []
+    def token(arguments, **kwargs):
+        commands.append((arguments, kwargs))
+        return "private-build-token"
+    def upload(request, *, timeout):
+        requests.append(request)
+        assert timeout == 30
+        return io.BytesIO(b'{"generation":"1"}')
+    monkeypatch.setattr(release, "command", token)
+    monkeypatch.setattr(release, "urlopen", upload)
+    release.publish_catalog("project", key, payload)
+    assert commands == [(["auth", "print-access-token", "--project", "project"], {"capture": True})]
+    assert len(requests) == 1
+    request = requests[0]
+    url = urlsplit(request.full_url)
+    assert url.scheme == "https" and url.netloc == "storage.googleapis.com"
+    assert url.path == "/upload/storage/v1/b/project-groundwork-artifacts/o"
+    assert parse_qs(url.query) == {"uploadType": ["media"], "name": [key], "ifGenerationMatch": ["0"]}
+    assert request.get_method() == "POST" and request.data == payload
+    assert request.get_header("Authorization") == "Bearer private-build-token"
+    assert request.get_header("Content-type") == "application/json"
+    assert "private-build-token" not in "".join(capsys.readouterr())
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_existing_catalog_requires_exact_bytes_after_generation_precondition(monkeypatch, conflicting):
+    key, payload = catalog_upload_fixture()
+    requests = []
+    monkeypatch.setattr(release, "command", lambda *args, **kwargs: "private-build-token")
+    def upload(request, *, timeout):
+        requests.append(request)
+        assert timeout == 30
+        if len(requests) == 1:
+            raise HTTPError(request.full_url, 412, "Precondition Failed", {}, None)
+        return io.BytesIO(payload + (b"changed" if conflicting else b""))
+    monkeypatch.setattr(release, "urlopen", upload)
+    if conflicting:
+        with pytest.raises(RuntimeError, match="conflicting contents"):
+            release.publish_catalog("project", key, payload)
+    else:
+        release.publish_catalog("project", key, payload)
+    assert [request.get_method() for request in requests] == ["POST", "GET"]
+    assert requests[1].full_url == (
+        "https://storage.googleapis.com/storage/v1/b/project-groundwork-artifacts/o/"
+        + key.replace("/", "%2F") + "?alt=media")
+    assert all(request.get_header("Authorization") == "Bearer private-build-token" for request in requests)
+
+
+@pytest.mark.parametrize("invalid", ["namespace", "content-hash", "worker-digest"])
+def test_catalog_namespace_and_digest_validation_precedes_any_cloud_access(monkeypatch, invalid):
+    key, payload = catalog_upload_fixture()
+    if invalid == "namespace":
+        key = key.replace("platform/runtime-bindings/", "users/alice/")
+    elif invalid == "content-hash":
+        payload += b" "
+    else:
+        key = key.replace(WORKER_DIGEST[7:], NEW_DIGEST[7:])
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Invalid catalog attempted cloud access")
+    monkeypatch.setattr(release, "command", unexpected)
+    monkeypatch.setattr(release, "urlopen", unexpected)
+    with pytest.raises(ValueError, match="private namespace"):
+        release.publish_catalog("project", key, payload)
+
+
+@pytest.mark.parametrize("failure", ["permission", "network"])
+def test_catalog_permission_or_network_failure_prevents_api_rollout(monkeypatch, capsys, failure):
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["release.py", "--project", "project", "--image", WORKER_IMAGE,
+        "--source-sha", NEW_SOURCE, "--runtime-image", NEW_IMAGE, "--runtime-source-sha", NEW_SOURCE,
+        "--oauth-client-id", "test.apps.googleusercontent.com", "--catalogue-sha256", "c" * 64])
+    monkeypatch.setattr(release, "exists", lambda *args, **kwargs: False)
+    def command(arguments, **kwargs):
+        calls.append(arguments)
+        if arguments[:3] == ["run", "jobs", "list"]:
+            return "[]"
+        if arguments[:2] == ["auth", "print-access-token"]:
+            assert kwargs == {"capture": True}
+            return "private-build-token"
+        assert arguments[:3] == ["run", "jobs", "replace"]
+        return 0
+    def upload(request, *, timeout):
+        if failure == "permission":
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+        raise URLError("Connection reset by peer")
+    monkeypatch.setattr(release, "command", command)
+    monkeypatch.setattr(release, "urlopen", upload)
+    with pytest.raises(RuntimeError, match="API rollout aborted"):
+        release.main()
+    assert not any(arguments[:3] == ["run", "deploy", "groundwork-control"] for arguments in calls)
+    assert not any(arguments[0] == "storage" for arguments in calls)
+    assert "private-build-token" not in "".join(capsys.readouterr())

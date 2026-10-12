@@ -104,12 +104,12 @@ def run_game_async(config, agent_a, agent_b, agents_cfg, consent, experiment_lab
     game_events[gid] = []
     game_engines[gid] = engine
 
-    async def on_event(etype, data):
-        ev = {"type": etype, "data": data}
+    async def on_event(etype, data, *, synthetic=False):
+        ev = {"type": etype, "data": data, "synthetic": synthetic}
         game_events[gid].append(ev)
         log.info("[%s] event: %s", gid[:8], etype)
 
-    engine.on_event(on_event)
+    engine.on_event(on_event, envelope_metadata=True)
 
     async def run():
         log.info("[%s] environment starting (%s)", gid[:8], config.mode.value)

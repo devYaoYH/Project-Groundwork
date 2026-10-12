@@ -144,7 +144,7 @@ class NegotiationGame:
 
     # --- event adaptation ---
 
-    def _record(self, event_type: str, data: dict) -> None:
+    def _record(self, event_type: str, data: dict, *, synthetic: bool = False) -> None:
         """Translate one engine event into a Event.
 
         Cheap-talk events get a ``{speaker, text}`` projection layered on top of
@@ -158,7 +158,7 @@ class NegotiationGame:
             if speaker is not None and text is not None:
                 payload.setdefault("speaker", speaker)
                 payload.setdefault("text", text)
-        event = Event(type=event_type, timestamp=datetime.now(timezone.utc), data=payload)
+        event = Event(type=event_type, timestamp=datetime.now(timezone.utc), data=payload, synthetic=synthetic)
         self.events.append(event)
         if self._publisher is not None:
             self._publisher.publish(event)
@@ -189,7 +189,7 @@ class NegotiationGame:
         engine_config = _to_engine_config(self.config)
         _sync_effective_config(self.config, engine_config)
         engine = GameEngine(engine_config, *self._make_agents())
-        engine.on_event(self._on_engine_event)
+        engine.on_event(self._on_engine_event, envelope_metadata=True)
         await engine._start_game()
         return engine
 
@@ -226,9 +226,9 @@ class NegotiationGame:
             stopped=bool(result.get("stopped", False)),
         )
 
-    async def _on_engine_event(self, event_type: str, data: dict) -> None:
-        """Engine callbacks are async and called as ``cb(event_type, data)``."""
-        self._record(event_type, data or {})
+    async def _on_engine_event(self, event_type: str, data: dict, *, synthetic: bool = False) -> None:
+        """Preserve producer envelope metadata separately from the payload."""
+        self._record(event_type, data or {}, synthetic=synthetic)
 
 
 def _metrics_from_result(result: dict) -> dict[str, Any]:

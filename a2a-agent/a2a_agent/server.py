@@ -1,6 +1,7 @@
 """Signed hello/turn callback and private provisioning CLI."""
 
 import argparse
+from a2a_engine.modalities import policy_modalities
 import asyncio
 import hashlib
 import inspect
@@ -57,9 +58,12 @@ class ScriptedRuntime:
         loopback_url(join_url)
         loopback_url(callback_url)
         request = JoinRequest(join_ticket=self.ticket, callback_url=callback_url,
-                              protocol_versions=[PROTOCOL_VERSION], agent_info={"name": "a2a-agent", "version": "0.1.0"})
+                              protocol_versions=[PROTOCOL_VERSION], input_modalities=policy_modalities(self.policy), agent_info={"name": "a2a-agent", "version": "0.1.0"})
         async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
-            result = await client.post(join_url, json=request.model_dump())
+            payload = request.model_dump(mode="json")
+            if request.input_modalities == {"text"}:
+                payload.pop("input_modalities")  # Preserve text-only peers predating this extension.
+            result = await client.post(join_url, json=payload)
             result.raise_for_status()
             self.admission = JoinResponse.model_validate(result.json())
             loopback_url(self.admission.ready_url)

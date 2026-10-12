@@ -1,14 +1,14 @@
 import { defineConfig } from "@playwright/test";
 
-const baseURL = `http://127.0.0.1:${process.env.BROWSER_TEST_PORT ?? "8765"}`;
+const port = process.env.GROUNDWORK_BROWSER_PORT ?? "8765";
 
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
-  use: { baseURL, trace: "retain-on-failure" },
+  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
   webServer: {
     command: "uv run python tests/browser_server.py",
-    url: `${baseURL}/api/health`,
+    url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: false,
     timeout: 60000,
   },

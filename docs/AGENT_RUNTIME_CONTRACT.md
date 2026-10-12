@@ -154,3 +154,14 @@ uv run python scripts/export_turn_contract.py --protocol-version a2a-turns/2 --c
 Success/failure/graceful cancellation closes environment records, removes private descriptors and causes only that agent session's unfinished tasks to be cancelled. Signal cleanup also prevents a cancelled trace from being persisted as successful. Session/record retention remains bounded; this does not add durable recovery. Concurrent mixed-game launches have separate tools, capabilities, histories and deterministic runner provenance. The supported container suite checks eight parallel CLI episodes, concurrent browser/API launches, a repeated attempt, cancellation, redacted persisted readback and per-seat mounts; run `uv run pytest tests/runtime` for the full required gate.
 
 Only `docker-compose.runtime-provider.yml` enables agent provider egress and injects `OPENROUTER_API_KEY`, never into the viewer/environment. Internal `/credentials` returns provider-presence booleans, not values, so viewer readiness and runner preflight can check the agent service. Do not publish agent ports or print resolved provider Compose configuration. See `docs/LOCAL_STACK.md` for cloud-free startup and the bounded DeepSeek V4 Flash example; model/account availability still requires an explicitly approved live run.
+
+### Image observations
+
+`JoinRequest.input_modalities` advertises supported input modalities, defaulting
+to `[text]` for existing runtimes. Image seats require an explicit image
+advertisement. Typed `observation.content` carries ordered text/image parts;
+inline image bytes travel only within the authenticated invocation. Registration
+contains no image stimuli. Image-bearing invocations have a bounded larger body
+budget; ordinary requests and completions retain their existing limits. See
+[MULTIMODAL_INPUTS.md](MULTIMODAL_INPUTS.md) for asset integrity, capability
+admission and private seat projection requirements.

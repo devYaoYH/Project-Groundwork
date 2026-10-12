@@ -5,11 +5,12 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Chip } from "./Chip";
+import { EpisodeChat } from "./EpisodeChat";
+import { ChatTranscript } from "./ChatTranscript";
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
 import { EpisodeDetail, getEpisode } from "../lib/api";
-import { specialisedViewerUrl } from "../lib/environments";
-import { laneHue, projectLanes, projectTranscript } from "../lib/lanes";
+import { laneHue, projectChat, projectLanes, projectTranscript } from "../lib/lanes";
 
 const STATUS_TONE: Record<string, "plain" | "good" | "warn"> = {
   COMPLETED: "good",
@@ -33,12 +34,14 @@ export function EpisodeView() {
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const viewer = useRef<HTMLIFrameElement | null>(null);
+  const [showEvents, setShowEvents] = useState(false);
+  const [hideSystemEvents, setHideSystemEvents] = useState(false);
   const activeLine = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => {
     if (!uid) return;
     setDetail(null);
+    setShowEvents(false);
     setError(null);
     getEpisode(uid)
       .then((next) => {
@@ -61,21 +64,17 @@ export function EpisodeView() {
     () => projectTranscript(episode?.events, detail?.lanes),
     [episode?.events, detail?.lanes],
   );
+  const chat = useMemo(
+    () => projectChat(transcript, projection.rows, detail?.lanes),
+    [transcript, projection.rows, detail?.lanes],
+  );
+  const hasInputs = (episode?.events ?? []).some(event => ["observation", "seat_observation"].includes(event.type ?? ""));
   const cursorMax = projection.cursorMax;
   const bounded = Math.min(cursor, Math.max(0, cursorMax - 1));
 
-  // One cursor drives everything, including a viewer the environment shipped
-  // and this app knows nothing else about.
-  useEffect(() => {
-    viewer.current?.contentWindow?.postMessage(
-      { type: "cursor", index: bounded + 1 },
-      window.location.origin,
-    );
-  }, [bounded, detail]);
-
   useEffect(() => {
     activeLine.current?.scrollIntoView({ block: "nearest" });
-  }, [bounded]);
+  }, [bounded, chat, hideSystemEvents]);
 
   useEffect(() => {
     if (!playing || cursorMax === 0) return;
@@ -100,7 +99,6 @@ export function EpisodeView() {
   const experimentId = text(provenance.experiment_id);
   const cellId = text(provenance.cell_id);
   const status = episode.observability?.partial ? "PARTIAL" : episode.stopped ? "STOPPED" : "COMPLETED";
-  const viewerUrl = specialisedViewerUrl(environmentId, episode.episode_uid);
   const metrics = Object.entries(record(episode.metrics));
 
   return (
@@ -218,53 +216,29 @@ export function EpisodeView() {
         )}
       </section>
 
-      <div className="episode-panes">
-        <section className="card section-card">
-          <div className="section-heading">
-            <h2>Transcript</h2>
-            <p>Every recorded event in order. Chat supports {"{speaker, text}"} and Calendar's legacy content field.</p>
-          </div>
-          <ol className="transcript">
-            {transcript.map((line) => (
-              <li
-                className={`transcript-line${line.cursor === bounded ? " transcript-active" : ""}`}
-                key={line.cursor}
-                onClick={() => { setPlaying(false); setCursor(line.cursor); }}
-                ref={line.cursor === bounded ? activeLine : null}
-              >
-                <span className="transcript-meta">
-                  <em style={{ color: `hsl(${laneHue(projection.rows, line.laneId)} 42% 42%)` }}>{line.laneId}</em>
-                  <code>{line.type}</code>
-                </span>
-                {line.text ? <p>{line.text}</p> : <p className="muted">no text on this event</p>}
-                <ConfigDisclosure
-                  label="Show recorded payload"
-                  value={JSON.stringify(line.data, null, 2)}
-                />
-              </li>
-            ))}
-            {transcript.length === 0 ? <p className="empty-state">Nothing was said in this attempt.</p> : null}
-          </ol>
-        </section>
-
-        {viewerUrl ? (
-          <section className="card section-card">
-            <div className="section-heading">
-              <h2>{environmentId} replay</h2>
-              <p>The environment&apos;s own rendering, driven by the same cursor.</p>
-            </div>
-            <iframe
-              className="specialised-viewer"
-              onLoad={() => viewer.current?.contentWindow?.postMessage(
-                { type: "cursor", index: bounded + 1 }, window.location.origin,
-              )}
-              ref={viewer}
-              src={viewerUrl}
-              title={`${environmentId} replay`}
-            />
-          </section>
-        ) : null}
-      </div>
+      <section className="card section-card">
+        <div className="section-heading transcript-heading">
+          <h2>Transcript</h2>
+          {hasInputs ? <button type="button" className="text-link" onClick={() => setShowEvents(value => !value)}>{showEvents ? "Show chat" : "Show all events"}</button> : null}
+          {!hasInputs || showEvents ? <label className="transcript-filter">
+            <input type="checkbox" checked={hideSystemEvents} onChange={(event) => setHideSystemEvents(event.target.checked)} />
+            Hide system events
+          </label> : null}
+          <p>Every recorded event in order. Messages ({"{speaker, text}"}) are bubbles; other events sit between them.</p>
+        </div>
+        {hasInputs && !showEvents ? <EpisodeChat events={episode.events ?? []} lanes={detail?.lanes}
+          environmentId={environmentId ?? ""} episodeUid={episode.episode_uid} cursor={bounded}
+          onSelect={next => { setPlaying(false); setCursor(next); }} /> : <ChatTranscript
+          chat={chat}
+          lanes={projection.rows}
+          bounded={bounded}
+          hideSystemEvents={hideSystemEvents}
+          onSeek={(next) => { setPlaying(false); setCursor(next); }}
+          activeRef={activeLine}
+          environmentId={environmentId}
+          episodeUid={episode.episode_uid}
+        />}
+      </section>
 
       <section className="release-meta">
         <span>release <strong className="mono">{text(provenance.release_id) ?? "-"}</strong></span>

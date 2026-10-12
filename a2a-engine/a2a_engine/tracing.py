@@ -48,7 +48,8 @@ class EventLog:
         return log
 
     def append(self, type: str, data: dict[str, Any] | None = None, **extra) -> Event:
-        ev = Event(type=type, data=data or {}, **extra)
+        from a2a_engine.content import media_metadata
+        ev = Event(type=type, data=media_metadata(data or {}), **media_metadata(extra))
         with self._lock:
             self._events.append(ev)
         if self._sink is not None:

@@ -21,6 +21,28 @@ from a2a_engine.stream_projection import project_events_to_trace, project_stream
 from a2a_engine.tracing import EventLog
 
 
+def test_synthetic_envelope_roundtrips_schema_sink_and_projections(tmp_path):
+    sink = _sink(tmp_path)
+    published = []
+    log = EventLog(sink=sink, on_event=published.append)
+    log.append("game_start", {"num_agents": 2})
+    log.append("unknown_wrapper", {"synthetic": False}, synthetic=True, producer="test")
+    log.append("llm_streaming", {"synthetic": True})
+    log.append("game_end", {}, synthetic=False)
+    log.all()
+    entries = read_event_sink(sink.path)
+    assert [entry["event"]["synthetic"] for entry in entries] == [False, True, False, False]
+    assert published[1].model_dump()["producer"] == "test"
+    for trace in (project_events_to_trace(sink.path), project_stream_to_trace(entries, stream="test")):
+        assert [event.synthetic for event in trace.events] == [False, True, False, False]
+        assert trace.events[1].data == {"synthetic": False}
+        assert trace.events[2].data == {"synthetic": True}
+        restored = type(trace).model_validate_json(trace.model_dump_json())
+        assert restored.events == trace.events
+    assert Event.model_validate({"type": "llm_streaming", "data": {"synthetic": True}}).synthetic is False
+    assert Event.model_json_schema()["properties"]["synthetic"] == {"default": False, "title": "Synthetic", "type": "boolean"}
+
+
 def _sink(tmp_path, name="e1"):
     return JsonlEventSink(
         tmp_path / f"{name}.events.jsonl",

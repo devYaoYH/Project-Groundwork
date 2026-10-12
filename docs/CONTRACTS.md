@@ -491,3 +491,11 @@ what must not regress:
 ```bash
 uv run pytest a2a-engine/tests expt-runner/tests a2a-judge/tests games/negotiation/tests
 ```
+
+## Multimodal seat input
+
+[Text and image input contracts](MULTIMODAL_INPUTS.md) define typed observation
+content, explicit capability admission, content-addressed asset packaging,
+private remote delivery, provider mappings, and metadata-only persistence.
+New visual environments must project private seat content before prompt or
+transport construction and declare environment/role input requirements.

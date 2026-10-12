@@ -166,8 +166,10 @@ agents:
 is reported by name before a run starts rather than as a 401 during it. Values
 go in `.env`.
 
-The shipped pool includes two OpenRouter bindings — `ds-flash`
-(`deepseek/deepseek-v4-flash`) and `haiku-or` — because one `OPENROUTER_API_KEY`
+The shipped pool includes three OpenRouter bindings: `ds-flash`
+(`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
+(`deepseek/deepseek-v4.1-flash`, verified text and image input), and `haiku-or`.
+One `OPENROUTER_API_KEY`
 reaches many vendors cheaply, which makes it the practical way to explore a
 line-up before committing to a provider. `haiku` and `haiku-or` are the same
 model by two routes, which is the clearest illustration of why the pool is a
@@ -186,3 +188,9 @@ Three rules keep a line-up unambiguous:
 The pool is an input to resolution, not part of the record: what a run persists
 is the hydrated config with concrete model strings, exactly as an inline config
 would. A colleague reading the trace sees what actually ran.
+
+Image input requires explicit `capabilities.input: [text, image]` and a
+`capabilities.evidence` reference on the concrete binding, plus a supported
+provider adapter. Unknown support remains text-only. See
+[MULTIMODAL_INPUTS.md](MULTIMODAL_INPUTS.md) for agent-pool, design-roster, and
+remote runtime examples.

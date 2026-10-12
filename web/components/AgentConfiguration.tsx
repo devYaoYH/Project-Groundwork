@@ -49,6 +49,10 @@ export function AgentConfiguration() {
             columns={[
               { label: "name", className: "mono", render: (agent) => agent.name },
               { label: "model", className: "mono", render: (agent) => agent.model ?? "-" },
+              { label: "declared inputs", render: (agent) => {
+                const inputs = Array.isArray(agent.capabilities?.input) ? agent.capabilities.input : ["text"];
+                return `${inputs.join(", ")}${inputs.some((input) => input !== "text") && !agent.capabilities?.evidence ? " · verification required" : ""}`;
+              } },
               { label: "format", className: "mono", render: (agent) => agent.api_format ?? agent.type },
               { label: "endpoint", className: "mono", render: (agent) => agent.api_base ?? "default" },
               { label: "credential", render: (agent) => credentialState(agent, isPlatform) },

@@ -9,10 +9,10 @@ import httpx
 
 from .dispatch import LoopbackServer
 from .network import NetworkPolicy
-from .seats import validate_runtimes, write_descriptor
+from .seats import descriptor_path, validate_runtimes, write_descriptor
 from .server import EnvironmentApp, ManagedEpisode, RuntimeManager
 
-MODEL_FIELDS = frozenset({"type", "model", "api_base", "api_format", "temperature", "max_tokens"})
+MODEL_FIELDS = frozenset({"type", "model", "api_base", "api_format", "temperature", "max_tokens", "capabilities"})
 _managers = set()
 _manager_lock = threading.RLock()
 
@@ -112,30 +112,44 @@ class ComposeRuntimeManager(RuntimeManager):
                         raise ValueError("agent service provider credential is unavailable")
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
             environment_id=config["environment_id"], join_timeout_s=config.get("join_timeout_s", 10))
+        for index, spec in remote.items():
+            episode.seats[index].required_modalities = set(spec.get("required_modalities", config.get("required_modalities", ["text"])))
+            episode.seats[index].asset_root = config.get("asset_root")
         runtime = ManagedEpisode(self, episode)
+        # Cancellation closes episodes under this lock. Publish and register all
+        # descriptor paths before allowing cleanup to snapshot their ownership.
         with self.lock:
             if self.cancelled:
                 self.environment.registry.unregister(episode)
                 raise RuntimeError("runtime launch cancelled")
             self.episodes.add(runtime)
-        try:
-            for seat, spec in remote.items():
-                unsupported = {key for key, value in spec.items() if value not in (None, {}, [], "")}
-                unsupported -= MODEL_FIELDS | {"name", "id", "role", "runtime", "harness", "description"}
-                if unsupported:
-                    raise ValueError("unsupported Compose agent policy fields")
-                policy = {"type": "scripted"} if scripted else {key: value for key, value in spec.items() if key in MODEL_FIELDS}
-                if config["environment_id"] == "negotiation" and scripted:
-                    policy = {"type": "heuristic"}
-                directory = self.provisioning_dir / f"seat-{seat}"
-                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                os.chmod(directory, 0o700)
-                runtime.descriptors.append(write_descriptor(directory, episode, episode.seats[seat],
-                    f"{self.io.base_url}/episodes/{episode.episode_id}/join", policy=policy))
-            return runtime
-        except BaseException:
-            runtime.close()
-            raise
+            try:
+                for seat, spec in remote.items():
+                    unsupported = {key for key, value in spec.items() if value not in (None, {}, [], "")}
+                    unsupported -= MODEL_FIELDS | {"name", "id", "role", "runtime", "harness", "description", "required_modalities", "asset_root"}
+                    if unsupported:
+                        raise ValueError("unsupported Compose agent policy fields")
+                    policy = {"type": "scripted"} if scripted else {key: value for key, value in spec.items() if key in MODEL_FIELDS}
+                    if config["environment_id"] == "negotiation" and scripted:
+                        policy = {"type": "heuristic"}
+                    directory = self.provisioning_dir / f"seat-{seat}"
+                    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    os.chmod(directory, 0o700)
+                    path = descriptor_path(directory, episode, episode.seats[seat])
+                    if os.path.lexists(path):
+                        raise FileExistsError(path)
+                    # A same-thread signal can close this reentrant lock and
+                    # raise SystemExit before write_descriptor returns.
+                    runtime.descriptors.append(path)
+                    write_descriptor(directory, episode, episode.seats[seat],
+                        f"{self.io.base_url}/episodes/{episode.episode_id}/join", policy=policy)
+                    if runtime.closed or self.cancelled:
+                        path.unlink(missing_ok=True)
+                        raise RuntimeError("runtime launch cancelled")
+                return runtime
+            except BaseException:
+                runtime.close()
+                raise
 
     def __exit__(self, *args):
         try:

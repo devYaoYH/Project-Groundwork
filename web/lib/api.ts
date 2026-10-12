@@ -22,6 +22,7 @@ export type Parameter = {
 };
 
 export type Role = {
+  required_modalities?: string[];
   id: string;
   count: number;
   accepts: string[];
@@ -47,6 +48,7 @@ export type EnvironmentSummary = {
 };
 
 export type EnvironmentDetail = {
+  required_modalities?: string[];
   environment_id: string;
   release: {
     release_id: string;
@@ -68,6 +70,7 @@ export type EnvironmentDetail = {
 };
 
 export type Item = {
+  assets?: ImageReference[];
   item_id: string;
   params: Record<string, unknown>;
   oracle_result: unknown | null;
@@ -124,6 +127,7 @@ export type EpisodeFacet = { value: string; count: number };
 // One emitted event. `type` is environment-defined and `data` is a free dict,
 // so nothing beyond those two may be assumed present.
 export type TraceEvent = {
+  synthetic?: boolean | null;
   type?: string | null;
   timestamp?: string | null;
   data?: Record<string, unknown> | null;
@@ -213,6 +217,7 @@ export type CellEvidence = {
 };
 
 export type AgentBinding = {
+  capabilities?: { input?: string[]; evidence?: string };
   name: string;
   description: string;
   type: string;
@@ -458,3 +463,5 @@ export function launchExperiment(
     }),
   });
 }
+
+export type ImageReference = { type: "image"; asset: string; sha256: string; mime_type: string };

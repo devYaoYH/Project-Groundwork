@@ -59,7 +59,7 @@ def descriptor_policy(descriptor, directory, network):
     if "policy" not in descriptor and descriptor["environment_id"] in {"calendar", "probe"}:
         return ProbePolicy(directory, network)
     config = descriptor.get("policy", {"type": "scripted"})
-    if not isinstance(config, dict) or set(config) - {"type", "model", "api_base", "api_format", "temperature", "max_tokens"}:
+    if not isinstance(config, dict) or set(config) - {"type", "model", "api_base", "api_format", "temperature", "max_tokens", "capabilities"}:
         raise ValueError("unsupported agent policy")
     environment_id = descriptor["environment_id"]
     kind = config.get("type", "scripted")
