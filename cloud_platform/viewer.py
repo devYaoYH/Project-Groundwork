@@ -213,6 +213,14 @@ class Viewer:
         row = self.control.owned("episodes", identifier, owner)
         return json.loads(self.control.artifacts.get(row["artifact_json_key"]))
 
+    def episode_asset(self, identifier, digest, owner):
+        from a2a_engine.content import verify_image
+        from a2a_engine.episode_media import episode_image
+        row = self.control.owned("episodes", identifier, owner)
+        image = episode_image(self.raw_episode(identifier, owner), digest)
+        payload = self.control.artifacts.get(f"launches/{row['launch_id']}/assets/{image.sha256}")
+        return verify_image(image, payload), image.mime_type
+
     def episode(self, identifier, owner):
         trace = self.raw_episode(identifier, owner)
         config = trace.get("config") or {}

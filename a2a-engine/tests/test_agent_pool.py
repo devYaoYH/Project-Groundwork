@@ -116,6 +116,19 @@ def test_openrouter_entries_carry_the_routing_a_client_needs():
         assert entry.as_agent_config()["api_base"] == "https://openrouter.ai/api/v1"
 
 
+def test_shipped_deepseek_41_binding_admits_image_seats():
+    from pathlib import Path
+    from a2a_engine.modalities import validate_seat
+    workspace = Path(__file__).resolve().parents[2]
+    entry = load_agent_pool(workspace / "experiments").entry("ds-v4.1-flash")
+    config = entry.as_agent_config()
+    assert config["model"] == "deepseek/deepseek-v4.1-flash"
+    assert config["api_base"] == "https://openrouter.ai/api/v1"
+    assert config["api_format"] == "openai"
+    validate_seat(config, {"text", "image"})
+    assert entry.credential == "OPENROUTER_API_KEY"
+
+
 def test_one_logical_agent_can_be_reached_by_two_routes():
     """`haiku` and `haiku-or` are the same model on different paths — the whole
     reason the pool is a layer rather than a lookup."""

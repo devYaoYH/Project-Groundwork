@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -280,6 +281,11 @@ class Worker:
                 checksums[key] = hashlib.sha256(payload).hexdigest()
                 return key
             upload(prefix + "/trace.sqlite", snapshot.read_bytes())
+            # Generated visual observations are evidence, not release assets.
+            # SQLite persistence copies every recorded image beside its database.
+            for path in sorted((database.parent / "assets").glob("*")):
+                if path.is_file() and re.fullmatch(r"[0-9a-f]{64}", path.name):
+                    upload(prefix + "/assets/" + path.name, path.read_bytes())
             upload(prefix + "/runner.log", log_path.read_bytes())
             for path in sorted(results.rglob("*")):
                 if path.is_file() and not any(part.startswith(".") or part == "private-joins" for part in path.relative_to(results).parts):

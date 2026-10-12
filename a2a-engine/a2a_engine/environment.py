@@ -62,6 +62,15 @@ class ParameterConfig(_StrictModel):
     source: Literal["design", "item"] = "design"
     item_key: str | None = None          # bank column, when it is not ``name``
 
+    @field_validator("domain", mode="before")
+    @classmethod
+    def numeric_domain_from_yaml(cls, value, info):
+        # YAML/JSON encode a numeric interval as an array. Preserve categorical
+        # lists while normalizing intervals to the tuple used by validation.
+        if info.data.get("type") in {"integer", "continuous"} and isinstance(value, list):
+            return tuple(value)
+        return value
+
     @model_validator(mode="after")
     def _domain_matches_type(self) -> "ParameterConfig":
         if not self.name:

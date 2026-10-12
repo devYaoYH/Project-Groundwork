@@ -169,7 +169,10 @@ def test_s3_key_layout_is_unchanged(tmp_path, monkeypatch):
     assert seen[1] == "calendar-episodes/alice/exp1/exp1.b.0/g1.manifest.json"
 
 
-def test_firestore_without_client_degrades_to_local(tmp_path):
+def test_firestore_without_client_degrades_to_local(tmp_path, monkeypatch):
+    # Explicitly simulate unavailable Firestore; developer ADC must not turn
+    # this offline fallback test into a real cloud request.
+    monkeypatch.setattr(FirestoreEpisodeStore, "client", property(lambda self: None))
     store = FirestoreEpisodeStore(results_dir=tmp_path)
     store._client = None
     manifest = make_manifest()

@@ -1,6 +1,7 @@
 """Serve built Next export with the actual Python route and disposable storage."""
 
 import sys
+import os
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -40,7 +41,7 @@ with TemporaryDirectory(prefix="workflow-browser-") as directory:
     manifest = EpisodeManifest.from_run(config=config, experiment_name='workflow-browser', cell_id='cell',
         episode_idx=0, episode_uid=trace.episode_uid)
     SQLiteEpisodeStore(path=LocalStackHandler.database).put_episode(trace, manifest)
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), BrowserStackHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("GROUNDWORK_BROWSER_PORT", "8765"))), BrowserStackHandler)
     try:
         server.serve_forever()
     finally:

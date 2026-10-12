@@ -2,7 +2,9 @@
 
 import { ImageReference } from "../lib/api";
 
-export function MediaPreview({ value, environmentId }: { value: unknown; environmentId: string }) {
+export function MediaPreview({ value, environmentId, episodeUid, caption }: {
+  value: unknown; environmentId: string; episodeUid?: string; caption?: string;
+}) {
   const images: ImageReference[] = [];
   function visit(node: unknown) {
     if (Array.isArray(node)) node.forEach(visit);
@@ -14,8 +16,9 @@ export function MediaPreview({ value, environmentId }: { value: unknown; environ
   }
   visit(value);
   if (!images.length) return null;
-  return <figure><figcaption>Researcher inspection · agent visibility follows the recorded seat observation</figcaption>
+  const base = episodeUid ? `/api/episodes/${encodeURIComponent(episodeUid)}` : `/api/environments/${encodeURIComponent(environmentId)}`;
+  return <figure className="media-preview"><figcaption>{caption ?? "Recorded image input"}</figcaption>
     {images.map((image, index) => <img key={`${image.sha256}-${index}`} style={{ maxWidth: 320, maxHeight: 240, objectFit: "contain" }}
-      src={`/api/environments/${encodeURIComponent(environmentId)}/assets/${image.sha256}`} alt="Recorded image input" />)}
+      src={`${base}/assets/${image.sha256}`} alt="Recorded image input" />)}
   </figure>;
 }

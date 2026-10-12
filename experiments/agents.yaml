@@ -46,6 +46,19 @@ agents:
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY
 
+  ds-v4.1-flash:
+    description: DeepSeek V4.1 Flash via OpenRouter, with native text and image input.
+    type: llm
+    model: deepseek/deepseek-v4.1-flash
+    api_format: openai
+    api_base: https://openrouter.ai/api/v1
+    credential: OPENROUTER_API_KEY
+    capabilities:
+      input: [text, image]
+      evidence: https://openrouter.ai/deepseek/deepseek-v4.1-flash
+    temperature: 0.2
+    max_tokens: 4096
+
   # The same logical Haiku as above, routed through OpenRouter instead of the
   # Anthropic API. Useful for comparing routes, and an example of why the pool
   # exists: `haiku` and `haiku-or` differ only in how they are reached.
