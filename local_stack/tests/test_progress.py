@@ -154,6 +154,23 @@ def test_progress_comes_from_the_identity_join_not_from_the_runners_stdout(tmp_p
     assert sum(cell["completed"] for cell in progress["by_cell"]) == 2
 
 
+def test_opened_line_records_engine_identity_and_public_handle(tmp_path):
+    import json
+    from a2a_engine.remote.lobby import open_episode
+    control = _control(tmp_path)
+    control.launcher = SilentLauncher(control)
+    launch = control.launch_experiment(_experiment(control).id, smoke_test=True)
+    identifier = control.planned_episode_ids(launch.id)[0]
+    with open_episode(None, {"environment_id": "buyer_seller", "num_agents": 2}) as session:
+        control._line(launch.id, f"INFO expt_runner: opened {identifier} {session.handle.to_json()}")
+    attempt = next(a for a in control.launch_detail(launch.id)["attempts"] if a["episode_id"] == identifier)
+    assert attempt["engine_episode_id"] == session.handle.episode_id
+    assert attempt["engine_attempt_id"] == session.handle.attempt_id
+    opened = [e for e in control.events(launch.id) if e["kind"] == "episode.opened"]
+    assert opened[0]["payload"] == {"episode_id": identifier, "handle": json.loads(session.handle.to_json())}
+    control._line(launch.id, f"INFO expt_runner: opened {identifier} {{broken}}")
+
+
 def test_a_recovered_partial_episode_does_not_count_as_progress(tmp_path):
     control = _control(tmp_path)
     experiment = _experiment(control)

@@ -17,11 +17,12 @@ from pydantic import Field
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from .contract import CapabilityClaims, ToolOutcome, TurnInvocationV2, WireModel
-from .dispatch import DeliveryFailure, LoopbackServer, TurnDispatcherV2
+from .contract import PROTOCOL_VERSION_V2, CapabilityClaims, ToolOutcome, TurnInvocationV2, WireModel
+from .dispatch import LoopbackServer, TurnDispatcherV2
+from .lobby import Registration, open_episode
 from .network import NetworkPolicy
 from .seats import write_descriptor
-from .server import EnvironmentApp
+from .server import EnvironmentApp, ManagedEpisode, RuntimeManager
 from .turns import TurnRecorder, ToolSpec
 
 
@@ -45,6 +46,24 @@ PROBE_TOOLS = (
 )
 
 
+class ProbeRuntimeManager(RuntimeManager):
+    """Provision the fixed transport probe without registering a game environment."""
+
+    def provision(self, config, *, scripted=False):
+        episode = self.environment.registry.provision(uuid.uuid4().hex, [0],
+                                                     join_timeout_s=config["join_timeout_s"], environment_id="probe")
+        managed = ManagedEpisode(self, episode)
+        with self.lock:
+            self.episodes.add(managed)
+        try:
+            managed.descriptors.append(write_descriptor(self.provisioning_dir, episode, episode.seats[0],
+                                                        f"{self.io.base_url}/episodes/{episode.episode_id}/join"))
+            return managed
+        except BaseException:
+            managed.close()
+            raise
+
+
 class ProbeState(TypedDict, total=False):
     registered: bool
     completed: bool
@@ -59,11 +78,11 @@ class ProbeContext:
     deadline_s: float
     recorder: object = None
 
-    def invocation(self, kind):
+    def invocation(self):
         root = f"{self.io.base_url}/episodes/{self.episode.episode_id}"
         return TurnInvocationV2(environment_id="probe", episode_id=self.episode.episode_id,
                                 attempt_id=self.episode.attempt_id, seat=0, turn_id=uuid.uuid4().hex,
-                                kind=kind, operation={"register": "register", "turn": "probe", "episode_end": "episode_end"}[kind],
+                                kind="turn", operation="probe",
                                 phase="PROBE", deadline=datetime.now(timezone.utc) + timedelta(seconds=self.deadline_s),
                                 mcp={name: f"{root}/{name}/mcp" for name in ("env", "comm", "lifecycle")})
 
@@ -72,17 +91,9 @@ class ProbeContext:
                                 network=self.environment.network)
 
 
-def initialize(state: ProbeState, runtime: Runtime[ProbeContext]):
-    ctx = runtime.context
-    seat = ctx.episode.wait_ready(0)
-    ctx.dispatcher().dispatch(seat, ctx.invocation("register"))
-    seat.registered = True
-    return {"registered": True}
-
-
 def agent_turn(state: ProbeState, runtime: Runtime[ProbeContext]):
     ctx = runtime.context
-    invocation = ctx.invocation("turn")
+    invocation = ctx.invocation()
     claims = CapabilityClaims(episode_id=invocation.episode_id, attempt_id=invocation.attempt_id, seat=0,
                               turn_id=invocation.turn_id, phase="PROBE", exp=invocation.deadline.timestamp(),
                               allowed_tools=["env.record_probe", "env.worker_probe"])
@@ -101,25 +112,11 @@ def agent_turn(state: ProbeState, runtime: Runtime[ProbeContext]):
     return {"completed": completion is not None, "actions": recorder.close()}
 
 
-def finalize(state: ProbeState, runtime: Runtime[ProbeContext]):
-    ctx = runtime.context
-    if state.get("completed"):
-        try:
-            ctx.dispatcher().dispatch(ctx.episode.seats[0], ctx.invocation("episode_end"))
-        except DeliveryFailure:
-            pass
-    return {}
-
-
 def build_probe():
     builder = StateGraph(ProbeState, context_schema=ProbeContext)
-    builder.add_node("initialize", initialize)
     builder.add_node("agent_turn", agent_turn)
-    builder.add_node("finalize", finalize)
-    builder.add_edge(START, "initialize")
-    builder.add_edge("initialize", "agent_turn")
-    builder.add_edge("agent_turn", "finalize")
-    builder.add_edge("finalize", END)
+    builder.add_edge(START, "agent_turn")
+    builder.add_edge("agent_turn", END)
     return builder.compile()
 
 
@@ -153,20 +150,25 @@ def main():
 
     environment.app.routes.extend([Route("/health", status), Route("/status", status),
                                     Route("/release", release, methods=["POST"])])
-    with LoopbackServer(environment.app, bind_host="0.0.0.0", port=8000, network=network) as io:
-        episode = environment.registry.provision("probe", [0], join_timeout_s=60, environment_id="probe")
-        os.chmod(args.provisioning_dir, 0o700)
-        descriptor = write_descriptor(args.provisioning_dir, episode, episode.seats[0], io.base_url + "/episodes/probe/join")
-        context = ProbeContext(environment, io, episode, args.deadline)
+    manager = ProbeRuntimeManager(PROBE_TOOLS, provisioning_dir=args.provisioning_dir)
+    manager.environment = environment
+    manager.io = LoopbackServer(environment.app, bind_host="0.0.0.0", port=8000, network=network)
+    os.chmod(args.provisioning_dir, 0o700)
+    with manager:
+        session = open_episode(manager, {"environment_id": "probe", "num_agents": 1,
+                                         "agents": [{"runtime": "external"}], "join_timeout_s": 60})
+        managed = session.managed
+        context = ProbeContext(environment, managed.io, managed.episode, args.deadline)
 
         def run():
             try:
-                public["result"] = asyncio.run(build_probe().ainvoke({}, context=context))
+                with session.started({0: Registration({})}, protocols=frozenset({PROTOCOL_VERSION_V2}),
+                                     register_timeout_s=args.deadline, end_timeout_s=min(args.deadline, 2)):
+                    public["result"] = asyncio.run(build_probe().ainvoke({"registered": True}, context=context))
             except Exception:
                 public["error"] = "probe_failed"
             finally:
-                descriptor.unlink(missing_ok=True)
-                environment.registry.unregister(episode)
+                session.close()
                 public["done"] = True
 
         thread = threading.Thread(target=run, daemon=True)
@@ -175,8 +177,7 @@ def main():
             while True:
                 time.sleep(0.1)
         finally:
-            environment.registry.unregister(episode)
-            descriptor.unlink(missing_ok=True)
+            session.close()
             thread.join(args.deadline + 2)
 
 

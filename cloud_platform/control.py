@@ -363,7 +363,8 @@ class PlatformControl:
                            "mode,execution_path,created_at) VALUES (?,?,?,?,?,?,?,?)",
                            (launch.id, identifier, launch.status, parallelism, str(cp.path), mode,
                             execution_path, launch.created_at))
-                db.executemany("INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
+                db.executemany("INSERT INTO attempts (id,launch_id,episode_id,cell_id,episode_idx,attempt,"
+                               "status,episode_uri,error,started_at,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
                     (str(uuid.uuid4()), launch.id, config["episode_id"], config["provenance"]["cell_id"],
                      config["provenance"]["episode_idx"], ordinal, "QUEUED", None, None, None, None)
                     for config in configs])

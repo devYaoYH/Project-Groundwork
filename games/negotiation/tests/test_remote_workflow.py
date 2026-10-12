@@ -9,6 +9,8 @@ import pytest
 
 from a2a_agent.runtime_v2 import AgentRuntimeV2
 from a2a_engine.remote.dispatch import LoopbackServer
+from a2a_engine.remote.contract import PROTOCOL_VERSION_V2
+from a2a_engine.remote.lobby import EpisodeSession, Registration, SeatsUnavailable
 from a2a_engine.remote.server import EnvironmentApp
 from negotiation_game.backend.engine import GameEngine
 from negotiation_game.game import NegotiationConfig, NegotiationGame, _to_engine_config
@@ -56,14 +58,20 @@ def test_real_loopback_v2_observations_history_events_and_results(mode, talk):
         async def emit(kind, data):
             actual_events.append((kind, deepcopy(data)))
         engine.on_event(emit)
-        assert asyncio.run(engine.run_game()) == expected
+        async def play():
+            await engine._start_game()
+            session = EpisodeSession({**config, 'agents': [{'runtime': 'external'}, {'runtime': 'external'}]}, context)
+            with session.started({1: Registration({}), 0: Registration({})},
+                                 protocols=frozenset({PROTOCOL_VERSION_V2}), register_timeout_s=120):
+                return await engine.run_game()
+        assert asyncio.run(play()) == expected
         assert actual_events == events
         if mode == 'mock':
             for seat in (0, 1):
                 assert policies[seat].agent.messages == clients[seat].messages
                 assert policies[seat].agent._messages == clients[seat]._messages
         for remote in remotes:
-            assert all(len([r for r in records if 'action' in r]) == 1 for records in remote.records[1:-1])
+            assert all(len([r for r in records if 'action' in r]) == 1 for records in remote.records)
 
 
 def test_candidate_transport_retains_invalid_allocations_and_deduplicates():
@@ -256,12 +264,67 @@ def test_strategy_metadata_drops_raw_provider_data_and_sanitizes_errors():
 
 
 def test_remote_context_closes_even_when_backend_config_conversion_fails():
-    closed = []
-    context = SimpleNamespace(close=lambda: closed.append(True))
-    game = NegotiationGame({'mode': 'invalid'}, runtime_context=context)
-    with pytest.raises(ValueError):
-        game.run()
-    assert closed == [True]
+    from a2a_engine.remote.server import RuntimeManager
+    from a2a_engine.remote.lobby import open_episode
+    config = NegotiationConfig(mode='invalid', agents=[{'runtime': 'local_process'}, {'type': 'heuristic'}]).model_dump()
+    with RuntimeManager(NEGOTIATION_TOOLS) as manager:
+        session = open_episode(manager, config, scripted=True)
+        game = NegotiationGame(config, episode=session)
+        with session:
+            with pytest.raises(ValueError):
+                game.run()
+            assert not session.closed and not session.managed.closed
+        assert session.closed and session.managed.closed
+        assert not manager.episodes
+
+
+@pytest.mark.parametrize('seat', [0, 1])
+def test_seat_flip_parity(seat_flip_trace, seat):
+    config = {**fixture['CONFIG'], 'num_rounds': 1, 'enable_cheap_talk': False,
+              'resource_types': ['wood'], 'resource_supply': {'wood': 2},
+              'resource_costs': {'wood': 1}, 'agent_budget': 1, 'max_resource_types_per_turn': 1,
+              'agents': [{'type': 'heuristic'}, {'type': 'heuristic'}]}
+    traces = [seat_flip_trace(NegotiationGame, config, seat, runtime)
+              for runtime in ('in_process', 'local_process', 'external')]
+    for trace in traces[1:]:
+        assert [(e.type, e.data) for e in trace.events] == [(e.type, e.data) for e in traces[0].events]
+        assert trace.final_state == traces[0].final_state
+        assert trace.metrics == traces[0].metrics
+
+
+@pytest.mark.parametrize('failed_seat', [0, 1])
+def test_registration_failure_notifies_only_previously_registered_seats(failed_seat):
+    from a2a_engine.remote.server import RuntimeManager
+    with ExitStack() as stack:
+        manager = stack.enter_context(RuntimeManager(NEGOTIATION_TOOLS))
+        config = {**fixture['CONFIG'], 'agents': [{'runtime': 'external'}, {'runtime': 'external'}]}
+        episode = manager.environment.registry.provision('register-failure', [0, 1], environment_id='negotiation')
+        from a2a_engine.remote.server import ManagedEpisode
+        managed = ManagedEpisode(manager, episode)
+        manager.episodes.add(managed)
+        session = stack.enter_context(EpisodeSession(config, managed))
+        runtime = AgentRuntimeV2()
+        callback = stack.enter_context(LoopbackServer(runtime.app))
+        calls_seen = []
+        for seat in (0, 1):
+            policy = NegotiationStrategy(agent=fixture['make_controlled']('heuristic', seat))
+            original = policy.calls
+            async def calls(invocation, original=original, seat=seat):
+                calls_seen.append((seat, invocation.operation))
+                if seat == failed_seat and invocation.operation == 'register':
+                    raise RuntimeError('private provider details')
+                return await original(invocation)
+            policy.calls = calls
+            callback.run(runtime.join(manager.io.base_url + '/episodes/register-failure/join', callback.base_url,
+                                      episode.seats[seat].ticket, policy=policy))
+        game = NegotiationGame(config, episode=session)
+        assert list(game.registrations(None)) == [1, 0]
+        with pytest.raises(SeatsUnavailable) as error:
+            game.run()
+        assert error.value.seats == (failed_seat,)
+        assert [event.type for event in game.events] == ['game_start']
+        assert [seat for seat, operation in calls_seen if operation == 'episode_end'] == ([1] if failed_seat == 0 else [])
+        assert not managed.closed
 
 
 @pytest.mark.parametrize('environment,kind,operation,phase,parent', [

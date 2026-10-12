@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import Field, field_validator
 
-from a2a_engine.remote.contract import CapabilityClaims, PROTOCOL_VERSION_V2, ToolOutcome, TurnInvocationV2, WireModel
+from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocationV2, WireModel
 from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcherV2
 from a2a_engine.remote.turns import ToolSpec, TurnRecorder
 
@@ -92,41 +92,32 @@ class RemoteNegotiator:
     def _invoke(self, operation, observation):
         episode = self.runtime.episode
         root = f'{self.runtime.io.base_url}/episodes/{episode.episode_id}'
-        lifecycle = operation in {'register', 'episode_end'}
-        if not lifecycle and operation not in OPERATIONS:
+        if operation not in OPERATIONS:
             raise ValueError('unsupported Negotiation operation')
         invocation = TurnInvocationV2(environment_id='negotiation', episode_id=episode.episode_id,
             attempt_id=episode.attempt_id, seat=self.seat_id, turn_id=uuid.uuid4().hex,
-            kind=operation if lifecycle else 'turn', operation=operation,
-            phase=None if lifecycle else operation.upper(), observation=observation,
+            kind='turn', operation=operation,
+            phase=operation.upper(), observation=observation,
             deadline=datetime.now(timezone.utc) + timedelta(seconds=self.timeout_s),
             mcp={name: f'{root}/{name}/mcp' for name in ('env', 'comm', 'lifecycle')})
-        seat = episode.wait_ready(self.seat_id)
-        if seat.protocol_version != PROTOCOL_VERSION_V2:
-            raise RuntimeError('negotiation requires a2a-turns/2')
-        recorder = None
-        if not lifecycle:
-            capabilities = self.runtime.environment.registry.capabilities
-            claims = CapabilityClaims(episode_id=episode.episode_id, attempt_id=episode.attempt_id,
-                seat=self.seat_id, turn_id=invocation.turn_id, phase=invocation.phase,
-                allowed_tools=['env.submit_candidate'], exp=invocation.deadline.timestamp())
-            invocation.capability = capabilities.mint(claims)
-            recorder = TurnRecorder(invocation, claims, capabilities, stage_candidate)
-            with episode.lock:
-                seat.recorder = recorder
+        seat = episode.seats[self.seat_id]
+        capabilities = self.runtime.environment.registry.capabilities
+        claims = CapabilityClaims(episode_id=episode.episode_id, attempt_id=episode.attempt_id,
+            seat=self.seat_id, turn_id=invocation.turn_id, phase=invocation.phase,
+            allowed_tools=['env.submit_candidate'], exp=invocation.deadline.timestamp())
+        invocation.capability = capabilities.mint(claims)
+        recorder = TurnRecorder(invocation, claims, capabilities, stage_candidate)
+        with episode.lock:
+            seat.recorder = recorder
         try:
             completion = self.dispatcher.dispatch(seat, invocation, recorder)
         except DeliveryFailure:
             raise RuntimeError('negotiation runtime operation failed') from None
         finally:
-            records = recorder.close() if recorder else []
+            records = recorder.close()
             self.records.append(records)
         if completion is None:
             raise RuntimeError('negotiation runtime operation failed') from None
-        if operation == 'register':
-            seat.registered = True
-        if lifecycle:
-            return {}
         outputs = [record['action'] for record in records if 'action' in record]
         if len(outputs) != 1:
             raise RuntimeError('negotiation runtime candidate missing')

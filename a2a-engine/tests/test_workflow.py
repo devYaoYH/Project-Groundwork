@@ -16,7 +16,7 @@ def test_export_uses_executable_bindings_without_evaluation(monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("export executed game code")
 
-    for name in ("initialize", "check_turn", "can_continue", "select_guesser", "select_host",
+    for name in ("check_turn", "can_continue", "select_guesser", "select_host",
                  "guesser_observation", "host_observation", "word_guess_adapter", "record_guess",
                  "record_reply", "evaluate_exchange", "finalize"):
         original = getattr(workflow, name)
@@ -40,7 +40,8 @@ def test_export_uses_executable_bindings_without_evaluation(monkeypatch):
     agents = [node for node in root["nodes"] if node["kind"] == "agent_call"]
     assert [node["actor_selector"] for node in agents] == ["word_guess.workflow.select_guesser", "word_guess.workflow.select_host"]
     assert {edge.get("route_key") for edge in root["edges"] if edge["conditional"]} == {"continue", "finished"}
-    assert len(root["nodes"]) == 10 and len(root["edges"]) == 10
+    assert len(root["nodes"]) == 9 and len(root["edges"]) == 9
+    assert "initialize" not in {node["id"] for node in root["nodes"]}
     assert result == environment_workflow("word_guess")
     assert len(json.dumps(result)) < 10000
     assert all(not node.get("source_ref", {}).get("path", "").startswith("/") for node in root["nodes"])

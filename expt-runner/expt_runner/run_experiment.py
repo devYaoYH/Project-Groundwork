@@ -286,7 +286,10 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
                 manager = stack.enter_context(create_runtime_manager(runtime_capability(environment_id).tools, provisioning_dir=
                     os.environ.get("A2A_PROVISIONING_DIR") or results_dir / "private-joins"))
                 ctx = {**ctx, "runtime_manager": manager}
-            return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run)
+            from a2a_engine.remote.lobby import open_episode
+            session = stack.enter_context(open_episode(ctx.get("runtime_manager"), cfg, scripted=dry_run))
+            print(f"INFO expt_runner: opened {cfg['episode_id']} {session.handle.to_json()}", flush=True)
+            return _play(ctx, cfg, spec, store, environment_id, episode_uid, persist, dry_run, session)
     finally:
         if sink is not None:
             sink.close()
@@ -294,10 +297,10 @@ def _run_one(ctx: dict, store, results_dir: Path) -> str:
 
 
 def _play(ctx: dict, cfg: dict, spec, store, environment_id: str,
-          episode_uid: str, persist: bool, dry_run: bool) -> str:
+          episode_uid: str, persist: bool, dry_run: bool, session=None) -> str:
     from a2a_engine.workflow_runtime import runtime_capability
-    capability = runtime_capability(environment_id) if ctx.get("runtime_manager") else None
-    kwargs = capability.bind(ctx["runtime_manager"]) if capability else {}
+    capability = runtime_capability(environment_id)
+    kwargs = capability.bind(session) if capability else {}
     environment = spec.cls(config=cfg, dry_run=dry_run, **kwargs)
 
     tracer = get_tracer()

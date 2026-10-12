@@ -166,8 +166,13 @@ def test_export_is_complete_and_has_actual_retry_and_batch_boundaries_without_ex
     assert body["diagnostics"] == []
     assert len(body["graphs"]) == 8
     root = next(g for g in body["graphs"] if g["id"] == "root")
-    assert {e.get("route_key") for e in root["edges"]} >= {"ready", "unavailable", "next", "done", "eligible", "suppressed", "success", "depth_exceeded", "no_feasible_slot", "reflect", "skip"}
-    assert {n.get("operation") for n in root["nodes"]} >= {"register", "start_round", "episode_end"}
+    routes = {e.get("route_key") for e in root["edges"]}
+    assert routes >= {"next", "done", "eligible", "suppressed", "success", "depth_exceeded", "no_feasible_slot", "reflect", "skip"}
+    assert not routes & {"ready", "unavailable"}
+    operations = {n.get("operation") for n in root["nodes"]}
+    assert "start_round" in operations
+    assert not operations & {"register", "episode_end"}
+    assert not {n["id"] for n in root["nodes"]} & {"initialize", "external_readiness", "stopped_trace"}
     decision = next(g for g in body["graphs"] if g["id"] == "root/participant_decisions")
     assert {e.get("route_key") for e in decision["edges"]} >= {"retry", "stage", "apply", "exhausted", "commit", "rollback"}
     assert not any(node["kind"] == "batch" for node in decision["nodes"])

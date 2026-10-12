@@ -114,6 +114,7 @@ def run_game_async(config, agent_a, agent_b, agents_cfg, consent, experiment_lab
     async def run():
         log.info("[%s] environment starting (%s)", gid[:8], config.mode.value)
         try:
+            await engine._start_game()
             result = await engine.run_game()
             games[gid] = result
             save_game(gid, result, game_events[gid])

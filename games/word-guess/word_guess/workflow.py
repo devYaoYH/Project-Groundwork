@@ -21,19 +21,13 @@ class GameState(TypedDict, total=False):
 @dataclass
 class GameContext:
     game: object
+    roster: object = None
 
     def __post_init__(self):
         for name in ("guesser", "host"):
             agent = getattr(self.game, name)
             if not isinstance(agent, GuardedAgent):
                 setattr(self.game, name, GuardedAgent(agent))
-
-
-def initialize(state: GameState, runtime: Runtime[GameContext]):
-    game = runtime.context.game
-    game.events.append("game_start", data={"max_turns": game.config.max_turns,
-                                          "word_pool_size": len(game.config.word_pool)})
-    return {"history": [], "turns_used": 0, "guessed_word": None, "won": False}
 
 
 def check_turn(state: GameState):
@@ -92,7 +86,6 @@ def finalize(state: GameState, runtime: Runtime[GameContext]):
 
 def build_program():
     builder = StateGraph(GameState, context_schema=GameContext)
-    builder.add_node("initialize", initialize)
     builder.add_node("check_turn", check_turn)
     builder.add_node("guesser_call", AgentStep(select_guesser, "act", guesser_observation, word_guess_adapter))
     builder.add_node("record_guess", record_guess)
@@ -100,8 +93,7 @@ def build_program():
     builder.add_node("record_reply", record_reply)
     builder.add_node("evaluate_exchange", evaluate_exchange)
     builder.add_node("finalize", finalize)
-    builder.add_edge(START, "initialize")
-    builder.add_edge("initialize", "check_turn")
+    builder.add_edge(START, "check_turn")
     builder.add_conditional_edges("check_turn", can_continue, {"continue": "guesser_call", "finished": "finalize"})
     builder.add_edge("guesser_call", "record_guess")
     builder.add_edge("record_guess", "host_call")

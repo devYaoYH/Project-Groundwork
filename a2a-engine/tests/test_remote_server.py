@@ -182,7 +182,7 @@ def test_two_live_episodes_share_app_but_not_seat_authority(open_remote_turn):
             callback.run(runtime.join(f"{first.io.base_url}/episodes/sibling/join", callback.base_url))
             context = CalendarRuntimeContext(first.environment, first.io, episode)
             client = RemoteSeatClient(context, 0, first.client.router)
-            client.register(0, GameConfig(2, 2, 0, [0, 1], decision_retries=0))
+            stage = first.register_client(client, GameConfig(2, 2, 0, [0, 1], decision_retries=0))
             client.start_round({"id": 99, "participants": [0, 1], "duration": 1, "cost": 1}, "Slot 0: [FREE]", 0)
             client.prepare({"phase": "DECISION", "round": 0, "turn": 0, "prompt_sent": "sibling",
                             "calendar_snapshot_render": "Slot 0: [FREE]"}, 0)
@@ -196,5 +196,6 @@ def test_two_live_episodes_share_app_but_not_seat_authority(open_remote_turn):
             assert asyncio.run(call(second, "env", "schedule", {"meeting_id": 99, "slot": 0}, call_id="a"))["status"] == "accepted"
             assert first.client.seat.recorder.records == [{"action": {"type": "schedule", "meeting_id": 0, "slot": 0}}]
             assert client.seat.recorder.records == [{"action": {"type": "schedule", "meeting_id": 99, "slot": 0}}]
+            stage.__exit__(None, None, None)
     finally:
         first.environment.registry.unregister(episode)
