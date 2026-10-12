@@ -45,3 +45,26 @@ def test_calendar_no_show_fails_without_storing_episode(tmp_path, capsys):
     output = capsys.readouterr().out
     assert output.count("INFO expt_runner: opened ") == 1
     assert "ticket" not in output
+
+
+def test_external_credentials_never_reach_stdout_or_handle(tmp_path, monkeypatch, capsys):
+    import a2a_engine.remote.lobby as runner
+    original = runner.open_episode
+    credentials = []
+
+    def capture(*args, **kwargs):
+        session = original(*args, **kwargs)
+        for seat in session.managed.episode.seats.values():
+            credentials.append(seat.ticket)
+            assert seat.ticket not in session.handle.to_json()
+        assert "a2a-join:" not in session.handle.to_json()
+        return session
+
+    monkeypatch.setattr(runner, "open_episode", capture)
+    config = {"environment_id": "word_guess", "join_timeout_s": 0.05,
+              "agents": [{"type": "scripted", "runtime": "external"}, {"type": "scripted"}]}
+    context = _make_run_context("privacy", "link", config, 0, dry_run=True, persist=False)
+    _, errors = _run_contexts([context], None, tmp_path, max_workers=1, on_result=None, on_error=None)
+    assert len(errors) == 1 and credentials
+    output = capsys.readouterr().out
+    assert "a2a-join:" not in output and all(ticket not in output for ticket in credentials)

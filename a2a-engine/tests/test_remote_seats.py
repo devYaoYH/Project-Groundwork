@@ -73,6 +73,9 @@ def test_private_descriptor_and_stale_attempt_isolation(tmp_path):
         first = manager.provision(cfg)
         descriptor = first.descriptors[0]
         payload = json.loads(descriptor.read_text())
+        from a2a_engine.remote.joinlink import decode_join_link
+        assert decode_join_link(payload["join_link"]) == {key: payload[key] for key in
+            ("join_url", "seat", "environment_id", "expires_at", "join_ticket")}
         assert descriptor.stat().st_mode & 0o777 == 0o600
         assert payload["seat"] == 0 and payload["expires_at"] > time.time()
         assert payload["join_url"].startswith(manager.io.base_url)
@@ -126,7 +129,7 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
         return dump(payload, handle)
 
     monkeypatch.setattr("a2a_engine.remote.seats.json.dump", observed_dump)
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/atomic/join")
     assert json.loads(descriptor.read_text())["join_ticket"] == episode.seats[0].ticket
     assert descriptor.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob("*.tmp"))
@@ -135,10 +138,10 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
 def test_duplicate_descriptor_never_overwrites_existing_ticket(tmp_path):
     from a2a_engine.remote.seats import EpisodeContext, write_descriptor
     episode = EpisodeContext("duplicate", [0])
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/duplicate/join")
     original = descriptor.read_bytes()
     with pytest.raises(FileExistsError):
-        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/join")
+        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/episodes/duplicate/join")
     assert descriptor.read_bytes() == original
     assert not list(tmp_path.glob("*.tmp"))
 

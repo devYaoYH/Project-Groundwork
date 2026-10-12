@@ -87,6 +87,13 @@ class LocalProcessLauncher:
 
 
 def write_descriptor(directory, episode, seat, join_url, *, policy=None):
+    from .joinlink import encode_join_link
+    descriptor = {"join_url": join_url, "seat": seat.seat,
+                  "environment_id": episode.environment_id,
+                  "expires_at": seat.join_deadline, "join_ticket": seat.ticket}
+    descriptor["join_link"] = encode_join_link(descriptor)
+    if policy is not None:
+        descriptor["policy"] = policy
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError("provisioning directory must not be a symlink")
@@ -98,10 +105,7 @@ def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as handle:
-            json.dump({"join_url": join_url, "seat": seat.seat,
-                       "environment_id": episode.environment_id,
-                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket,
-                       **({"policy": policy} if policy is not None else {})}, handle)
+            json.dump(descriptor, handle)
         # Watchers must never observe a partially written, one-time descriptor.
         os.link(temporary, path)
     finally:

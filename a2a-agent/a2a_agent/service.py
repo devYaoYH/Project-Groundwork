@@ -10,6 +10,7 @@ from pathlib import Path
 
 from a2a_engine.remote.dispatch import LoopbackServer
 from a2a_engine.remote.network import NetworkPolicy
+from a2a_engine.remote.joinlink import decode_join_link, FIELDS
 from .mcp_client import execute
 from .runtime_v2 import AgentRuntimeV2
 from .scripted import ScriptedPolicy
@@ -38,9 +39,17 @@ def read_descriptor(path):
     with os.fdopen(fd) as handle:
         info = os.fstat(handle.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077 or info.st_size > 16384):
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16384):
             raise ValueError("unsafe provisioning descriptor")
-        descriptor = json.load(handle)
+        payload = handle.read(16385)
+        if len(payload.encode()) > 16384:
+            raise ValueError("oversized provisioning descriptor")
+        descriptor = json.loads(payload)
+    if "join_link" in descriptor:
+        decoded = decode_join_link(descriptor["join_link"])
+        if any(key in descriptor and descriptor[key] != decoded[key] for key in FIELDS):
+            raise ValueError("inconsistent provisioning descriptor")
+        descriptor.update(decoded)
     if descriptor["expires_at"] <= time.time():
         raise ValueError("expired provisioning descriptor")
     return descriptor
