@@ -7,6 +7,7 @@ import json
 from a2a_engine.remote.contract import TurnCompletion
 from a2a_engine.remote.dispatch import TurnDispatcher, loopback_url, post_signed
 from a2a_engine.remote.server import RuntimeManager
+from a2a_engine.remote.lobby import open_episode
 from .mcp_client import connect
 
 
@@ -78,20 +79,24 @@ def run_conformance(callback_url, provisioning_dir, *, join_timeout_s=30):
     scenario = {"seed": 42, "calendars": [[None] * 3, [None] * 3],
                 "meetings": [{"id": 0, "participants": [0, 1], "speaker_order": [0, 1], "duration": 1, "cost": 1}]}
     with RuntimeManager(CALENDAR_TOOLS, provisioning_dir=provisioning_dir) as manager:
-        runtime = manager.provision(config)
-        seat = runtime.episode.wait_ready(0)
-        require(seat.callback_url == callback_url, "admitted callback differs from supplied endpoint")
         probe = ProbeDispatcher(manager.io)
 
         class ConformanceGame(CalendarGame):
+            def _append_event(self, event_type, *, data):
+                if event_type == "agent_registered" and data["agent_id"] == 0:
+                    require(self.runtime_context.episode.seats[0].callback_url == callback_url,
+                            "admitted callback differs from supplied endpoint")
+                super()._append_event(event_type, data=data)
+
             def _build_agents(self, scenario):
                 agents = super()._build_agents(scenario)
                 self._remote_clients[0].dispatcher = probe
                 return agents
 
-        trace = ConformanceGame(config, runtime_context=runtime).run_with_scenario(scenario)
+        with open_episode(manager, config) as session:
+            trace = ConformanceGame(config, episode=session).run_with_scenario(scenario)
         require(not trace.stopped and trace.metrics["meetings_scheduled"] == 1, "tiny episode did not complete")
-        require(probe.endpoints == {"env", "comm"} and probe.duplicates >= 5, "transport coverage incomplete")
+        require(probe.endpoints == {"env", "comm"} and probe.duplicates >= 4, "transport coverage incomplete")
         messages = [event for event in trace.events if event.type == "dm_sent"]
         require(len(messages) == 2 and {event.data["agent_id"] for event in messages} == {0, 1},
                 "duplicate push repeated or lost a scripted send")

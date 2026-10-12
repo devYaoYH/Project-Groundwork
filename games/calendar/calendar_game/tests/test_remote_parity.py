@@ -36,6 +36,21 @@ def scenario():
             "meetings": [{"id": 0, "participants": [0, 1], "speaker_order": [0, 1], "duration": 1, "cost": 1}]}
 
 
+@pytest.mark.parametrize("seat", [0, 1])
+def test_seat_flip_deployment_parity_including_v1_child(seat_flip_trace, seat):
+    cfg = config()
+    local = seat_flip_trace(CalendarGame, cfg, seat, "in_process")
+    for runtime in ("local_process", "external"):
+        remote = seat_flip_trace(CalendarGame, cfg, seat, runtime)
+        assert normalized_events(remote) == normalized_events(local)
+        assert remote.final_state == local.final_state
+        assert remote.metrics == local.metrics
+        registered = next(event for event in remote.events
+                          if event.type == "agent_registered" and event.data["agent_id"] == seat)
+        assert registered.data["runtime"] == runtime
+        assert registered.data["protocol_version"] == "a2a-turns/1"
+
+
 @pytest.mark.parametrize("graph", ["complete", "ring", "star", "edges"])
 @pytest.mark.parametrize("remote_seats", [(0,), (1,), (0, 1)])
 def test_packaged_children_match_full_scripted_episode(graph, remote_seats):

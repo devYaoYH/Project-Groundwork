@@ -181,7 +181,7 @@ def test_provision_launch_failure_cleans_earlier_child(monkeypatch):
         assert children[0].process.poll() is not None
 
 
-def test_crashed_real_child_stops_episode_and_is_reaped(monkeypatch):
+def test_crashed_real_child_fails_attempt_and_is_reaped(monkeypatch):
     real = LocalProcessLauncher
 
     def crash(*args):
@@ -192,8 +192,10 @@ def test_crashed_real_child_stops_episode_and_is_reaped(monkeypatch):
 
     monkeypatch.setattr("a2a_engine.remote.seats.LocalProcessLauncher", crash)
     game = CalendarGame(config(join_timeout_s=0.2))
-    trace = game.run()
-    assert trace.stopped and trace.events[-1].data["reason"] == "seat_unavailable"
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    with pytest.raises(SeatsUnavailable, match="seat_unavailable"):
+        game.run()
+    assert [event.type for event in game.events.all()] == ["game_start"]
     assert game.runtime_context.closed and not game.runtime_manager.io.thread.is_alive()
     assert all(child.process.poll() is not None for child in game.runtime_context.children)
 

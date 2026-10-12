@@ -17,7 +17,6 @@ from .prompts import (
 
 class SchedulingState(TypedDict, total=False):
     round_num: int
-    ready: bool
     trace: object
     coordinated: bool
     per_agent_slot: dict
@@ -94,38 +93,6 @@ class EpisodeContext:
         if self.scheduling is not None and hasattr(self.scheduling, name):
             return getattr(self.scheduling, name)
         return getattr(self.domain, name)
-
-
-async def initialize_episode(state, runtime: Runtime):
-    ctx = runtime.context
-    ctx.domain = ctx.game._episode_domain(ctx.scenario, ctx.agents)
-    ctx.agents = ctx.domain.agents
-    return {"round_num": 0, "cursor": 0, "actor_order": list(range(len(ctx.agents))), "ready": True}
-
-
-async def await_external_readiness(state, runtime: Runtime):
-    ctx = runtime.context
-    if ctx.game.runtime_context is not None:
-        try:
-            for seat in ctx.game.runtime_context.episode.seats:
-                ctx.game.runtime_context.episode.wait_ready(seat)
-        except TimeoutError:
-            return {"ready": False}
-    return {}
-
-
-def readiness(state):
-    return "ready" if state["ready"] else "unavailable"
-
-
-async def register_agent(actor, operation, observation, state, context):
-    require_agent_step()
-    agent_id = state["actor_order"][state["cursor"]]
-    return {"ready": context.domain.register(agent_id, actor)}
-
-
-async def stopped_trace(state, runtime: Runtime):
-    return {"trace": runtime.context.domain.stopped()}
 
 
 def meeting_destination(state, runtime: Runtime):
@@ -235,19 +202,6 @@ async def advance_meeting(state):
 
 async def finalize_episode(state, runtime: Runtime):
     return {"trace": runtime.context.domain.finalize()}
-
-
-async def prepare_episode_end(state, runtime: Runtime):
-    ctx = runtime.context
-    ctx.reflection = None
-    ctx.scheduling = None
-    return {"actor_order": sorted(ctx.game._remote_clients), "cursor": 0}
-
-
-async def end_agent_episode(actor, operation, observation, state, context):
-    require_agent_step()
-    context.game._remote_clients[state["actor_order"][state["cursor"]]].episode_end()
-    return {}
 
 
 def select_ordered_actor(state, context):

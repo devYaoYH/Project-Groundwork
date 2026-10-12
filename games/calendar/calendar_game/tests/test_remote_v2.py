@@ -99,7 +99,7 @@ def test_v2_acknowledgement_never_completes_recorder_and_late_calls_fail(remote_
     harness = remote_harness_v2()
     game = CalendarGame(config())
     client = RemoteSeatClient(harness.context, 0, game.router)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     client.start_round(scenario()["meetings"][0], "Slot 0: [FREE]", 0)
     client.prepare({"phase": "DECISION", "round": 0, "turn": 0, "prompt_sent": "decide",
                     "calendar_snapshot_render": "Slot 0: [FREE]"}, 0)
@@ -127,7 +127,9 @@ def test_client_constructed_before_admission_selects_negotiated_dispatcher(remot
     assert isinstance(client.dispatcher, TurnDispatcher)
     harness.callback.run(harness.runtime.join(f"{harness.io.base_url}/episodes/episode/join", harness.callback.base_url,
                                               harness.episode.seats[0].ticket, policy=harness.policies[0]))
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]), select_dispatcher=False)
+    assert isinstance(client.dispatcher, TurnDispatcher)
+    client.start_round(scenario()["meetings"][0], "Slot 0: [FREE]", 0)
     assert isinstance(client.dispatcher, TurnDispatcherV2)
     assert harness.invocations[0].protocol_version == "a2a-turns/2"
 
@@ -145,7 +147,7 @@ def test_completion_before_start_acknowledgement_wakes_pre_registered_waiter(rem
 
     monkeypatch.setattr(network, "mcp_call", delay_ack)
     client = RemoteSeatClient(harness.context, 0, CalendarGame(config()).router, turn_timeout_s=1)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     record = next(iter(harness.environment.registry.lifecycle.records.values()))
     assert record.finished.status == "succeeded" and record.acceptance is None
     assert record.event.is_set() and client.seat.registered
@@ -155,7 +157,7 @@ def test_lifecycle_receipts_remain_scoped_after_episode_teardown(remote_harness_
     from a2a_engine.remote.network import mcp_call
     harness = remote_harness_v2()
     client = RemoteSeatClient(harness.context, 0, CalendarGame(config()).router)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     record = next(iter(harness.environment.registry.lifecycle.records.values()))
     value = record.invocation
     harness.environment.registry.unregister(harness.episode)
@@ -168,18 +170,22 @@ def test_lifecycle_receipts_remain_scoped_after_episode_teardown(remote_harness_
 
 
 @pytest.mark.parametrize("admitted", [False, True])
-def test_v2_unavailable_registration_preserves_stopped_trace_policy(remote_harness_v2, admitted):
+def test_v2_unavailable_registration_fails_attempt(remote_harness_v2, admitted):
     harness = remote_harness_v2(join=admitted, join_timeout_s=0.05 if not admitted else 10)
     if admitted:
         def broken(value):
             raise ValueError("never expose this failure")
         harness.policies[0].calls = broken
     cfg = config(agents=[{"type": "scripted", "runtime": "external"}, {"type": "scripted"}])
-    trace = CalendarGame(cfg, runtime_context=harness.context).run_with_scenario(scenario())
-    assert trace.stopped and not trace.metrics
-    assert [event.type for event in trace.events] == ["game_start", "game_stopped"]
-    assert trace.events[-1].data["reason"] == "seat_unavailable"
-    assert "never expose" not in trace.model_dump_json() and not harness.episode.active
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    game = CalendarGame(cfg, runtime_context=harness.context)
+    task = scenario()
+    before = copy.deepcopy(task["calendars"])
+    with pytest.raises(SeatsUnavailable, match="seat_unavailable") as error:
+        game.run_with_scenario(task)
+    assert error.value.seats == (0,) and "never expose" not in str(error.value)
+    assert [event.type for event in game.events.all()] == ["game_start"]
+    assert task["calendars"] == before and not harness.episode.active
 
 
 def test_v2_mock_provider_keeps_prompts_history_telemetry_and_reflection_separate(remote_harness_v2):
@@ -200,7 +206,7 @@ def test_v2_mock_provider_keeps_prompts_history_telemetry_and_reflection_separat
     strategy = StructuredOutputStrategy(MockModel())
     next(iter(harness.runtime.sessions.values())).policy = strategy
     client = RemoteSeatClient(harness.context, 0, CalendarGame(config()).router)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     client.start_round(scenario()["meetings"][0], "Slot 0: [FREE]", 0)
     client.prepare({"phase": "DECISION", "round": 0, "turn": 0, "prompt_sent": "verbatim decision prompt",
                     "calendar_snapshot_render": "Slot 0: [FREE]"}, 0)

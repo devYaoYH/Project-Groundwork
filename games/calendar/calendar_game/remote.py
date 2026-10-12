@@ -14,8 +14,8 @@ from a2a_engine.comm import RoutingContext
 from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocation, TurnInvocationV2, WireModel, PROTOCOL_VERSION_V2
 from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcher, TurnDispatcherV2
 from a2a_engine.remote.turns import ToolSpec, TurnRecorder
-from calendar_game.agents import BaseClient, DecideResult, ReflectionResult, TokenUsage, TurnResult
-from calendar_game.prompts import build_reflection_message, build_round_start_message, build_system_prompt
+from calendar_game.agents import DecideResult, ReflectionResult, TokenUsage, TurnResult
+from calendar_game.prompts import build_reflection_message, build_round_start_message
 from calendar_game.privacy import hydrate_calendar_render_for_llm, hydrate_meeting_for_llm
 
 
@@ -63,7 +63,7 @@ class CalendarRuntimeContext:
         self.environment.registry.unregister(self.episode)
 
 
-class RemoteSeatClient(BaseClient):
+class RemoteSeatClient:
     def __init__(self, runtime, seat_id, router, *, turn_timeout_s=120, clock=time.monotonic,
                  private_prompts=False, request_timeout_s=2):
         self.runtime = runtime
@@ -97,11 +97,12 @@ class RemoteSeatClient(BaseClient):
         return self.turn_timeout_s
 
     def _invocation(self, kind, *, observation=None, prompt=None, phase=None, inbox=None):
+        self._select_dispatcher()
         root = f"{self.runtime.io.base_url}/episodes/{self.runtime.episode.episode_id}"
         v2 = self.seat.protocol_version == PROTOCOL_VERSION_V2
         extra = {"environment_id": self.runtime.episode.environment_id, "attempt_id": self.runtime.episode.attempt_id,
-                 "operation": {"register": "register", "round_start": "observe", "turn": "act",
-                               "reflect": "reflect", "episode_end": "episode_end"}[kind]} if v2 else {}
+                 "operation": {"round_start": "observe", "turn": "act",
+                               "reflect": "reflect"}[kind]} if v2 else {}
         return (TurnInvocationV2 if v2 else TurnInvocation)(episode_id=self.runtime.episode.episode_id, seat=self.seat.seat,
                               **extra,
                               turn_id=uuid.uuid4().hex, kind=kind, phase=phase,
@@ -109,29 +110,8 @@ class RemoteSeatClient(BaseClient):
                               observation=observation or {}, prompt=prompt, inbox=inbox or [],
                               mcp={name: f"{root}/{name}/mcp" for name in (("env", "comm", "lifecycle") if v2 else ("env", "comm"))})
 
-    def register(self, agent_id, game_config):
-        if agent_id != self.seat.seat:
-            raise ValueError("remote seat identity mismatch")
-        self.runtime.episode.wait_ready(agent_id)
-        self._select_dispatcher()
-        self.config = game_config
-        config = dataclasses.asdict(game_config)
-        deadline = self.clock() + self._timeout("register")
-        invocation = self._invocation("register", observation={
-            "game_config": config,
-            "action_schema": {spec.name: spec.input_model.model_json_schema() for spec in CALENDAR_TOOLS},
-            "action_to_tool": {"dm": "comm.send", "participant_groupchat": "comm.send",
-                               "all_groupchat": "comm.send", "schedule": "env.schedule",
-                               "reschedule": "env.reschedule"},
-        }, prompt=build_system_prompt(config))
-        try:
-            self.dispatcher.dispatch(self.seat, invocation, deadline=deadline)
-        except DeliveryFailure:
-            raise TimeoutError("seat_unavailable") from None
-        with self.runtime.episode.lock:
-            self.seat.registered = True
-
     def start_round(self, meeting, calendar_render, round_num):
+        self._select_dispatcher()
         self.meeting = deepcopy(meeting)
         self.round_num = round_num
         prompt_meeting, prompt_calendar = meeting, calendar_render
@@ -154,6 +134,9 @@ class RemoteSeatClient(BaseClient):
 
     def observe_penalty(self, incurred_penalty):
         self.penalty = incurred_penalty
+
+    def observe_calendar(self, calendar_render):
+        pass
 
     def observe_messages(self, messages):
         self.inbox = messages
@@ -315,11 +298,3 @@ class RemoteSeatClient(BaseClient):
             return ReflectionResult(target_agent_id, clean, None, usage, completion.telemetry.latency_ms, None)
         finally:
             self.reflection_lock.release()
-
-    def episode_end(self):
-        if self.seat.registered and self.runtime.episode.active:
-            try:
-                deadline = self.clock() + self._timeout("episode_end")
-                self.dispatcher.dispatch(self.seat, self._invocation("episode_end"), deadline=deadline)
-            except Exception:
-                pass

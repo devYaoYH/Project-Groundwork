@@ -95,9 +95,6 @@ def reflection_program():
 def build_program():
     graph = StateGraph(steps.SchedulingState)
     for name, function in (
-        ("initialize", steps.initialize_episode), ("external_readiness", steps.await_external_readiness),
-        ("next_registration", steps.check_pass), ("registration_outcome", steps.check_pass),
-        ("advance_registration", steps.advance_actor), ("stopped_trace", steps.stopped_trace),
         ("meeting_guard", steps.check_pass), ("start_meeting", steps.start_meeting),
         ("next_round_notification", steps.check_pass), ("advance_notification", steps.advance_actor),
         ("voluntary_mode", steps.voluntary_mode), ("participant_mode", steps.participant_mode),
@@ -108,25 +105,15 @@ def build_program():
         ("environment_reflection_guard", steps.check_pass),
         ("prepare_environment_reflection", steps.prepare_environment_reflection),
         ("collect_environment_reflections", steps.accumulate_reflections), ("finalize", steps.finalize_episode),
-        ("prepare_episode_end", steps.prepare_episode_end), ("next_episode_end", steps.check_pass),
-        ("advance_episode_end", steps.advance_actor),
     ):
         graph.add_node(name, function)
-    graph.add_node("register_agent", AgentStep(steps.select_ordered_actor, "register", steps.no_observation, steps.register_agent))
     graph.add_node("notify_round", AgentStep(steps.select_ordered_actor, "start_round", steps.no_observation, steps.notify_round))
-    graph.add_node("end_agent_episode", AgentStep(steps.select_ordered_actor, "episode_end", steps.no_observation, steps.end_agent_episode))
     graph.add_node("cheap_talk_pass", cheap_talk_program().compiled)
     graph.add_node("voluntary_decisions", decision_program().compiled)
     graph.add_node("participant_decisions", decision_program().compiled)
     graph.add_node("round_reflections", reflection_program().compiled)
     graph.add_node("environment_reflections", reflection_program().compiled)
-    graph.add_edge(START, "initialize")
-    graph.add_edge("initialize", "external_readiness")
-    graph.add_conditional_edges("external_readiness", steps.readiness, {"ready": "next_registration", "unavailable": "stopped_trace"})
-    graph.add_conditional_edges("next_registration", steps.next_actor, {"invoke": "register_agent", "finished": "meeting_guard"})
-    graph.add_edge("register_agent", "registration_outcome")
-    graph.add_conditional_edges("registration_outcome", steps.readiness, {"ready": "advance_registration", "unavailable": "stopped_trace"})
-    graph.add_edge("advance_registration", "next_registration")
+    graph.add_edge(START, "meeting_guard")
     graph.add_conditional_edges("meeting_guard", steps.meeting_destination, {"next": "start_meeting", "done": "environment_reflection_guard"})
     graph.add_edge("start_meeting", "next_round_notification")
     graph.add_conditional_edges("next_round_notification", steps.next_actor, {"invoke": "notify_round", "finished": "cheap_talk_pass"})
@@ -150,12 +137,7 @@ def build_program():
     graph.add_edge("prepare_environment_reflection", "environment_reflections")
     graph.add_edge("environment_reflections", "collect_environment_reflections")
     graph.add_edge("collect_environment_reflections", "finalize")
-    for name in ("finalize", "stopped_trace"):
-        graph.add_edge(name, "prepare_episode_end")
-    graph.add_edge("prepare_episode_end", "next_episode_end")
-    graph.add_conditional_edges("next_episode_end", steps.next_actor, {"invoke": "end_agent_episode", "finished": END})
-    graph.add_edge("end_agent_episode", "advance_episode_end")
-    graph.add_edge("advance_episode_end", "next_episode_end")
+    graph.add_edge("finalize", END)
     return GraphProgram(graph)
 
 

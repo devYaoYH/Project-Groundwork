@@ -126,22 +126,31 @@ def test_real_children_parallel_mixed_storage_and_no_secret_leak(tmp_path, exter
         assert "seat_secret" not in persisted and "join_ticket" not in persisted and '"capability"' not in persisted
 
 
-def test_external_no_show_persists_stopped_and_reaps_local_child(tmp_path, monkeypatch):
+def test_external_no_show_fails_without_episode_and_reaps_local_child(tmp_path, monkeypatch):
     directory = tmp_path / "private-joins"
     monkeypatch.setenv("A2A_PROVISIONING_DIR", str(directory))
     cfg = config(join_timeout_s=1)
-    store = SQLiteEpisodeStore(path=tmp_path / "stopped.db")
+    store = SQLiteEpisodeStore(path=tmp_path / "failed.db")
+    recorded = []
+    failures = []
+    original = RuntimeManager.provision
+
+    def track(self, cfg, **kwargs):
+        runtime = original(self, cfg, **kwargs)
+        recorded.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(RuntimeManager, "provision", track)
     ctx = _make_run_context("no-show", "cell", cfg, 0, False)
-    result, errors = _run_contexts([ctx], store, tmp_path, max_workers=1, on_result=None, on_error=None)
-    assert len(result) == 1 and not errors
-    manifest = store.list_episodes()[0][0]
-    trace = store.get_episode(manifest["episode_uid"])
-    assert trace.stopped
-    assert trace.events[0].type == "game_start"
-    assert trace.events[-1].type == "game_stopped"
-    assert trace.events[-1].data["reason"] == "seat_unavailable"
+    result, errors = _run_contexts([ctx], store, tmp_path, max_workers=1, on_result=None,
+                                 on_error=lambda ctx, error: failures.append(str(error)))
+    assert not result and len(errors) == 1
+    assert len(failures) == 1 and failures[0].startswith("seat_unavailable")
+    assert store.list_episodes()[0] == []
     assert not list(directory.glob("*.json"))
-    assert manifest["agents"][2]["protocol_version"] is None
+    assert recorded[0].closed and not recorded[0].episode.active
+    assert not recorded[0].manager.io.thread.is_alive()
+    assert all(child.process.poll() is not None for child in recorded[0].children)
 
 
 def test_external_credentials_are_not_environment_credentials(monkeypatch):

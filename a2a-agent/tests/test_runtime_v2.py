@@ -1,11 +1,13 @@
 import asyncio
 import threading
 import time
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
-from a2a_engine.remote.contract import JoinRequest, PROTOCOL_VERSION, TurnInvocation
+from a2a_engine.remote.contract import JoinRequest, PROTOCOL_VERSION, TurnInvocation, TurnInvocationV2
 from a2a_engine.remote.network import mcp_call
 from calendar_game.agents import GameConfig
 from calendar_game.game import CalendarGame
@@ -17,8 +19,17 @@ def client_for(harness):
     return RemoteSeatClient(harness.context, 0, game.router)
 
 
+def register_invocation(client):
+    episode = client.runtime.episode
+    root = f"{client.runtime.io.base_url}/episodes/{episode.episode_id}"
+    return TurnInvocationV2(environment_id=episode.environment_id, episode_id=episode.episode_id,
+        attempt_id=episode.attempt_id, seat=client.seat.seat, turn_id=uuid.uuid4().hex,
+        kind="register", operation="register", deadline=datetime.now(timezone.utc) + timedelta(seconds=10),
+        mcp={name: f"{root}/{name}/mcp" for name in ("env", "comm", "lifecycle")})
+
+
 def opened(harness, client, kind="register"):
-    value = client._invocation(kind)
+    value = register_invocation(client) if kind == "register" else client._invocation(kind)
     record = harness.environment.registry.lifecycle.open(value, deadline=time.monotonic() + 10)
     return value, record
 
@@ -96,7 +107,7 @@ def test_register_then_first_turn_before_completion_receipt_is_received(remote_h
     monkeypatch.setattr(registry, "finish", delay_receipt)
     client = client_for(harness)
     try:
-        client.register(0, GameConfig(2, 3, 0, [0, 1]))
+        harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
         assert held.is_set()
         register_record = next(iter(harness.runtime.records.values()))
         assert register_record.finished.status == "succeeded" and register_record.receipt is None
@@ -114,7 +125,7 @@ def test_runtime_crash_discards_sessions_and_environment_expires(remote_harness_
     harness = remote_harness_v2()
     client = client_for(harness)
     harness.policies[0].calls = lambda value: asyncio.sleep(10, result=[])
-    value = client._invocation("register")
+    value = register_invocation(client)
     registry = harness.environment.registry.lifecycle
     record = registry.open(value, deadline=time.monotonic() + 0.15)
     assert start(harness, value)["status"] == "accepted"
@@ -130,7 +141,7 @@ def test_both_protocols_are_explicit_and_no_global_version_replacement(remote_ha
     harness = remote_harness_v2()
     assert PROTOCOL_VERSION == "a2a-turns/1"
     assert harness.episode.seats[0].protocol_version == "a2a-turns/2"
-    value = client_for(harness)._invocation("register")
+    value = register_invocation(client_for(harness))
     with pytest.raises(ValueError):
         TurnInvocation.model_validate(value.model_dump())
     request = JoinRequest(join_ticket="x" * 32, callback_url=harness.callback.base_url,
@@ -143,7 +154,7 @@ def test_both_protocols_are_explicit_and_no_global_version_replacement(remote_ha
 def test_provider_thread_prevents_subsequent_session_use(remote_harness_v2):
     harness = remote_harness_v2()
     client = client_for(harness)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     lock = threading.Lock()
     lock.acquire()
     harness.policies[0].model_lock = lock
@@ -167,7 +178,7 @@ def test_confirmed_busy_rejection_closes_pending_record_promptly(remote_harness_
     harness.policies[0].calls = lambda value: asyncio.sleep(10, result=[])
     value, _ = opened(harness, client)
     assert start(harness, value)["status"] == "accepted"
-    next_value = client._invocation("register")
+    next_value = register_invocation(client)
     start_time = time.monotonic()
     with pytest.raises(DeliveryFailure) as failure:
         client.dispatcher.dispatch(client.seat, next_value)
@@ -179,8 +190,8 @@ def test_confirmed_busy_rejection_closes_pending_record_promptly(remote_harness_
 def test_terminal_records_and_ended_sessions_expire_but_active_tasks_do_not(remote_harness_v2):
     harness = remote_harness_v2()
     client = client_for(harness)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
-    client.episode_end()
+    stage = harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
+    stage.__exit__(None, None, None)
     # Wait until independent receipt delivery has released its bounded task.
     deadline = time.monotonic() + 2
     while not all(record.task.done() for record in harness.runtime.records.values()):
@@ -195,7 +206,7 @@ def test_duplicate_start_after_execution_returns_acceptance_without_reexecution(
     harness = remote_harness_v2()
     client = client_for(harness)
     # A successful registration updates policy/history only once.
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     value = harness.invocations[0]
     record = next(iter(harness.runtime.records.values()))
     assert record.finished.status == "succeeded"
@@ -208,7 +219,7 @@ def test_long_lived_runtime_isolates_episode_attempt_sessions(remote_harness_v2)
     from a2a_agent.scripted import ScriptedPolicy
     harness = remote_harness_v2()
     client = client_for(harness)
-    client.register(0, GameConfig(2, 3, 0, [0, 1]))
+    stage = harness.register_client(client, GameConfig(2, 3, 0, [0, 1]))
     episode = harness.environment.registry.provision("second-episode", [0])
     policy = ScriptedPolicy()
     try:
@@ -217,14 +228,14 @@ def test_long_lived_runtime_isolates_episode_attempt_sessions(remote_harness_v2)
             episode.seats[0].ticket, policy=policy))
         assert admission.attempt_id != harness.episode.attempt_id
         other = RemoteSeatClient(CalendarRuntimeContext(harness.environment, harness.io, episode), 0, client.router)
-        other.register(0, GameConfig(2, 7, 0, [0, 1]))
+        other_stage = harness.register_client(other, GameConfig(2, 7, 0, [0, 1]))
         assert harness.policies[0].config["num_slots"] == 3 and policy.config["num_slots"] == 7
-        client.episode_end()
+        stage.__exit__(None, None, None)
         harness.environment.registry.unregister(harness.episode)
         other.start_round({"id": 3, "participants": [0, 1], "duration": 1, "cost": 1}, "Slot 0: [FREE]", 0)
         sessions = list(harness.runtime.sessions.values())
         assert len(sessions) == 2 and sum(s.ended for s in sessions) == 1
         assert episode.active and episode.seats[0].registered
-        other.episode_end()
+        other_stage.__exit__(None, None, None)
     finally:
         harness.environment.registry.unregister(episode)

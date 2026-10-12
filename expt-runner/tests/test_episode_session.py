@@ -27,3 +27,21 @@ def test_seat_unavailable_uses_existing_failure_callback(tmp_path, monkeypatch):
                                     on_error=lambda ctx, error: failures.append(f"fail {ctx['config']['episode_id']}: {error}"))
     assert not results and len(errors) == 1
     assert failures == ["fail lobby.cell.0: seat_unavailable: (0,)"]
+
+
+def test_calendar_no_show_fails_without_storing_episode(tmp_path, capsys):
+    from a2a_engine.storage import make_store
+    config = {"environment_id": "calendar", "seed": 42, "num_agents": 2,
+              "num_slots": 3, "density": 0, "num_meetings": 1, "join_timeout_s": 0.05,
+              "agents": [{"type": "scripted", "runtime": "external"}, {"type": "scripted"}]}
+    context = _make_run_context("lobby", "calendar", config, 0, dry_run=True, persist=True)
+    failures = []
+    store = make_store({"backend": "sqlite", "path": str(tmp_path / "episodes.db")}, results_dir=tmp_path)
+    results, errors = _run_contexts([context], store, tmp_path, max_workers=1, on_result=None,
+        on_error=lambda ctx, error: failures.append(f"fail {ctx['config']['episode_id']}: {error}"))
+    assert not results and len(errors) == 1
+    assert failures == ["fail lobby.calendar.0: seat_unavailable: (0,)"]
+    assert store.list_episodes()[0] == []
+    output = capsys.readouterr().out
+    assert output.count("INFO expt_runner: opened ") == 1
+    assert "ticket" not in output
