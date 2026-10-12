@@ -44,14 +44,43 @@ export function backEdges(graph: WorkflowGraph): Set<number> {
   return result;
 }
 
-export function layoutInput(graph: WorkflowGraph, narrow = false) {
+export function layoutInput(graph: WorkflowGraph, _narrow = false) {
   if (graph.nodes.length > 256 || graph.edges.length > 1024 || !graph.nodes.length) throw new Error("Invalid workflow size");
   const ids = new Set(graph.nodes.map((node) => node.id));
   if (ids.size !== graph.nodes.length || graph.edges.some((edge) => !ids.has(edge.source) || !ids.has(edge.target))) throw new Error("Invalid workflow topology");
+  const loops = backEdges(graph);
   return {
     id: graph.id,
-    layoutOptions: { "elk.algorithm": "layered", "elk.direction": narrow ? "DOWN" : "RIGHT", "elk.spacing.nodeNode": "45", "elk.layered.spacing.nodeNodeBetweenLayers": "65" },
-    children: graph.nodes.map((node) => ({ id: node.id, width: 210, height: 86 })),
-    edges: graph.edges.map((edge, index) => ({ id: String(index), sources: [edge.source], targets: [edge.target] })),
+    layoutOptions: { "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.edgeRouting": "ORTHOGONAL", "elk.spacing.nodeNode": "45", "elk.layered.spacing.nodeNodeBetweenLayers": "65" },
+    children: graph.nodes.map((node) => ({ id: node.id, width: 210, height: 86,
+      layoutOptions: { "elk.portConstraints": "FIXED_SIDE", ...(node.id === "__start__" ? { "elk.layered.layering.layerConstraint": "FIRST_SEPARATE" } : {}) },
+      ports: graph.edges.flatMap((edge, index) => [
+        ...(edge.source === node.id ? [{ id: portId(index, "source"), width: 0, height: 0, layoutOptions: { "elk.port.side": "EAST" } }] : []),
+        ...(edge.target === node.id ? [{ id: portId(index, "target"), width: 0, height: 0, layoutOptions: { "elk.port.side": "WEST" } }] : []),
+      ]),
+    })),
+    edges: graph.edges.map((edge, index) => {
+      const text = edgeLabel(edge, loops.has(index));
+      return { id: String(index), sources: [portId(index, "source")], targets: [portId(index, "target")],
+        labels: text ? [{ id: `label-${index}`, text, width: text.length * 7 + 8, height: 20 }] : [],
+      };
+    }),
   };
+}
+
+export function portId(index: number, end: "source" | "target") {
+  return `edge-${index}-${end}`;
+}
+
+export function edgeLabel(edge: WorkflowEdge, loop: boolean) {
+  return [edge.route_key, loop ? "back-edge" : null].filter(Boolean).join(" / ");
+}
+
+export type RoutePoint = { x: number; y: number };
+export type RouteSection = { startPoint: RoutePoint; endPoint: RoutePoint; bendPoints?: RoutePoint[] };
+
+export function routePath(sections: RouteSection[]) {
+  if (!sections.length) throw new Error("Missing workflow route");
+  return sections.map((section) => [section.startPoint, ...(section.bendPoints ?? []), section.endPoint]
+    .map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ")).join(" ");
 }

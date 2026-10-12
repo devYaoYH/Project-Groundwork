@@ -1,4 +1,58 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function expectClearRoutes(canvas: Locator) {
+  const failures = await canvas.evaluate((element) => {
+    const nodes = [...element.querySelectorAll<HTMLElement>(".react-flow__node")].map((node) => ({ id: node.dataset.id, box: node.getBoundingClientRect() }));
+    const failures: string[] = [];
+    const start = nodes.find((node) => node.id === "__start__");
+    if (!start) failures.push("Missing START box");
+    else for (const node of nodes) {
+      if (node.id !== start.id && start.box.right >= node.box.left) failures.push(`START is not strictly left of ${node.id}`);
+    }
+    for (const handle of element.querySelectorAll<HTMLElement>(".react-flow__handle")) {
+      const side = handle.dataset.handleid?.endsWith("source") ? "right" : "left";
+      if (!handle.classList.contains(`react-flow__handle-${side}`)) failures.push(`Incorrect ${side} handle orientation`);
+    }
+    for (const path of element.querySelectorAll<SVGPathElement>(".react-flow__edge-path")) {
+      const matrix = path.getScreenCTM()!;
+      const tokens = path.getAttribute("d")!.match(/[ML]|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)!;
+      const edgeId = path.closest(".react-flow__edge")!.getAttribute("data-id")!;
+      for (const [end, offset] of [["source", 0], ["target", tokens.length - 3]] as const) {
+        const endpoint = new DOMPoint(Number(tokens[offset + 1]), Number(tokens[offset + 2])).matrixTransform(matrix);
+        const handle = element.querySelector<HTMLElement>(`[data-handleid="edge-${edgeId}-${end}"]`)!;
+        const box = handle.getBoundingClientRect();
+        if (Math.abs(endpoint.x - box.left - box.width / 2) > .5 || Math.abs(endpoint.y - box.top - box.height / 2) > .5) {
+          failures.push(`edge ${edgeId} ${end} handle misaligned`);
+        }
+      }
+      let previous: DOMPoint | undefined;
+      for (let i = 0; i < tokens.length; i += 3) {
+        const point = new DOMPoint(Number(tokens[i + 1]), Number(tokens[i + 2])).matrixTransform(matrix);
+        if (tokens[i] === "L" && previous) {
+          for (const { id, box } of nodes) {
+            const crosses = Math.abs(point.x - previous.x) < .1
+              ? point.x > box.left + .5 && point.x < box.right - .5 && Math.max(point.y, previous.y) > box.top + .5 && Math.min(point.y, previous.y) < box.bottom - .5
+              : point.y > box.top + .5 && point.y < box.bottom - .5 && Math.max(point.x, previous.x) > box.left + .5 && Math.min(point.x, previous.x) < box.right - .5;
+            if (crosses) failures.push(`${path.id} crosses ${id}`);
+          }
+        }
+        previous = point;
+      }
+      if (!path.getAttribute("marker-end")) failures.push("Missing arrow marker");
+      if (path.closest(".workflow-back-edge") && getComputedStyle(path).strokeDasharray === "none") failures.push("Missing back-edge dashes");
+    }
+    for (const label of element.querySelectorAll(".react-flow__edge-textbg")) {
+      const box = label.getBoundingClientRect();
+      for (const { id, box: node } of nodes) {
+        if (box.right > node.left + .5 && box.left < node.right - .5 && box.bottom > node.top + .5 && box.top < node.bottom - .5) {
+          failures.push(`label overlaps ${id}`);
+        }
+      }
+    }
+    return failures;
+  });
+  expect(failures).toEqual([]);
+}
 
 for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
   test(`read-only workflow at ${width}px ${colorScheme}`, async ({ page, request }) => {
@@ -14,6 +68,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
     await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
     await expect(page.getByRole("heading", { name: "Parameters", exact: true })).toBeVisible();
     await expect(canvas.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
+    await expectClearRoutes(canvas);
     await expect(canvas.getByText("continue", { exact: true })).toBeVisible();
     await expect(canvas.getByText("finished", { exact: true })).toBeVisible();
     await expect(canvas.getByText("back-edge", { exact: true })).toBeVisible();
@@ -96,6 +151,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
       const graph = workflow.graphs.find((g: { id: string }) => g.id === id);
       await expect(canvas.locator('.react-flow__node')).toHaveCount(graph.nodes.length);
       await expect(canvas.locator('.react-flow__edge')).toHaveCount(graph.edges.length);
+      await expectClearRoutes(canvas);
       for (const node of graph.nodes) {
         await outline.getByRole('button', { name: node.id, exact: true }).focus();
         await page.keyboard.press('Enter');
@@ -170,6 +226,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
     const inspector = section.getByRole("complementary", { name: "Step inspector" });
     await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
     await expect(canvas.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
+    await expectClearRoutes(canvas);
     for (const route of ["accepted", "rejected", "continue", "finished", "back-edge"]) {
       await expect(canvas.getByText(route, { exact: true })).toBeVisible();
     }
@@ -206,6 +263,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
     const root = workflow.graphs.find((g: { id: string }) => g.id === "root");
     await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
     await expect(canvas.locator('.react-flow__edge')).toHaveCount(root.edges.length);
+    await expectClearRoutes(canvas);
     await expect(canvas.getByText('unavailable', { exact: true })).toHaveCount(0);
     for (const route of ['eligible', 'suppressed', 'success', 'depth_exceeded', 'no_feasible_slot']) {
       await expect(canvas.getByText(route, { exact: true }).first()).toBeVisible();
@@ -223,6 +281,8 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
       await open.focus(); await page.keyboard.press("Enter");
       const graph = workflow.graphs.find((g: { id: string }) => g.id === `root/${name}`);
       await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+      await expect(canvas.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
+      await expectClearRoutes(canvas);
       await expect(section.getByText(/not a complete episode/)).toHaveCount(0);
       for (const node of graph.nodes) {
         const button = outline.getByRole("button", { name: node.id, exact: true });
@@ -240,6 +300,10 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
         await inspector.getByRole("button", { name: "Open subgraph" }).focus();
         await page.keyboard.press("Enter");
         await expect(outline.getByRole("button", { name: "reporter_target_call", exact: true })).toBeVisible();
+        const child = workflow.graphs.find((g: { id: string }) => g.id === `root/${name}/bounded_fan_out`);
+        await expect(canvas.locator(".react-flow__node")).toHaveCount(child.nodes.length);
+        await expect(canvas.locator(".react-flow__edge")).toHaveCount(child.edges.length);
+        await expectClearRoutes(canvas);
         await section.getByRole("button", { name: "Parent graph" }).focus(); await page.keyboard.press("Enter");
         await expect(outline.getByRole("button", { name: "join_reflections", exact: true })).toBeVisible();
       }

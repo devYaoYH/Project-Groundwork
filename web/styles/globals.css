@@ -203,7 +203,7 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
 .workflow-canvas .react-flow { --xy-node-background-color-default: var(--card); --xy-node-color-default: var(--ink); --xy-node-border-default: 1px solid var(--rule-strong); --xy-edge-stroke-default: var(--muted); --xy-edge-label-background-color-default: var(--card); --xy-edge-label-color-default: var(--ink); --xy-controls-button-background-color-default: var(--card); --xy-controls-button-color-default: var(--ink); --xy-controls-button-background-color-hover-default: var(--sunk); }
 .workflow-node strong { display: block; font-family: var(--font-data); font-size: 12px; }
 .workflow-node span, .workflow-node small { display: block; font-size: 11px; margin-top: 3px; }
-.workflow-node-agent_call { border-top: 3px solid var(--accent) !important; }
+.workflow-node-agent_call { border-top: 3px solid var(--accent) !important; --workflow-node-border-top: 3px; }
 .workflow-node-decision { border-style: dashed !important; }
 .workflow-node.selected { outline: 2px solid var(--accent); }
 .workflow-canvas .react-flow__handle { visibility: hidden; pointer-events: none; }
