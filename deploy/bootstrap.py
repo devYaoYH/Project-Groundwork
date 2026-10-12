@@ -33,6 +33,15 @@ def main():
                  "--role", "roles/iam.serviceAccountUser"], capture=True)
     for role in ("roles/run.developer", "roles/logging.logWriter"):
         grant(project, f"serviceAccount:{accounts['build']}", role)
+    # Catalogue publication is create-only plus read-back verification. This
+    # identity cannot update/delete documents or scan private collections.
+    catalogue_role = "groundworkCataloguePublisher"
+    role_args = ["iam", "roles"]
+    action = "update" if exists([*role_args, "describe", catalogue_role, "--project", project]) else "create"
+    command([*role_args, action, catalogue_role, "--project", project,
+             "--title=Groundwork catalogue publisher", "--stage=GA",
+             "--permissions=datastore.entities.create,datastore.entities.get", "--quiet"], capture=True)
+    grant(project, f"serviceAccount:{accounts['build']}", f"projects/{project}/roles/{catalogue_role}")
     grant(project, f"serviceAccount:{accounts['ci']}", "roles/cloudbuild.builds.editor")
     for name in ("build", "ci"):
         grant(project, f"serviceAccount:{accounts[name]}", "roles/serviceusage.serviceUsageConsumer")

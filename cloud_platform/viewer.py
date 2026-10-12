@@ -28,13 +28,7 @@ class Viewer:
 
     @contextmanager
     def catalog(self):
-        if self.control.local_catalogue is not None:
-            yield self.control.local_catalogue
-            return
-        with tempfile.TemporaryDirectory() as directory:
-            cp = self.control.compiler(directory)
-            cp.seed_installed_releases()
-            yield cp
+        yield self.control.catalogue
 
     @contextmanager
     def private_snapshot(self, record, key="snapshot_key"):

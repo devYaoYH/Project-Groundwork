@@ -171,6 +171,46 @@ def test_hosted_verifier_reads_catalog_and_pair_without_executing(monkeypatch):
         verify_hosted.verify_runtime_bindings("project", "us-central1", NEW_SOURCE)
 
 
+def test_release_passes_published_catalogue_pin_to_revision(monkeypatch):
+    pin = "c" * 64
+    monkeypatch.setattr(sys, "argv", ["release", "--project", "project", "--image", WORKER_IMAGE,
+        "--source-sha", NEW_SOURCE, "--runtime-image", NEW_IMAGE, "--runtime-source-sha", NEW_SOURCE,
+        "--oauth-client-id", "test.apps.googleusercontent.com", "--catalogue-sha256", pin])
+    monkeypatch.setattr(release, "exists", lambda args: False)
+    monkeypatch.setattr(release, "service_url", lambda *args: "https://test.run.app")
+    monkeypatch.setattr(release, "publish_catalog", lambda *args: None)
+    calls = []
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        if arguments[:3] == ["run", "jobs", "list"]:
+            return "[]"
+        return ""
+    monkeypatch.setattr(release, "command", run)
+    release.main()
+    deployed = next(args for args in calls if args[:2] == ["run", "deploy"])
+    variables = deployed[deployed.index("--set-env-vars") + 1]
+    assert "PLATFORM_CATALOGUE_SHA256=" + pin in variables.split(",")
+    monkeypatch.setattr(sys, "argv", sys.argv[:-1] + ["latest"])
+    calls.clear()
+    with pytest.raises(ValueError, match="published catalogue content hash"):
+        release.main()
+    assert not calls
+
+
+def test_build_publishes_tested_image_catalogue_before_api_rollout():
+    build = yaml.safe_load((Path(__file__).resolve().parents[2] / "cloudbuild.yaml").read_text())
+    steps = build["steps"]
+    order = {step["id"]: index for index, step in enumerate(steps)}
+    assert order["platform-tests"] < order["push"] < order["publish-catalogue"] < order["publish"]
+    publication = steps[order["publish-catalogue"]]
+    image_build = steps[order["build"]]
+    assert publication["name"] == image_build["args"][image_build["args"].index("-t") + 1]
+    assert publication["entrypoint"] == "python"
+    assert publication["args"][:2] == ["-m", "cloud_platform.publish_catalogue"]
+    assert "--catalogue-sha256" in steps[order["publish"]]["args"][-1]
+    assert ".platform-build/catalogue-sha256" in steps[order["publish"]]["args"][-1]
+
+
 def catalog_upload_fixture():
     catalog = release.binding_catalog(WORKER_IMAGE, NEW_SOURCE,
         {NEW_DIGEST: {"runtime_image": NEW_IMAGE, "runtime_source_sha": NEW_SOURCE}})
@@ -251,7 +291,7 @@ def test_catalog_permission_or_network_failure_prevents_api_rollout(monkeypatch,
     calls = []
     monkeypatch.setattr(sys, "argv", ["release.py", "--project", "project", "--image", WORKER_IMAGE,
         "--source-sha", NEW_SOURCE, "--runtime-image", NEW_IMAGE, "--runtime-source-sha", NEW_SOURCE,
-        "--oauth-client-id", "test.apps.googleusercontent.com"])
+        "--oauth-client-id", "test.apps.googleusercontent.com", "--catalogue-sha256", "c" * 64])
     monkeypatch.setattr(release, "exists", lambda *args, **kwargs: False)
     def command(arguments, **kwargs):
         calls.append(arguments)

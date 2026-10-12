@@ -69,7 +69,7 @@ Compose, Dockerfiles, service settings or a hard-coded environment list. Direct
 Python development discovers installed games on first use; restart the API after
 installing or changing a game. Local staging needs no Firebase emulator or cloud
 credentials. The scientific compiler and runner still use their private SQLite
-snapshots; hosted catalogue publication is a separate follow-up.
+snapshots. Hosted catalogue publication uses Firestore, as described below.
 
 For an isolated staging stack, use a separate Compose project, image tag and port:
 
@@ -162,8 +162,54 @@ python deploy/release.py --project cicl-487801 --region us-central1 \
   --source-sha FULL_COMMIT \
   --runtime-image us-central1-docker.pkg.dev/cicl-487801/groundwork-runtime/runtime:SCIENCE_COMMIT \
   --runtime-source-sha SCIENCE_COMMIT --oauth-client-id CLIENT.apps.googleusercontent.com \
-  --initialize-public
+  --catalogue-sha256 PUBLISHED_CATALOGUE_SHA256 --initialize-public
 ```
+
+## Hosted shared catalogue
+
+Cloud Build publishes `/opt/groundwork-catalogue.json` from the tested platform
+image into `groundwork_catalogues` in the existing default Firestore database.
+Each immutable document is addressed by the SHA-256 of its canonical manifest.
+`manifest_json` preserves nested declaration arrays without Firestore array
+restrictions. Snapshots over 900 KB fail publication before the API rolls out;
+a larger catalogue will need sharding. No collection scans or composite indexes
+are required.
+
+Publication completes and verifies persisted content before `deploy/release.py`
+receives `--catalogue-sha256`. The deployed revision gets
+`PLATFORM_CATALOGUE_SHA256`; its first catalogue request reads that document,
+then reuses the in-memory adapter across all users. Requests never rediscover
+installed games, construct a catalogue database, or write catalogue metadata.
+Missing or corrupt pins fail explicitly rather than rebuilding. Older snapshots
+remain available for older revisions and rollback. Item banks, workflows and
+oracle execution still use the matching packaged game assets; private compiler
+snapshots remain unchanged.
+
+Before merging the first release using this workflow, apply the updated bootstrap
+(or the following equivalent IAM setup) with an administrator account. This is a
+one-time deployment prerequisite, not a game-author step:
+
+```sh
+gcloud iam roles create groundworkCataloguePublisher --project cicl-487801 \
+  --title='Groundwork catalogue publisher' --stage=GA \
+  --permissions=datastore.entities.create,datastore.entities.get
+gcloud projects add-iam-policy-binding cicl-487801 \
+  --member=serviceAccount:groundwork-build@cicl-487801.iam.gserviceaccount.com \
+  --role=projects/cicl-487801/roles/groundworkCataloguePublisher --condition=None
+```
+
+The publisher role has no update, delete, or list permission. Firestore server
+IAM is database-scoped, so its get permission can read a private document if its
+ID is known; this is not collection-level IAM isolation. There is no browser
+Firestore access: authenticated APIs enforce experiment ownership and join
+private counts onto the shared catalogue for each user. Cloud Build uses its
+existing attached service account and no additional credential file.
+
+For a manual release, run `python -m cloud_platform.publish_catalogue --project
+cicl-487801 --manifest /path/to/built-image-catalogue.json --output
+.platform-build/catalogue-sha256` in an installed platform environment with ADC,
+then pass that file's hash to `deploy/release.py`. Publish the exact tested
+image's manifest, not a catalogue discovered from a different local checkout.
 
 ## GitHub → Cloud Build → shared release
 
