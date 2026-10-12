@@ -43,7 +43,8 @@ class Event(BaseModel):
 
     ``type`` is a environment-defined string, e.g. "message", "broadcast",
     "task_injected", "decision", "round_start". Environment-specific payload lives in
-    ``data``.
+    ``data``. Producers explicitly mark synthetic instrumentation with the
+    top-level ``synthetic`` field; unmarked historical events remain visible.
     """
 
     model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
@@ -55,6 +56,7 @@ class Event(BaseModel):
         return media_metadata(value)
 
     type: str
+    synthetic: bool = False
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     data: dict[str, Any] = Field(default_factory=dict)
 

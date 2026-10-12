@@ -265,7 +265,7 @@ async def prepare_talk(state, runtime: Runtime):
         communication_protocol=ctx.communication_protocol,
         communication_policy=ctx.communication_policy_by_phase.get("CHEAP_TALK"),
     )
-    ctx.game._append_event("turn_start", data=event_data(state, ctx, "CHEAP_TALK",
+    ctx.game._append_event("turn_start", synthetic=True, data=event_data(state, ctx, "CHEAP_TALK",
                            inbox_drained=inbox, calendar_render=calendar, prompt_sent=prompt))
     return {}
 
@@ -279,7 +279,7 @@ async def record_talk(state, runtime: Runtime):
     ctx = runtime.context
     agent_id = state["actor_order"][state["cursor"]]
     ctx.total_client_calls[agent_id] += 1
-    ctx.game._append_event("turn_end", data=event_data(state, ctx, "CHEAP_TALK", **result_data(state["result"])))
+    ctx.game._append_event("turn_end", synthetic=True, data=event_data(state, ctx, "CHEAP_TALK", **result_data(state["result"])))
     return {"round_turn_agent_ids": state["round_turn_agent_ids"] | {agent_id}}
 
 
@@ -334,7 +334,7 @@ async def prepare_decision(state, runtime: Runtime):
     prompt = (build_voluntary_reschedule_message if voluntary else build_decision_message)(
         meeting, calendar, state["protocol"], communication_policy=ctx.communication_policy_by_phase.get(state["mode"]),
     )
-    ctx.game._append_event("decide_start", data=event_data(state, ctx, state["mode"],
+    ctx.game._append_event("decide_start", synthetic=True, data=event_data(state, ctx, state["mode"],
         **{"calendar_render" if voluntary else "calendar_snapshot_render": calendar},
         prompt_sent=append_phase_inbox(prompt, inbox.get("inbox_drained", [])), **inbox))
     return {"attempt": 0}
@@ -354,7 +354,7 @@ async def record_decision(state, runtime: Runtime):
     ctx = runtime.context
     ctx.total_client_calls[state["actor_order"][state["cursor"]]] += 1
     extra = {} if state["mode"] == "VOLUNTARY" else {"retry_count": state["result"].retry_count, "status": "pending"}
-    ctx.game._append_event("decide_end", data=event_data(state, ctx, state["mode"], **result_data(state["result"]), **extra))
+    ctx.game._append_event("decide_end", synthetic=True, data=event_data(state, ctx, state["mode"], **result_data(state["result"]), **extra))
     return {}
 
 
@@ -435,7 +435,7 @@ async def prepare_retry(state, runtime: Runtime):
     attempt = state["attempt"] + 1
     inbox = decision_inbox(agent, ctx)
     if agent.agent_id in ctx.game._remote_clients:
-        ctx.game._append_event("decide_start", data=event_data(state, ctx, "DECISION_RETRY",
+        ctx.game._append_event("decide_start", synthetic=True, data=event_data(state, ctx, "DECISION_RETRY",
             parent_phase=state["mode"], attempt=attempt, max_attempts=ctx.game.config.decision_retries,
             conflict=state["conflict"],
             calendar_snapshot_render=ctx.game._prompt_calendar_for_agent(agent, agent.calendar.snapshot().render(), ctx.round_num),
@@ -454,7 +454,7 @@ async def record_retry(state, runtime: Runtime):
     agent = select_ordered_actor(state, ctx)
     ctx.total_client_calls[agent.agent_id] += 1
     if agent.agent_id in ctx.game._remote_clients:
-        ctx.game._append_event("decide_end", data=event_data(state, ctx, "DECISION_RETRY",
+        ctx.game._append_event("decide_end", synthetic=True, data=event_data(state, ctx, "DECISION_RETRY",
             parent_phase=state["mode"], attempt=state["attempt"], **result_data(state["result"]),
             retry_count=state["result"].retry_count, status="pending"))
     return {}

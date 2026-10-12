@@ -98,10 +98,7 @@ server from `--static-dir`. There is no second service and no Node at runtime.
 | Episodes | `/episodes/` | the filtered, paginated fact table |
 | Episode | `/episode/?uid=<episode_uid>` | lanes, scrubber, transcript, config |
 
-An environment's own replay page is served beside them at
-`/environment-replays/<environment>/`, and the episode screen mounts one for any
-environment that registers it — driven by the same cursor as the lane view. See
-`docs/VIEWER_EXTENSIONS.md`.
+An environment's own replay page remains available at `/environment-replays/<environment>/` as a standalone asset. The Episode screen uses a full-width chat transcript and does not mount replay iframes. See `docs/VIEWER_EXTENSIONS.md` for the retained replay cursor contract and chat conventions.
 
 The browser never uploads Python, a Dockerfile, or an image: it only selects a
 release that is already installed and authors a design against its declaration.
