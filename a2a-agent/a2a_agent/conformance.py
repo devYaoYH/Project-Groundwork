@@ -82,11 +82,11 @@ def run_conformance(callback_url, provisioning_dir, *, join_timeout_s=30):
         probe = ProbeDispatcher(manager.io)
 
         class ConformanceGame(CalendarGame):
-            def _append_event(self, event_type, *, data):
+            def _append_event(self, event_type, *, data, synthetic=False):
                 if event_type == "agent_registered" and data["agent_id"] == 0:
                     require(self.runtime_context.episode.seats[0].callback_url == callback_url,
                             "admitted callback differs from supplied endpoint")
-                super()._append_event(event_type, data=data)
+                super()._append_event(event_type, data=data, synthetic=synthetic)
 
             def _build_agents(self, scenario):
                 agents = super()._build_agents(scenario)

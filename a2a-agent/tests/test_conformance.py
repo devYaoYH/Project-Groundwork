@@ -8,7 +8,18 @@ from concurrent.futures import ThreadPoolExecutor
 from a2a_agent.conformance import run_conformance
 
 
-def test_public_conformance_with_independently_started_process(tmp_path):
+def test_public_conformance_with_independently_started_process(tmp_path, monkeypatch):
+    from calendar_game.game import CalendarGame
+
+    traces = []
+    original_run = CalendarGame.run_with_scenario
+
+    def capture_trace(self, scenario):
+        trace = original_run(self, scenario)
+        traces.append(trace)
+        return trace
+
+    monkeypatch.setattr(CalendarGame, "run_with_scenario", capture_trace)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -21,7 +32,7 @@ def test_public_conformance_with_independently_started_process(tmp_path):
             descriptors = list(directory.glob("*.json"))
             time.sleep(.01)
         assert len(descriptors) == 1
-        env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+        env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "PYTHONPATH") if key in os.environ}
         process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--port", str(port),
                                     "--join-descriptor", str(descriptors[0])], env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -33,6 +44,12 @@ def test_public_conformance_with_independently_started_process(tmp_path):
             assert report["endpoints"] == ["comm", "env"]
             assert report["schema_rejections"] == 1
             assert not list(directory.glob("*.json"))
+            events = traces[0].events
+            turns = [event for event in events if event.type in {"turn_start", "turn_end"}]
+            assert turns and all(event.synthetic for event in turns)
+            messages = [event for event in events if event.type == "dm_sent"]
+            assert len(messages) == 2 and all(not event.synthetic for event in messages)
+            assert all("synthetic" not in event.data for event in events)
         finally:
             if process.poll() is None:
                 process.terminate()
