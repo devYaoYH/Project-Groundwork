@@ -40,7 +40,7 @@ def test_local_catalogue_routes_do_not_construct_a_compiler(platform, monkeypatc
     assert len(snapshots) == 1
     document = json.loads(snapshots[0].read_bytes())
     assert "owner_id" not in document and "experiment_count" not in snapshots[0].read_text()
-    assert control.local_catalogue is control.local_catalogue
+    assert control.catalogue is control.catalogue
 
 
 def test_published_catalogue_matches_existing_ui_contracts(tmp_path):
