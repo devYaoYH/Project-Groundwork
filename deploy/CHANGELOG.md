@@ -14,6 +14,16 @@
   Old snapshots remain available for rollback. This PR stages code and tests; it
   does not change live GCP permissions or claim a hosted deployment.
 
+
+## Catalog publication with scoped storage access — 2026-10-11
+
+- Publish runtime bindings through an exact-object GCS JSON API upload with
+  `ifGenerationMatch=0`. Avoid the bucket-wide object listing performed by
+  `gcloud storage cp`, preserving the build identity's catalog-prefix grants.
+- Accept an existing catalog only when its bytes match the expected content
+  hash. Upload or verification failures stop publication before API rollout.
+
+
 ## First runtime publication lookup — 2026-10-11
 
 - Recognize the exact `gcloud artifacts docker images describe` diagnostic

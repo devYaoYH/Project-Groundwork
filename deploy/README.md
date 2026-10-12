@@ -120,6 +120,8 @@ bootstrap to create the immutable-tag `groundwork-runtime` Artifact Registry
 repository and grant the build identity create/read access restricted to the
 `platform/runtime-bindings/` artifact prefix. Subsequent releases discover and
 retain the existing digest-pinned legacy runtime images automatically.
+Catalog publication uses an exact-object JSON API upload with a generation-zero
+precondition; the build identity does not need bucket-wide object listing.
 
 Compose uses mutable development tags and `local` provenance placeholders by
 default. Hosted source commits, image digests and binding catalogs enforce the

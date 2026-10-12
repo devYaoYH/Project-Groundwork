@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 import re
 import tempfile
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
 try:
     from .common import command, exists, service_url
@@ -37,6 +40,44 @@ def resolve_image(project, image):
     if not DIGEST.fullmatch(digest or ""):
         raise RuntimeError("Artifact Registry did not return an immutable image digest")
     return image.rsplit(":", 1)[0] + "@" + digest
+
+
+def publish_catalog(project, key, payload):
+    """Create one immutable catalog without requiring artifact-bucket listing."""
+    match = re.fullmatch(r"platform/runtime-bindings/([0-9a-f]{64})/([0-9a-f]{64})\.json", key)
+    if (not match or hashlib.sha256(payload).hexdigest() != match[2]
+            or json.loads(payload).get("worker", {}).get("image_digest") != "sha256:" + match[1]):
+        raise ValueError("Runtime catalog must use its worker digest and content hash in the private namespace")
+    token = command(["auth", "print-access-token", "--project", project], capture=True)
+    if not token or any(character.isspace() for character in token):
+        raise RuntimeError("Could not obtain a build access token for catalog publication")
+    bucket = quote(f"{project}-groundwork-artifacts", safe="")
+    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    query = urlencode({"uploadType": "media", "name": key, "ifGenerationMatch": "0"})
+    request = Request(f"https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?{query}",
+                      data=payload, headers=headers, method="POST")
+    try:
+        with urlopen(request, timeout=30) as response:
+            response.read(65536)
+        return
+    except HTTPError as error:
+        if error.code != 412:
+            raise RuntimeError(f"Runtime catalog publication failed (HTTP {error.code}); API rollout aborted") from None
+    except (URLError, OSError) as error:
+        raise RuntimeError("Runtime catalog publication could not reach Cloud Storage; API rollout aborted") from error
+    # A retry/concurrent release may have already created the exact immutable object.
+    # Read only that object; prefix-scoped IAM intentionally grants no bucket listing.
+    request = Request(f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{quote(key, safe='')}?alt=media",
+                      headers={"Authorization": "Bearer " + token}, method="GET")
+    try:
+        with urlopen(request, timeout=30) as response:
+            existing = response.read(len(payload) + 1)
+    except HTTPError as error:
+        raise RuntimeError(f"Existing runtime catalog could not be verified (HTTP {error.code}); API rollout aborted") from None
+    except (URLError, OSError) as error:
+        raise RuntimeError("Existing runtime catalog could not be read; API rollout aborted") from error
+    if existing != payload:
+        raise RuntimeError("Existing immutable runtime catalog has conflicting contents")
 
 
 def task_spec(job):
@@ -216,15 +257,7 @@ def main():
         payload = json.dumps(catalog, sort_keys=True, separators=(",", ":")).encode()
         checksum = hashlib.sha256(payload).hexdigest()
         catalog_key = f"platform/runtime-bindings/{worker_digest[7:]}/{checksum}.json"
-        path = root / "catalog.json"
-        path.write_bytes(payload)
-        destination = f"gs://{project}-groundwork-artifacts/{catalog_key}"
-        if exists(["storage", "objects", "describe", destination, "--project", project]):
-            actual = command(["storage", "cat", destination], capture=True)
-            if hashlib.sha256(actual.encode()).hexdigest() != checksum:
-                raise RuntimeError("Existing immutable runtime catalog has conflicting contents")
-        else:
-            command(["storage", "cp", str(path), destination, "--if-generation-match=0", "--project", project], capture=True)
+        publish_catalog(project, catalog_key, payload)
     public_url = service_url(project, region)
     current_binding = catalog["runtimes"][image_digest(current_runtime)]
     api_env = {"PLATFORM_BACKEND": "gcp", "GOOGLE_CLOUD_PROJECT": project, "PLATFORM_REGION": region,
