@@ -34,6 +34,9 @@ class AgentPoolEntry(BaseModel):
     type: str = "llm"
     runtime: Literal["in_process", "local_process", "external"] = "in_process"
     harness: Literal["scripted", "structured_output"] | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    required_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    asset_root: str | None = None
     model: str | None = None
     api_format: str | None = None
     api_base: str | None = None
@@ -53,6 +56,9 @@ class AgentPoolEntry(BaseModel):
         )
         if "runtime" not in self.model_fields_set:
             fields.pop("runtime", None)
+        for key in ("capabilities", "required_modalities", "asset_root"):
+            if key not in self.model_fields_set:
+                fields.pop(key, None)
         result = {**fields, **self.config}
         from .remote.seats import validate_runtime
         validate_runtime(result)

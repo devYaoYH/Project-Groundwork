@@ -146,3 +146,20 @@ test("remote runtimes on other games and local scripted bindings are rejected", 
   const local = parseClientDesign("release: calendar@v1\nroster: [{id: p, role: player, kind: scripted, binding: dsm, runtime: local_process}]");
   assert.ok(validateClientDesign(local, { ...detail, environment_id: "calendar" }).some((issue) => issue.path === "roster[0].binding"));
 });
+
+test("image role requires explicit verified capabilities while text stays compatible", () => {
+  const design = { release: "test@v1", units: { episodes_per_cell: 1 }, seed: { root: 1 },
+    parameters: { item: { pin: "a" }, mode: { pin: "on" } },
+    roster: [{ id: "viewer", role: "player", kind: "scripted", binding: "baseline" }] };
+  const imageDetail = { ...detail, roles: [{ ...detail.roles[0], required_modalities: ["text", "image"] }] };
+  assert.ok(validateClientDesign(design, imageDetail).some((issue) => issue.path === "roster[0].capabilities"));
+  const capable = { ...design, roster: [{ ...design.roster[0], capabilities: { input: ["text", "image"], evidence: "fixture" } }] };
+  assert.equal(validateClientDesign(capable, imageDetail).length, 0);
+  assert.equal(validateClientDesign(design, detail).length, 0);
+});
+
+test("half-written image capability declarations report instead of throwing", () => {
+  const design = parseClientDesign("roster: [{id: p, role: player, kind: scripted, binding: baseline, capabilities: {input: 1, evidence: 2}}]");
+  const imageDetail = { ...detail, roles: [{ ...detail.roles[0], required_modalities: ["image"] }] };
+  assert.ok(validateClientDesign(design, imageDetail).some((issue) => issue.path === "roster[0].capabilities"));
+});

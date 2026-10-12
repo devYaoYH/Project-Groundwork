@@ -15,6 +15,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
+from pathlib import Path
 
 from .design import Design, DesignValidationError, ParticipantConfig, ValidationIssue
 from .environment import ParameterConfig, ReleaseDeclaration
@@ -79,6 +80,8 @@ def validate(
     """Return every semantic error without compiling a partial plan."""
 
     issues: list[ValidationIssue] = []
+    if declaration.item_policy and bank.item_bank_sha256 != declaration.item_policy.item_bank_sha256:
+        issues.append(ValidationIssue("release.item_policy", "item bank differs from pinned release"))
     parameters = {parameter.name: parameter for parameter in declaration.parameters}
     _validate_release_reference(design, declaration, release_id, issues)
     _validate_dispositions(design, parameters, bank, issues)
@@ -158,6 +161,11 @@ def compile(
             )
             item = _select_item(pool, declaration.item_policy.mode, episode_idx, seed)
             config = _base_config(declaration, design)
+            if bank.assets:
+                config["asset_root"] = str(Path(declaration.item_policy.bank_path).parent / "assets")
+                config["image_assets"] = [image.model_dump(exclude={"data"}) for image in bank.assets]
+                for agent in config["agents"]:
+                    agent["asset_root"] = config["asset_root"]
             config.update(_design_levels(levels, parameters))
             # These values are supplied by the frozen selected row, not by the
             # design.  A factor or pin only selected the row; it never supplied
@@ -319,6 +327,14 @@ def _validate_roster(
                 f"roster[{index}].binding",
                 f"unsupported scripted binding {participant.binding!r}; supported bindings: {supported}",
             ))
+        from .modalities import validate_seat
+        try:
+            validate_seat({"type": participant.kind, "model": participant.binding,
+                           "runtime": participant.runtime, "api_format": participant.api_format,
+                           "capabilities": participant.capabilities},
+                          declaration.required_modalities | role.required_modalities)
+        except ValueError as exc:
+            issues.append(ValidationIssue(f"roster[{index}].capabilities", str(exc)))
     for role_id, required in required_counts.items():
         assigned = assigned_counts[role_id]
         if assigned != required:
@@ -427,10 +443,17 @@ def _select_item(pool: list[Item], mode: str, episode_idx: int, seed: int) -> It
 def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, Any]:
     defaults = copy.deepcopy(declaration.engine.defaults if declaration.engine else {})
     defaults["environment_id"] = declaration.environment_id
+    defaults["required_modalities"] = sorted(declaration.required_modalities)
+    if any(role.required_modalities - {"text"} for role in declaration.roles):
+        defaults["seat_roles"] = [participant.role for participant in design.roster]
     defaults.setdefault("num_agents", len(design.roster))
     defaults["agents"] = [
         {
             "id": participant.id,
+            **({"capabilities": participant.capabilities} if participant.capabilities else {}),
+            **({"api_format": participant.api_format} if participant.api_format else {}),
+            **({"required_modalities": sorted(_seat_requirements(participant, declaration))}
+               if _seat_requirements(participant, declaration) - {"text"} else {}),
             "type": _runtime_agent_type(participant, declaration),
             **({"runtime": participant.runtime} if "runtime" in participant.model_fields_set else {}),
             **({"harness": participant.harness} if participant.harness else {}),
@@ -443,6 +466,11 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
         for participant in design.roster
     ]
     return defaults
+
+
+def _seat_requirements(participant, declaration):
+    return declaration.required_modalities | next(
+        (role.required_modalities for role in declaration.roles if role.id == participant.role), set())
 
 
 def _runtime_agent_type(participant: ParticipantConfig, declaration: ReleaseDeclaration) -> str:

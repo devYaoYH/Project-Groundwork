@@ -8,7 +8,7 @@ into ``Event.data`` and ``EpisodeTrace.final_state``/``metrics``.
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, model_validator
 
 
 class ParticipantBinding(BaseModel):
@@ -16,6 +16,8 @@ class ParticipantBinding(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     type: str = "llm"  # "llm" | "human" | "heuristic" | "random" | environment-defined
     model: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -44,7 +46,13 @@ class Event(BaseModel):
     ``data``.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_media(cls, value):
+        from .content import media_metadata
+        return media_metadata(value)
 
     type: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -87,7 +95,13 @@ class EpisodeReference(BaseModel):
 class EpisodeTrace(BaseModel):
     """Persisted record of a single environment run."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", hide_input_in_errors=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_media(cls, value):
+        from .content import media_metadata
+        return media_metadata(value)
 
     episode_uid: str
     config: SerializeAsAny[EpisodeConfigBase]

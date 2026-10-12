@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { MediaPreview } from "./MediaPreview";
 import { Chip } from "./Chip";
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
@@ -237,6 +238,7 @@ export function EpisodeView() {
                   <code>{line.type}</code>
                 </span>
                 {line.text ? <p>{line.text}</p> : <p className="muted">no text on this event</p>}
+                {environmentId ? <MediaPreview value={line.data} environmentId={environmentId} /> : null}
                 <ConfigDisclosure
                   label="Show recorded payload"
                   value={JSON.stringify(line.data, null, 2)}

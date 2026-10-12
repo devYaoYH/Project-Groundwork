@@ -96,6 +96,8 @@ def register_adapter(descriptor: AdapterDescriptor, factory: AdapterFactory) -> 
 
 
 def resolve_bindings(config: dict, specs: list[dict]) -> dict:
+    from .modalities import validate_config
+    validate_config({**config, "agents": specs})
     remote = any(spec.get("runtime", "in_process") != "in_process" for spec in specs)
     communication = "mcp.http" if remote else "local.in_process"
     explicit = config.get("adapter_bindings") or {}
@@ -142,4 +144,4 @@ for _name, _kind, _factory in (
     ("engine.llm", "model", _local_model), ("remote", "model", _remote_model),
     ("local.in_process", "communication", _communication), ("mcp.http", "communication", _mcp_communication),
 ):
-    register_adapter(AdapterDescriptor(name=_name, kind=_kind), _factory)
+    register_adapter(AdapterDescriptor(name=_name, kind=_kind, capabilities={"input:text", "input:image"}), _factory)

@@ -46,6 +46,124 @@
     "title": "CapabilityClaims",
     "type": "object"
   },
+  "ChatMessage": {
+    "$defs": {
+      "ImagePart": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "pattern": "^asset://[0-9a-f]{64}$",
+            "title": "Asset",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "maxLength": 5592408,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Data"
+          },
+          "mime_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ],
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "type": {
+            "const": "image",
+            "default": "image",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "sha256",
+          "mime_type"
+        ],
+        "title": "ImagePart",
+        "type": "object"
+      },
+      "TextPart": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TextPart",
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "properties": {
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "image": "#/$defs/ImagePart",
+                  "text": "#/$defs/TextPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextPart"
+                },
+                {
+                  "$ref": "#/$defs/ImagePart"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Content"
+      },
+      "role": {
+        "title": "Role",
+        "type": "string"
+      }
+    },
+    "required": [
+      "role",
+      "content"
+    ],
+    "title": "ChatMessage",
+    "type": "object"
+  },
   "Hello": {
     "additionalProperties": false,
     "properties": {
@@ -106,6 +224,56 @@
     "title": "HelloAcceptance",
     "type": "object"
   },
+  "ImagePart": {
+    "additionalProperties": false,
+    "properties": {
+      "asset": {
+        "pattern": "^asset://[0-9a-f]{64}$",
+        "title": "Asset",
+        "type": "string"
+      },
+      "data": {
+        "anyOf": [
+          {
+            "maxLength": 5592408,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Data"
+      },
+      "mime_type": {
+        "enum": [
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "title": "Mime Type",
+        "type": "string"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Sha256",
+        "type": "string"
+      },
+      "type": {
+        "const": "image",
+        "default": "image",
+        "title": "Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "asset",
+      "sha256",
+      "mime_type"
+    ],
+    "title": "ImagePart",
+    "type": "object"
+  },
   "JoinRequest": {
     "additionalProperties": false,
     "properties": {
@@ -121,6 +289,15 @@
         "maxLength": 2048,
         "title": "Callback Url",
         "type": "string"
+      },
+      "input_modalities": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 16,
+        "title": "Input Modalities",
+        "type": "array",
+        "uniqueItems": true
       },
       "join_ticket": {
         "maxLength": 256,
@@ -206,6 +383,138 @@
       "message"
     ],
     "title": "ProtocolError",
+    "type": "object"
+  },
+  "SeatObservation": {
+    "$defs": {
+      "ImagePart": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "pattern": "^asset://[0-9a-f]{64}$",
+            "title": "Asset",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "maxLength": 5592408,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Data"
+          },
+          "mime_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ],
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "type": {
+            "const": "image",
+            "default": "image",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "sha256",
+          "mime_type"
+        ],
+        "title": "ImagePart",
+        "type": "object"
+      },
+      "TextPart": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TextPart",
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "description": "Typed reserved content plus environment-owned, seat-projected fields.",
+    "properties": {
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "image": "#/$defs/ImagePart",
+                  "text": "#/$defs/TextPart"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TextPart"
+                },
+                {
+                  "$ref": "#/$defs/ImagePart"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Content"
+      }
+    },
+    "title": "SeatObservation",
+    "type": "object"
+  },
+  "TextPart": {
+    "additionalProperties": false,
+    "properties": {
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "type": {
+        "const": "text",
+        "default": "text",
+        "title": "Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "TextPart",
     "type": "object"
   },
   "ToolOutcome": {
@@ -450,7 +759,106 @@
       },
       "observation": {
         "additionalProperties": true,
-        "title": "Observation",
+        "description": "Typed reserved content plus environment-owned, seat-projected fields.",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "image": "#/$defs/ImagePart",
+                      "text": "#/$defs/TextPart"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "text": {
+                          "title": "Text",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "text",
+                          "default": "text",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
+                      "title": "TextPart",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "asset": {
+                          "pattern": "^asset://[0-9a-f]{64}$",
+                          "title": "Asset",
+                          "type": "string"
+                        },
+                        "data": {
+                          "anyOf": [
+                            {
+                              "maxLength": 5592408,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Data"
+                        },
+                        "mime_type": {
+                          "enum": [
+                            "image/png",
+                            "image/jpeg",
+                            "image/webp"
+                          ],
+                          "title": "Mime Type",
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "title": "Sha256",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "image",
+                          "default": "image",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "asset",
+                        "sha256",
+                        "mime_type"
+                      ],
+                      "title": "ImagePart",
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          }
+        },
+        "title": "SeatObservation",
         "type": "object"
       },
       "parent_phase": {

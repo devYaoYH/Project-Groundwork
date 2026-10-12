@@ -73,6 +73,14 @@ export function EnvironmentDetail({ id }: { id: string }) {
       {detail ? (
         <>
           <section className="card section-card">
+            <div className="section-heading"><h2>Participant inputs</h2><p>Environment inputs: {(detail.required_modalities ?? ["text"]).join(", ")}</p></div>
+            <DataTable rows={detail.roles} rowKey={(role) => role.id} columns={[
+              { label: "role", render: (role) => role.id },
+              { label: "required inputs", render: (role) => (role.required_modalities ?? ["text"]).join(", ") },
+              { label: "count", render: (role) => role.count },
+            ]} />
+          </section>
+          <section className="card section-card">
             <div className="section-heading"><h2>Parameters</h2><p>Design-set levels are written into the episode config, while item levels are frozen in the bank alongside the oracle — factoring over one selects items rather than overriding them.</p></div>
             <DataTable
               rows={detail.parameters}

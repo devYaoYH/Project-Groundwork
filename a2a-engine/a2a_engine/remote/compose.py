@@ -12,7 +12,7 @@ from .network import NetworkPolicy
 from .seats import validate_runtimes, write_descriptor
 from .server import EnvironmentApp, ManagedEpisode, RuntimeManager
 
-MODEL_FIELDS = frozenset({"type", "model", "api_base", "api_format", "temperature", "max_tokens"})
+MODEL_FIELDS = frozenset({"type", "model", "api_base", "api_format", "temperature", "max_tokens", "capabilities"})
 _managers = set()
 _manager_lock = threading.RLock()
 
@@ -112,6 +112,9 @@ class ComposeRuntimeManager(RuntimeManager):
                         raise ValueError("agent service provider credential is unavailable")
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
             environment_id=config["environment_id"], join_timeout_s=config.get("join_timeout_s", 10))
+        for index, spec in remote.items():
+            episode.seats[index].required_modalities = set(spec.get("required_modalities", config.get("required_modalities", ["text"])))
+            episode.seats[index].asset_root = config.get("asset_root")
         runtime = ManagedEpisode(self, episode)
         with self.lock:
             if self.cancelled:
@@ -121,7 +124,7 @@ class ComposeRuntimeManager(RuntimeManager):
         try:
             for seat, spec in remote.items():
                 unsupported = {key for key, value in spec.items() if value not in (None, {}, [], "")}
-                unsupported -= MODEL_FIELDS | {"name", "id", "role", "runtime", "harness", "description"}
+                unsupported -= MODEL_FIELDS | {"name", "id", "role", "runtime", "harness", "description", "required_modalities", "asset_root"}
                 if unsupported:
                     raise ValueError("unsupported Compose agent policy fields")
                 policy = {"type": "scripted"} if scripted else {key: value for key, value in spec.items() if key in MODEL_FIELDS}

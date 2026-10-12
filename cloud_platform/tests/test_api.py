@@ -276,3 +276,25 @@ def test_user_design_external_runtime_is_rejected(platform):
                                                    "design_text": design})
     assert response.status_code == 400
     assert "runtime" in response.json()["error"]
+
+
+def test_researcher_image_preview_requires_session_and_verified_release_asset(platform, tmp_path, monkeypatch):
+    import base64
+    from a2a_engine.content import AssetStore
+    from a2a_engine.items import ItemBank
+    application, control, _ = platform
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=")
+    image = AssetStore(tmp_path / "assets").put(png, "image/png")
+    path = tmp_path / "items.jsonl"
+    path.write_text(json.dumps({"item_id": "private-fixture", "params": {"content": [image.model_dump(exclude_none=True)]}}))
+    bank = ItemBank.load(path)
+    monkeypatch.setattr(control.local_catalogue, "_item_bank", lambda identifier: bank)
+    url = f"/api/environments/calendar/assets/{image.sha256}"
+    assert TestClient(application).get(url).status_code == 401
+    client = sign_in(application, "Alice")
+    response = client.get(url)
+    assert response.status_code == 200 and response.content == png
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get("/api/environments/calendar/assets/" + "0" * 64).status_code == 404

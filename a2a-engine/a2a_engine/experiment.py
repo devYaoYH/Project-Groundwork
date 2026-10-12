@@ -288,6 +288,25 @@ def _typed_to_legacy_spec(
     elif experiment.participants:
         declared = sum(role.count for role in release.roles) or None
         defaults["agents"] = _hydrate(experiment.participants, source_path, declared)
+    defaults["required_modalities"] = sorted(release.required_modalities)
+    if experiment.agents and any(role.required_modalities - {"text"} for role in release.roles):
+        defaults["seat_roles"] = [agent.role for agent in experiment.agents]
+    for index, agent in enumerate(defaults.get("agents", [])):
+        role_id = experiment.agents[index].role if experiment.agents else None
+        role = next((role for role in release.roles if role.id == role_id), None)
+        required = release.required_modalities | (role.required_modalities if role else set().union(
+            *(role.required_modalities for role in release.roles)))
+        agent["required_modalities"] = sorted(required)
+    if release.item_policy:
+        from .items import ItemBank
+        bank = ItemBank.load((source_path.parent / experiment.release).parent / release.item_policy.bank_path)
+        if bank.assets:
+            defaults["asset_root"] = str(bank.asset_store.root)
+            defaults["image_assets"] = [image.model_dump(exclude={"data"}) for image in bank.assets]
+            for agent in defaults.get("agents", []):
+                agent["asset_root"] = str(bank.asset_store.root)
+    from .modalities import validate_config
+    validate_config(defaults)
     if "num_agents" not in defaults and release.roles:
         defaults["num_agents"] = sum(role.count for role in release.roles)
     defaults["release"] = {
