@@ -29,7 +29,7 @@ from a2a_engine.ratings import rebuild_rating_snapshot
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.redis_stream import RedisStreams, decode_stream_events
 from a2a_engine.stream_projection import project_stream_to_trace, projection_summary
-from a2a_engine.provenance import pinned_participants, provenance_of
+from a2a_engine.provenance import configured_roles, pinned_participants, provenance_of
 from a2a_engine.design import DesignValidationError
 try:  # Works both as ``python local_stack/server.py`` and as a package import.
     from local_stack.control_plane import ControlPlane, DesignDigestMismatch, OracleUnavailable
@@ -410,6 +410,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
         "who the config said would play" rather than to nothing.
         """
         block = provenance_of(trace)
+        seat_roles = configured_roles(trace.config.model_dump(mode="json"))
         participants = block.get("participants")
         if not isinstance(participants, list) or not participants:
             participants = pinned_participants(trace.config.model_dump(mode="json"))
@@ -421,6 +422,7 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 "participant_id": str(entry.get("participant_id") or ""),
                 "kind": str(entry.get("kind") or "llm"),
                 "binding": entry.get("binding"),
+                **({"role": seat_roles[entry["participant_id"]]} if entry.get("participant_id") in seat_roles else {}),
             })
         lanes = [lane for lane in lanes if lane["participant_id"]]
         experiment_id = block.get("experiment_id")

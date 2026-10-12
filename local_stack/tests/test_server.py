@@ -1119,3 +1119,10 @@ def test_launcher_keeps_run_artifacts_off_the_read_only_workspace(tmp_path):
     results = command[command.index("--results-dir") + 1]
     assert results.endswith("/results")
     assert not results.startswith(str(control.workspace)), "artifacts must not land in the repo"
+
+
+def test_typed_trace_lane_roles_are_read_without_a_control_plane():
+    config = EpisodeConfigBase(environment_id="word_guess", num_agents=2,
+        agents=[{"type": "scripted"}, {"type": "scripted"}], seat_roles=["guesser", "host"])
+    trace = EpisodeTrace(episode_uid="typed-roles", config=config, events=[])
+    assert [lane["role"] for lane in LocalStackHandler._lanes(trace)] == ["guesser", "host"]
