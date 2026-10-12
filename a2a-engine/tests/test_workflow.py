@@ -16,9 +16,9 @@ def test_export_uses_executable_bindings_without_evaluation(monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("export executed game code")
 
-    for name in ("check_turn", "can_continue", "select_guesser", "select_host",
+    for name in ("next_turn", "can_continue", "select_guesser", "select_host",
                  "guesser_observation", "host_observation", "word_guess_adapter", "record_guess",
-                 "record_reply", "evaluate_exchange", "finalize"):
+                 "judge_reply", "finalize"):
         original = getattr(workflow, name)
         fail.__name__, fail.__qualname__, fail.__module__ = original.__name__, original.__qualname__, original.__module__
         # Unique function objects retain their distinct symbolic identity.
@@ -40,7 +40,7 @@ def test_export_uses_executable_bindings_without_evaluation(monkeypatch):
     agents = [node for node in root["nodes"] if node["kind"] == "agent_call"]
     assert [node["actor_selector"] for node in agents] == ["word_guess.workflow.select_guesser", "word_guess.workflow.select_host"]
     assert {edge.get("route_key") for edge in root["edges"] if edge["conditional"]} == {"continue", "finished"}
-    assert len(root["nodes"]) == 9 and len(root["edges"]) == 9
+    assert len(root["nodes"]) == 8 and len(root["edges"]) == 8
     assert "initialize" not in {node["id"] for node in root["nodes"]}
     assert result == environment_workflow("word_guess")
     assert len(json.dumps(result)) < 10000

@@ -171,6 +171,7 @@ class WordGuessGame:
             setup = self.setup()
             with self.episode.started(self.registrations(setup), protocols=self.runtime_capability().protocols,
                                       register_timeout_s=self.config.turn_timeout_s) as roster:
+                # Keep the existing recursion limit as an upper bound on graph steps.
                 state = await self.build_program().ainvoke(setup, context=GameContext(self, roster),
                     config={"recursion_limit": max(10, self.config.max_turns * 7 + 5)})
                 return self._trace(state)
