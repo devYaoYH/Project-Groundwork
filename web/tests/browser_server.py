@@ -53,7 +53,7 @@ with TemporaryDirectory(prefix="workflow-browser-") as directory:
     SQLiteEpisodeStore(path=LocalStackHandler.database).put_episode(trace, manifest)
     from tangram_reference.environment import TangramReferenceEnvironment
     visual_caps = {"input": ["text", "image"], "evidence": "groundwork:scripted-visual-v1"}
-    config = {"environment_id": "tangram_reference", "num_agents": 2, "num_rounds": 2,
+    config = {"environment_id": "tangram_reference", "num_agents": 2, "num_rounds": 2, "seat_roles": ['director', 'matcher'],
               "agents": [{"type": "scripted", "role": role, "capabilities": visual_caps} for role in ['director', 'matcher']],
               "asset_root": str(Path(directory) / "tangram_reference" / "generated")}
     trace = TangramReferenceEnvironment(config, dry_run=True).run()

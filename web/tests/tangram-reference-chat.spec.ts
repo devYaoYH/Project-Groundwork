@@ -15,6 +15,7 @@ for (const environment of ["tangram_reference"]) for (const width of [390, 1280]
     await expect(page.getByRole("note")).toContainText("Scripted seats");
     await expect(chat.locator(".chat-input").first()).toBeVisible();
     if (environment !== "hidden_profile") {
+      await expect(chat).toHaveClass(/chat-dyad/);
       const input = chat.locator(".chat-input").first();
       await expect(input.locator("img")).toHaveCount(1);
       expect(await input.evaluate(element => {
