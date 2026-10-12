@@ -89,20 +89,35 @@ def test_existing_runtime_source_tag_is_reused_without_rebuild(tmp_path, monkeyp
     assert (tmp_path / "runtime-image").read_text() == tag.rsplit(":", 1)[0] + "@" + NEW_DIGEST
 
 
-def test_runtime_lookup_permission_failure_aborts_instead_of_overwriting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("diagnostic", [
+    "PERMISSION_DENIED",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Connection reset by peer",
+    "PERMISSION_DENIED: Image not found.",
+    "Network error while checking NOT_FOUND status",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Image not found. Access denied.",
+])
+def test_runtime_lookup_failure_aborts_instead_of_overwriting(tmp_path, monkeypatch, diagnostic):
     runtime_cli(tmp_path, monkeypatch)
     def denied(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["gcloud"], stderr="PERMISSION_DENIED")
+        raise subprocess.CalledProcessError(1, ["gcloud"], stderr=diagnostic)
     monkeypatch.setattr(prepare_runtime, "command", denied)
     with pytest.raises(RuntimeError, match="refusing to rebuild or overwrite"):
         prepare_runtime.main()
     assert not (tmp_path / "runtime-image").exists()
 
 
-def test_only_explicit_runtime_not_found_selects_build(tmp_path, monkeypatch):
+@pytest.mark.parametrize("diagnostic", [
+    "NOT_FOUND: Requested entity was not found",
+    "ERROR: (gcloud.artifacts.docker.images.describe) NOT_FOUND: Requested entity was not found",
+    "ERROR: (gcloud.artifacts.docker.images.describe) Image not found.\n\n"
+    "A valid container image can be referenced by tag or digest, has the format of\n"
+    "  LOCATION-docker.DOMAIN/PROJECT-ID/REPOSITORY-ID/IMAGE:tag\n"
+    "  LOCATION-docker.DOMAIN/PROJECT-ID/REPOSITORY-ID/IMAGE@sha256:digest\n",
+])
+def test_only_explicit_runtime_not_found_selects_build(tmp_path, monkeypatch, diagnostic):
     tag = runtime_cli(tmp_path, monkeypatch)
     def missing(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["gcloud"], stderr="NOT_FOUND: Requested entity was not found")
+        raise subprocess.CalledProcessError(1, ["gcloud"], stderr=diagnostic)
     monkeypatch.setattr(prepare_runtime, "command", missing)
     prepare_runtime.main()
     assert not (tmp_path / "runtime-existing").exists()

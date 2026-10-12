@@ -11,6 +11,15 @@ except ImportError:
     from common import command
 
 
+def image_is_missing(stderr: str) -> bool:
+    """Recognize only gcloud's explicit missing-image error diagnostics."""
+    return bool(re.search(
+        r"^(?:ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) )?NOT_FOUND(?::|\s|$)"
+        r"|^ERROR: \(gcloud\.artifacts\.docker\.images\.describe\) Image not found\.$",
+        stderr, re.MULTILINE,
+    ))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
@@ -31,7 +40,7 @@ def main():
         raw = command(check, capture=True)
         reused = True
     except subprocess.CalledProcessError as error:
-        if "NOT_FOUND" not in (error.stderr or ""):
+        if not image_is_missing(error.stderr or ""):
             raise RuntimeError("Runtime source tag lookup failed; refusing to rebuild or overwrite it") from error
         reused = False
     if reused:

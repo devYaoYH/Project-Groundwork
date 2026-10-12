@@ -1,5 +1,12 @@
 # Platform deployment changelog
 
+## First runtime publication lookup — 2026-10-11
+
+- Recognize the exact `gcloud artifacts docker images describe` diagnostic
+  `Image not found.` when the first immutable runtime tag has not been published.
+  Build the missing runtime while continuing to reject permission, network and
+  other lookup failures before any publication or API rollout.
+
 ## Independent runtime and worker pins — 2026-10-11
 
 - Keep each experiment's runtime image, source SHA and frozen plan immutable while
