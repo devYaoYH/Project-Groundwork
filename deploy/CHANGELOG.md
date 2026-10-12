@@ -31,6 +31,17 @@
 This entry describes implementation on the separation branch. Hosted publication
 and a successful execution through the new binding are verified separately.
 
+## Local developer catalogue
+
+- Generate release metadata automatically from installed game packages during
+  image builds. Local APIs persist a content-addressed JSON catalogue on the
+  existing data volume and reuse it instead of constructing catalogue databases
+  for each request. Private user experiment counts remain separate.
+- Preserve catalogue API contracts, item browsing, agent choices and validation;
+  compiler and runner SQLite snapshots remain private execution artifacts.
+- Allow an alternate local image tag so independent Compose staging stacks do
+  not overwrite the shared default image. No Firebase emulator is required.
+
 ## Live launch logs and progress — 2026-10-11
 
 - Publish unbuffered runner output and provisional episode progress during

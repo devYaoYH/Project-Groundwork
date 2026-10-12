@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import uuid
 import zipfile
 import yaml
@@ -84,6 +85,8 @@ class PlatformControl:
         self.runtime_image = os.getenv("PLATFORM_RUNTIME_IMAGE", "local")
         self.runtime_catalog_key = os.getenv("PLATFORM_RUNTIME_CATALOG_KEY", "")
         self._runtime_catalog = None
+        self._catalogue = None
+        self._catalogue_lock = threading.Lock()
 
     def runtime_pin(self):
         # Legacy aliases describe science, not the independently updated worker.
@@ -109,6 +112,17 @@ class PlatformControl:
                 "worker_image_digest": self.image_digest, "worker_contract_version": CONTRACT_VERSION,
                 "job_name": "local-runtime", "live_logs": True}
 
+    @property
+    def local_catalogue(self):
+        if self.repo.backend != "local":
+            return None
+        with self._catalogue_lock:
+            if self._catalogue is None:
+                from cloud_platform.catalogue import LocalCatalogue
+                self._catalogue = LocalCatalogue(self.workspace, self.repo.data_dir,
+                    os.getenv("PLATFORM_CATALOGUE_MANIFEST") or None)
+        return self._catalogue
+
     def compiler(self, directory, content=None):
         path = Path(directory) / "compiler.db"
         if content:
@@ -118,6 +132,10 @@ class PlatformControl:
         return cp
 
     def releases(self):
+        if self.local_catalogue is not None:
+            templates = self.local_catalogue.available_experiments()
+            return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
+                     **self.runtime_pin()} for release in self.local_catalogue.releases()]
         with tempfile.TemporaryDirectory() as directory:
             cp = self.compiler(directory)
             templates = cp.available_experiments()

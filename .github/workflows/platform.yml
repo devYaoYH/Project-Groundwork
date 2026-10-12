@@ -1,7 +1,7 @@
 name: Platform release
 on:
   pull_request:
-    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml']
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml']
   push:
     branches: [main]
   workflow_dispatch:
