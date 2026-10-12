@@ -71,7 +71,9 @@ def _seat_specs(config):
     return [specs[i] if i < len(specs) else {} for i in range(config.get("num_agents", len(specs) or 2))]
 
 
-def open_episode(manager, config, *, scripted=False) -> EpisodeSession:
+def open_episode(manager, config, *, scripted=False, runtime_context=None) -> EpisodeSession:
+    if runtime_context is not None:
+        return EpisodeSession(config, runtime_context)
     if manager is None or all(s.get("runtime", "in_process") == "in_process" for s in _seat_specs(config)):
         return EpisodeSession.local(config)
     return EpisodeSession(config, manager.provision(config, scripted=scripted))
@@ -133,11 +135,16 @@ class EpisodeSession:
 
     @contextmanager
     def started(self, registrations: Mapping[int, Registration], *, protocols: frozenset[str],
-                register_timeout_s: float, clock=time.monotonic) -> Iterator[Roster]:
+                register_timeout_s: float, end_timeout_s: float | None = None,
+                clock=time.monotonic) -> Iterator[Roster]:
         if set(registrations) != {s.seat for s in self.handle.seats}:
             raise ValueError("registrations must include every roster seat")
         if not math.isfinite(register_timeout_s) or register_timeout_s <= 0:
             raise ValueError("register_timeout_s must be finite and positive")
+        if end_timeout_s is None:
+            end_timeout_s = register_timeout_s
+        if not math.isfinite(end_timeout_s) or end_timeout_s <= 0:
+            raise ValueError("end_timeout_s must be finite and positive")
         if self.closed:
             raise SeatsUnavailable(registrations)
         registered = []
@@ -179,6 +186,6 @@ class EpisodeSession:
             if not cancelled:
                 for seat in registered:
                     try:
-                        self._dispatch(seat, "episode_end", Registration({}), register_timeout_s, clock)
+                        self._dispatch(seat, "episode_end", Registration({}), end_timeout_s, clock)
                     except DeliveryFailure:
                         pass

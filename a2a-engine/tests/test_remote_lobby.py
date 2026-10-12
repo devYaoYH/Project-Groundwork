@@ -117,3 +117,54 @@ def test_local_attempt_does_not_provision_and_close_is_idempotent():
     session.close()
     session.close()
     managed.close.assert_called_once()
+
+
+def test_preprovisioned_context_opens_without_provisioning(remote_harness):
+    from unittest.mock import Mock
+    harness = remote_harness()
+    manager = Mock()
+    session = open_episode(manager, {"num_agents": 1, "agents": [{"runtime": "external"}]},
+                           runtime_context=harness.context)
+    assert session.managed is harness.context
+    assert session.handle.episode_id == harness.episode.episode_id
+    manager.provision.assert_not_called()
+
+
+@pytest.mark.parametrize("play_failure", [False, True])
+@pytest.mark.parametrize("end_timeout,expected", [(None, 15), (.25, .25)])
+def test_end_timeout_is_independent_and_failure_remains_best_effort(remote_harness, monkeypatch, end_timeout, expected, play_failure):
+    session = session_for(remote_harness(seats=(0, 1)))
+    calls = []
+
+    def dispatch(seat, kind, registration, timeout_s, clock):
+        calls.append((seat.seat, kind, timeout_s))
+        if kind == "episode_end":
+            raise DeliveryFailure("unreachable", 1)
+
+    monkeypatch.setattr(session, "_dispatch", dispatch)
+    error = RuntimeError("play failed")
+
+    def play():
+        with session.started({0: Registration({}), 1: Registration({})}, protocols=PROTOCOLS,
+                             register_timeout_s=15, end_timeout_s=end_timeout):
+            if play_failure:
+                raise error
+
+    if play_failure:
+        with pytest.raises(RuntimeError) as raised:
+            play()
+        assert raised.value is error
+    else:
+        play()
+    assert calls == [(0, "register", 15), (1, "register", 15),
+                     (0, "episode_end", expected), (1, "episode_end", expected)]
+    assert not session.closed
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+def test_invalid_end_timeout_rejected_before_registration(timeout):
+    session = open_episode(None, {"num_agents": 1})
+    with pytest.raises(ValueError, match="end_timeout_s"):
+        with session.started({0: Registration({})}, protocols=PROTOCOLS,
+                             register_timeout_s=1, end_timeout_s=timeout):
+            pytest.fail("invalid timeout entered play")

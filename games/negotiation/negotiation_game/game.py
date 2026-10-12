@@ -125,10 +125,10 @@ class NegotiationGame:
         self.dry_run = dry_run
         self.events: list[Event] = []
         self._publisher = publisher_from_config(self.config)
-        from a2a_engine.remote.lobby import EpisodeSession, open_episode
+        from a2a_engine.remote.lobby import open_episode
         self._owns_episode = episode is None
-        self.episode = episode or (EpisodeSession(self.config.model_dump(), runtime_context) if runtime_context
-                                   else open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run))
+        self.episode = episode or open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run,
+                                               runtime_context=runtime_context)
         self.runtime = self.episode.managed
 
     @classmethod

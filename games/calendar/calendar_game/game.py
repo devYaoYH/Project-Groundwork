@@ -392,10 +392,9 @@ class CalendarGame:
         return RuntimeCapability(CALENDAR_TOOLS, protocols=frozenset({PROTOCOL_VERSION, PROTOCOL_VERSION_V2}))
 
     def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, episode=None, runtime_context=None, runtime_manager=None) -> None:
-        from a2a_engine.remote.lobby import EpisodeSession
+        from a2a_engine.remote.lobby import open_episode
         self._owns_episode = episode is None
         self.episode = episode
-        runtime_context = runtime_context or (episode.managed if episode else None)
         authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
         self.config = CalendarGameConfig(**resolve_config(authored))
         from a2a_engine.remote.seats import validate_runtimes
@@ -411,11 +410,13 @@ class CalendarGame:
         self.adapter_bindings = resolve_bindings(authored, [self._agent_spec_for(seat) for seat in range(self.config.num_agents)])
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
-        self.runtime_context = runtime_context
         self.runtime_manager = runtime_manager
         self._owned_manager = None
         if self.episode is None and runtime_context is not None:
-            self.episode = EpisodeSession(self.config.model_dump(), runtime_context)
+            self.episode = open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run,
+                                        runtime_context=runtime_context)
+        self.runtime_context = self.episode.managed if self.episode is not None else None
+        runtime_context = self.runtime_context
         self._remote_clients = {}
         self._remote_budget_usage = {}
         external = {
