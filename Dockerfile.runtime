@@ -1,0 +1,13 @@
+# Scientific packages are independently pinned; no control API, worker, or web.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONPATH=/workspace
+WORKDIR /workspace
+COPY a2a-engine/ a2a-engine/
+COPY a2a-agent/ a2a-agent/
+COPY a2a-judge/ a2a-judge/
+COPY expt-runner/ expt-runner/
+COPY games/ games/
+COPY experiments/ experiments/
+COPY scripts/install_workspace.py scripts/install_workspace.py
+RUN python scripts/install_workspace.py
+CMD ["python", "-m", "expt_runner.run_experiment", "--help"]

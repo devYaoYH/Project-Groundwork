@@ -7,6 +7,7 @@
 **/__pycache__
 *.py[cod]
 .env*
+.platform-build/
 gha-creds-*.json
 agents.local.yaml
 .demo-shots

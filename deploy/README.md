@@ -90,6 +90,16 @@ Run as a project administrator:
 python deploy/bootstrap.py --project cicl-487801 --region us-central1
 ```
 
+Before the first deployment of independent worker/runtime versions, rerun
+bootstrap to create the immutable-tag `groundwork-runtime` Artifact Registry
+repository and grant the build identity create/read access restricted to the
+`platform/runtime-bindings/` artifact prefix. Subsequent releases discover and
+retain the existing digest-pinned legacy runtime images automatically.
+
+Compose uses mutable development tags and `local` provenance placeholders by
+default. Hosted source commits, image digests and binding catalogs enforce the
+immutable runtime history described above.
+
 No provider secret is created with an empty value. To enable a provider, add a
 Secret Manager secret with its real value, then grant `groundwork-worker` the
 `roles/secretmanager.secretAccessor` role **on that secret**. Supported names are
@@ -112,7 +122,7 @@ image with the checked-in build-only config before initializing service IAM:
 gcloud builds submit . --project cicl-487801 --region us-central1 \
   --config deploy/cloudbuild-image.yaml \
   --gcs-source-staging-dir gs://cicl-487801-groundwork-build-source/source \
-  --substitutions _SOURCE_SHA=FULL_COMMIT
+  --substitutions _SOURCE_SHA=FULL_COMMIT,_RUNTIME_SOURCE_SHA=SCIENCE_COMMIT
 ```
 
 Initial deployment
@@ -122,7 +132,9 @@ requires an administrator to run `deploy/release.py` once with
 ```sh
 python deploy/release.py --project cicl-487801 --region us-central1 \
   --image us-central1-docker.pkg.dev/cicl-487801/groundwork/platform:COMMIT \
-  --source-sha FULL_COMMIT --oauth-client-id CLIENT.apps.googleusercontent.com \
+  --source-sha FULL_COMMIT \
+  --runtime-image us-central1-docker.pkg.dev/cicl-487801/groundwork-runtime/runtime:SCIENCE_COMMIT \
+  --runtime-source-sha SCIENCE_COMMIT --oauth-client-id CLIENT.apps.googleusercontent.com \
   --initialize-public
 ```
 
@@ -176,7 +188,7 @@ same pipeline manually:
 gcloud builds submit . --project cicl-487801 --region us-central1 \
   --config cloudbuild.yaml \
   --gcs-source-staging-dir gs://cicl-487801-groundwork-build-source/source \
-  --substitutions _SOURCE_SHA=FULL_COMMIT,_GOOGLE_OAUTH_CLIENT_ID=CLIENT.apps.googleusercontent.com
+  --substitutions _SOURCE_SHA=FULL_COMMIT,_RUNTIME_SOURCE_SHA=SCIENCE_COMMIT,_GOOGLE_OAUTH_CLIENT_ID=CLIENT.apps.googleusercontent.com
 ```
 
 Workload Identity Federation permits impersonation of `groundwork-ci`; API
