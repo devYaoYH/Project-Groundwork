@@ -56,6 +56,10 @@ class Viewer:
                 return cp.run_oracle(identifier, str((body or {}).get("item_id") or ""))
             return cp.environment_detail(identifier)
 
+    def environment_asset(self, identifier, digest):
+        with self.catalog() as cp:
+            return cp.environment_asset(identifier, digest)
+
     def agent_pool(self):
         with self.catalog() as cp:
             payload = cp.agent_pool()

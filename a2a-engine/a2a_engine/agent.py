@@ -11,6 +11,7 @@ from typing import Any
 
 from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.api import LLMClient
+from a2a_engine.content import content_modalities, observation_content
 from a2a_engine.tracing_otel import get_tracer
 
 
@@ -48,7 +49,7 @@ class LLMAgent(AgentInterface):
         msgs: list[dict] = []
         if self.system_prompt:
             msgs.append({"role": "system", "content": self.system_prompt})
-        msgs.append({"role": "user", "content": str(observation)})
+        msgs.append({"role": "user", "content": observation_content(observation)})
         return msgs
 
     def parse_response(
@@ -76,5 +77,8 @@ class LLMAgent(AgentInterface):
             if conv_id:
                 span.set_attribute("gen_ai.conversation.id", conv_id)
             messages = self.build_messages(observation, tools)
+            expected = content_modalities([{"content": observation_content(observation)}])
+            if not expected <= content_modalities(messages):
+                raise ValueError("build_messages discarded required observation modalities")
             text = self.client.oneshot(messages)
             return self.parse_response(text, observation, tools)

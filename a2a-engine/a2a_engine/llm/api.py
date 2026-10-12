@@ -8,6 +8,9 @@ Environment-agnostic: no environment-specific prompt formatting lives here.
 """
 
 import asyncio
+import base64
+from a2a_engine.content import content_modalities, media_metadata, provider_messages
+from a2a_engine.modalities import ModalityCapabilities, require_modalities
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
@@ -27,6 +30,7 @@ from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.retry import (
     DEFAULT_POLICY,
     FailureInfo,
+    ImageProviderError,
     RateLimiter,
     RetryExhausted,
     RetryPolicy,
@@ -73,7 +77,8 @@ def _server_address(api_base: str) -> str | None:
 def _messages_to_genai(messages: list[dict]) -> str:
     parts = [
         {"role": m.get("role", "user"),
-         "parts": [{"type": "text", "content": m.get("content", "")}]}
+         "parts": ([{"type": "text", "content": m.get("content", "")}]
+                   if m.get("content") is None or isinstance(m.get("content", ""), str) else media_metadata(m["content"]))}
         for m in messages
     ]
     return json.dumps(parts)
@@ -136,10 +141,18 @@ def _finish_chat_span(span, *, response_model: str | None = None,
             pass
 
 
-def _record_chat_error(span, exc: BaseException) -> None:
+def _record_chat_error(span, exc: BaseException, *, image_input: bool = False) -> None:
     span.set_status(Status(StatusCode.ERROR))
     span.set_attribute("error.type", type(exc).__name__)
-    span.record_exception(exc)
+    if image_input:
+        # Provider diagnostics may echo submitted bytes. Keep the exception type
+        # while overriding both attributes that can contain the provider body.
+        span.record_exception(exc, attributes={
+            "exception.message": "Image provider request failed; diagnostic content omitted",
+            "exception.stacktrace": "",
+        })
+    else:
+        span.record_exception(exc)
 
 log = logging.getLogger("a2a_engine.llm")
 
@@ -172,6 +185,8 @@ class LLMClient(BaseModel):
     gcp_project: str | None = None
     gcp_location: str | None = None
     extra: dict = Field(default_factory=dict)
+    capabilities: ModalityCapabilities = Field(default_factory=ModalityCapabilities)
+    asset_root: str | None = None
 
     #: Retry/backoff policy applied to every call made through this client.
     #: Enabled by default: retries fire only on transient failures (429, 5xx,
@@ -204,6 +219,7 @@ class LLMClient(BaseModel):
             return call_llm_oneshot(
                 api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
                 model=self.model, messages=messages,
+                capabilities=self.capabilities, asset_root=self.asset_root,
                 max_tokens=kw.get("max_tokens", self.max_tokens),
                 temperature=kw.get("temperature", self.temperature),
                 vertex_adc_file=kw.get("vertex_adc_file", self.vertex_adc_file),
@@ -225,6 +241,7 @@ class LLMClient(BaseModel):
         return call_llm_streaming(
             api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
             model=self.model, messages=messages,
+            capabilities=self.capabilities, asset_root=self.asset_root,
             max_tokens=kw.pop("max_tokens", self.max_tokens) or 4096,
             temperature=kw.pop("temperature", self.temperature),
             vertex_adc_file=kw.pop("vertex_adc_file", self.vertex_adc_file),
@@ -263,6 +280,7 @@ class LLMClient(BaseModel):
         return call_llm_streaming_with_retry(
             api_format=self.api_format, api_base=self.api_base, api_key=self.api_key,
             model=self.model, messages=messages,
+            capabilities=self.capabilities, asset_root=self.asset_root,
             max_tokens=kw.pop("max_tokens", self.max_tokens) or 4096,
             temperature=kw.pop("temperature", self.temperature),
             vertex_adc_file=kw.pop("vertex_adc_file", self.vertex_adc_file),
@@ -296,11 +314,19 @@ def call_llm_streaming(
     gcp_project: str | None = None,
     gcp_location: str | None = None,
     timeout: int = 120,
+    capabilities=None,
+    asset_root: str | None = None,
 ) -> dict:
     """Streaming LLM call. Returns dict with text, model, duration_s, token usage."""
+    modalities = content_modalities(messages)
+    require_modalities(modalities, capabilities, api_format=api_format)
+    image_input = "image" in modalities
+    converted = provider_messages(messages, api_format, asset_root)
     span = _start_chat_span(model, api_base, messages, temperature, max_tokens, stream=True)
+    messages = converted
     try:
-        with _otel_trace.use_span(span, end_on_exit=False):
+        with _otel_trace.use_span(span, end_on_exit=False, record_exception=not image_input,
+                                  set_status_on_exception=not image_input):
             if api_format == "anthropic":
                 result = _stream_anthropic(api_base, api_key, model, messages, max_tokens,
                                            temperature, on_first_chunk, loop, timeout=timeout)
@@ -346,7 +372,9 @@ def call_llm_streaming(
         )
         return result
     except BaseException as exc:
-        _record_chat_error(span, exc)
+        _record_chat_error(span, exc, image_input=image_input)
+        if image_input and isinstance(exc, Exception):
+            raise ImageProviderError(exc) from None
         raise
     finally:
         span.end()
@@ -411,14 +439,22 @@ def call_llm_oneshot(
     vertex_adc_file: str | None = None,
     gcp_project: str | None = None,
     gcp_location: str | None = None,
+    capabilities=None,
+    asset_root: str | None = None,
 ) -> str:
     """Non-streaming LLM call returning text."""
+    modalities = content_modalities(messages)
+    require_modalities(modalities, capabilities, api_format=api_format)
+    image_input = "image" in modalities
     model_cfg = get_model_config(model)
     effective_max = max_tokens or model_cfg.default_max_tokens
 
+    converted = provider_messages(messages, api_format, asset_root)
     span = _start_chat_span(model, api_base, messages, temperature, effective_max, stream=False)
+    messages = converted
     try:
-        with _otel_trace.use_span(span, end_on_exit=False):
+        with _otel_trace.use_span(span, end_on_exit=False, record_exception=not image_input,
+                                  set_status_on_exception=not image_input):
             if api_format == "anthropic":
                 text = _oneshot_anthropic(api_base, api_key, model, messages, effective_max,
                                           temperature, timeout, model_cfg)
@@ -449,7 +485,9 @@ def call_llm_oneshot(
         _finish_chat_span(span, response_model=model, output_text=text)
         return text
     except BaseException as exc:
-        _record_chat_error(span, exc)
+        _record_chat_error(span, exc, image_input=image_input)
+        if image_input and isinstance(exc, Exception):
+            raise ImageProviderError(exc) from None
         raise
     finally:
         span.end()
@@ -545,15 +583,29 @@ def _messages_to_vertexai(messages: list[dict]) -> tuple[str | None, list]:
     contents = []
     for m in messages:
         role = m["role"]
-        text = m["content"]
+        content = m["content"]
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
         if role == "system":
-            system_parts.append(text)
-        elif role == "assistant":
-            contents.append(_google_genai.types.Content(role="model", parts=[_google_genai.types.Part(text=text)]))
+            system_parts.extend(block["text"] for block in blocks)
         else:
-            contents.append(_google_genai.types.Content(role="user", parts=[_google_genai.types.Part(text=text)]))
+            mapped = []
+            for block in blocks:
+                if block["type"] == "text":
+                    mapped.append(_google_genai.types.Part(text=block["text"]))
+                elif block["type"] == "image":
+                    mapped.append(_google_genai.types.Part.from_bytes(
+                        data=base64.b64decode(block["data"], validate=True), mime_type=block["mime_type"]))
+                else:
+                    raise ValueError("unsupported Vertex content part")
+            contents.append(_google_genai.types.Content(role="model" if role == "assistant" else "user", parts=mapped))
     system_instruction = "\n\n".join(system_parts) if system_parts else None
     return system_instruction, contents
+
+
+def _system_text(content):
+    if isinstance(content, str):
+        return content
+    return "\n\n".join(block["text"] for block in content)
 
 
 def _messages_to_anthropic_vertexai(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -561,7 +613,7 @@ def _messages_to_anthropic_vertexai(messages: list[dict]) -> tuple[str, list[dic
     api_messages: list[dict] = []
     for m in messages:
         if m["role"] == "system":
-            system_parts.append(m["content"])
+            system_parts.append(_system_text(m["content"]))
         else:
             api_messages.append({"role": m["role"], "content": m["content"]})
     return "\n\n".join(system_parts), api_messages
@@ -615,7 +667,7 @@ def _oneshot_vertexai_anthropic(
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         try:
-            log.error("VERTEX ANTHROPIC API ERROR HTTP %d - %s", e.code, e.read().decode("utf-8", errors="replace"))
+            log.error("VERTEX ANTHROPIC API ERROR HTTP %d", e.code)
         except Exception:
             log.error("VERTEX ANTHROPIC API ERROR HTTP %d", e.code)
         raise
@@ -865,7 +917,7 @@ def _stream_openai(api_base, api_key, model, messages, max_tokens,
         resp = urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx)
     except urllib.error.HTTPError as e:
         try:
-            log.error("OpenAI API ERROR HTTP %d - %s", e.code, e.read().decode("utf-8", errors="replace"))
+            log.error("OpenAI API ERROR HTTP %d", e.code)
         except Exception:
             log.error("OpenAI API ERROR HTTP %d", e.code)
         raise
@@ -946,7 +998,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
     api_messages = []
     for m in messages:
         if m["role"] == "system":
-            system_text = m["content"]
+            system_text = _system_text(m["content"])
         else:
             api_messages.append(m)
 
@@ -954,9 +1006,11 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
     if api_messages:
         cached_idx = len(api_messages) - 1
         original_content = api_messages[cached_idx]["content"]
-        api_messages[cached_idx] = {**api_messages[cached_idx],
-            "content": [{"type": "text", "text": original_content,
-                         "cache_control": {"type": "ephemeral"}}]}
+        blocks = ([{"type": "text", "text": original_content}]
+                  if isinstance(original_content, str) else [dict(block) for block in original_content])
+        if blocks:
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        api_messages[cached_idx] = {**api_messages[cached_idx], "content": blocks}
 
     body: dict = {"model": model, "max_tokens": max_tokens, "messages": api_messages, "stream": True}
     if model_cfg.supports_temperature:
@@ -978,7 +1032,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
         resp = urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx)
     except urllib.error.HTTPError as e:
         try:
-            log.error("ANTHROPIC API ERROR HTTP %d - %s", e.code, e.read().decode("utf-8", errors="replace"))
+            log.error("ANTHROPIC API ERROR HTTP %d", e.code)
         except Exception:
             log.error("ANTHROPIC API ERROR HTTP %d", e.code)
         raise
@@ -1065,7 +1119,7 @@ def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
     api_messages = []
     for m in messages:
         if m["role"] == "system":
-            system_text = m["content"]
+            system_text = _system_text(m["content"])
         else:
             api_messages.append(m)
     body: dict = {"model": model, "max_tokens": max_tokens, "messages": api_messages}

@@ -125,6 +125,24 @@ class RetryExhausted(RuntimeError):
         self.last_exception = last_exception
 
 
+class ImageProviderError(RuntimeError):
+    """Safe image failure that retains retry classification without provider data."""
+
+    def __init__(self, exc: BaseException):
+        self.provider_error_type = type(exc).__name__
+        self.status_code = status_code_of(exc)
+        self._a2a_retryable = is_retryable(exc)
+        retry_after = retry_after_seconds(exc)
+        self.headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
+        status = f", HTTP {self.status_code}" if self.status_code is not None else ""
+        message = f"Image provider request failed ({self.provider_error_type}{status}); diagnostic content omitted"
+        # Keep the structured-output fallback's safe, known diagnostic marker.
+        original = str(exc).lower()
+        if "logprob" in original and "not supported" in original:
+            message += "; logprobs not supported"
+        super().__init__(message)
+
+
 # --- classification ----------------------------------------------------------
 
 
@@ -148,6 +166,10 @@ def is_retryable(exc: BaseException) -> bool:
     status = status_code_of(exc)
     if status is not None:
         return status in RETRYABLE_STATUSES
+
+    safe_retryable = getattr(exc, "_a2a_retryable", None)
+    if isinstance(safe_retryable, bool):
+        return safe_retryable
 
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True

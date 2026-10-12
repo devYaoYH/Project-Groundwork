@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from a2a_engine.llm.structured_output import extract_binary_logprobs, parse_actions, parse_reflection_deltas, supports_logprobs
+from a2a_engine.content import observation_content
 from a2a_engine.remote.contract import Telemetry, TokenUsage
 
 McpCall = tuple[str, str, dict]
@@ -26,6 +27,7 @@ class ActionStrategy(Protocol):
 
 
 class StructuredOutputStrategy:
+    supported_input_modalities = {"text", "image"}
     def __init__(self, model):
         self.model = model
         self.system_prompt = ""
@@ -49,7 +51,7 @@ class StructuredOutputStrategy:
             if supports_logprobs(self.model):
                 options.update(logprobs=True, top_logprobs=5)
         return ModelRequest(copy.deepcopy([{"role": "system", "content": self.system_prompt},
-                                          *self.history, {"role": "user", "content": invocation.prompt}]),
+                                          *self.history, {"role": "user", "content": observation_content(invocation.observation, invocation.prompt)}]),
                             options, not reflection)
 
     def extract_calls(self, response) -> list[McpCall]:

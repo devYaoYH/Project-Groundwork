@@ -70,6 +70,8 @@ class ParticipantConfig(_StrictModel):
     binding: str | None = None
     runtime: Literal["in_process", "local_process", "external"] = "in_process"
     harness: Literal["scripted", "structured_output"] | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    api_format: str | None = None
 
 
 class UnitsConfig(_StrictModel):

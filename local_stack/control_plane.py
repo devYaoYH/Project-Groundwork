@@ -591,6 +591,7 @@ class ControlPlane:
                 self._parameter_view(parameter, bank) for parameter in declaration.parameters
             ],
             "roles": [role.model_dump(mode="json") for role in declaration.roles],
+            "required_modalities": sorted(declaration.required_modalities),
             "measures": [measure.model_dump(mode="json") for measure in declaration.measures],
             "item_policy": {
                 **declaration.item_policy.model_dump(mode="json"),
@@ -634,6 +635,13 @@ class ControlPlane:
             "next_cursor": next_cursor,
             "item_bank_sha256": bank.item_bank_sha256,
         }
+
+    def environment_asset(self, environment_id: str, digest: str):
+        bank = self._item_bank(environment_id)
+        image = next((image for image in bank.assets if image.sha256 == digest), None)
+        if image is None:
+            raise KeyError("asset is not referenced by this release")
+        return bank.asset_store.read(image), image.mime_type
 
     def run_oracle(self, environment_id: str, item_id: str) -> dict[str, Any]:
         declaration = self._declaration(environment_id)
@@ -686,6 +694,7 @@ class ControlPlane:
             entries.append({
                 "name": name,
                 "description": entry.description,
+                "capabilities": entry.capabilities,
                 "type": entry.type,
                 "model": entry.model,
                 "api_format": entry.api_format,

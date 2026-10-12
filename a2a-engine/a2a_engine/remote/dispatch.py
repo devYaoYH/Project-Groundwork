@@ -17,8 +17,9 @@ from mcp.shared.exceptions import McpError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from a2a_engine.content import inline_media
 from a2a_engine.llm.retry import RetryPolicy, compute_delay
-from .contract import MAX_BODY_BYTES, TurnAcceptance, TurnCompletion
+from .contract import MAX_BODY_BYTES, MAX_MEDIA_BODY_BYTES, valid_body_size, TurnAcceptance, TurnCompletion
 
 DELIVERY_POLICY = RetryPolicy(max_attempts=3, backoff_base=0.05, backoff_max=0.25)
 
@@ -95,7 +96,7 @@ def verify_push(body: bytes, headers, key: str):
     try:
         identifier = headers["x-a2a-id"]
         deadline = headers["x-a2a-deadline"]
-        if len(body) > MAX_BODY_BYTES or datetime.fromisoformat(deadline) <= datetime.now(timezone.utc):
+        if not valid_body_size(body) or datetime.fromisoformat(deadline) <= datetime.now(timezone.utc):
             raise ValueError()
         expected = signed_headers(body, identifier, deadline, key)["x-a2a-signature"]
         if not hmac.compare_digest(headers["x-a2a-signature"], expected):
@@ -115,8 +116,10 @@ async def post_signed(url, model, key, *, timeout=None, network=None):
         remaining = min(remaining, timeout)
     if remaining <= 0:
         raise TimeoutError("invocation expired")
-    body = model.model_dump_json().encode()
-    if len(body) > MAX_BODY_BYTES:
+    from a2a_engine.content import inline_media
+    import json
+    body = json.dumps(inline_media(model.model_dump(mode="json"))).encode()
+    if not valid_body_size(body):
         raise ValueError("invocation exceeds body limit")
     headers = signed_headers(body, model.turn_id, model.deadline.isoformat(), key)
     async with asyncio.timeout(remaining):
@@ -162,12 +165,16 @@ class LoopbackServer:
                 while True:
                     message = await receive()
                     size += len(message.get("body", b""))
-                    if size > MAX_BODY_BYTES:
+                    if size > MAX_MEDIA_BODY_BYTES:
                         await JSONResponse({"code": "body_limit"}, status_code=413)(scope, receive, send)
                         return
                     messages.append(message)
                     if not message.get("more_body", False):
                         break
+
+                if not valid_body_size(b"".join(message.get("body", b"") for message in messages)):
+                    await JSONResponse({"code": "body_limit"}, status_code=413)(scope, receive, send)
+                    return
 
                 async def replay():
                     if messages:
@@ -216,6 +223,19 @@ class LoopbackServer:
             raise RuntimeError("ASGI server did not stop")
 
 
+def prepare_invocation(seat, invocation):
+    from a2a_engine.content import contains_image, content_modalities, observation_content
+    if contains_image(invocation.inbox):
+        raise ValueError("image inboxes are unsupported; use private observation.content")
+    modalities = content_modalities([{"content": observation_content(invocation.observation)}])
+    if not modalities <= set(getattr(seat, "input_modalities", {"text"})):
+        raise ValueError("remote seat was not admitted for observation modalities")
+    if invocation.kind == "register" and modalities - {"text"}:
+        raise ValueError("private images belong in seat observations, not registration")
+    return invocation.model_copy(update={"observation": inline_media(
+        invocation.observation, getattr(seat, "asset_root", None))}, deep=True)
+
+
 class TurnDispatcher:
     def __init__(self, io: LoopbackServer, *, policy=DELIVERY_POLICY, clock=time.monotonic,
                  request_timeout_s=None):
@@ -251,6 +271,7 @@ class TurnDispatcher:
         return completion
 
     def dispatch(self, seat, invocation, recorder=None, *, deadline=None):
+        invocation = prepare_invocation(seat, invocation)
         if deadline is None:
             deadline = recorder.deadline if recorder else self.clock() + max(
                 0, (invocation.deadline - datetime.now(timezone.utc)).total_seconds())
@@ -293,7 +314,7 @@ class TurnDispatcherV2:
 
         async def request(remaining):
             result = await mcp_call(seat.callback_url + "/mcp", seat.secret, "start_turn",
-                                    invocation.model_dump(mode="json"),
+                                    inline_media(invocation.model_dump(mode="json")),
                                     timeout=min(remaining, self.request_timeout_s), network=self.network)
             acceptance = TurnAcceptance.model_validate(result)
             if any(getattr(acceptance, key) != value for key, value in invocation.identity().model_dump().items()):
@@ -312,6 +333,7 @@ class TurnDispatcherV2:
                                         clock=self.clock, on_attempt=attempted)
 
     def dispatch(self, seat, invocation, recorder=None, *, deadline=None):
+        invocation = prepare_invocation(seat, invocation)
         deadline = deadline if deadline is not None else (recorder.deadline if recorder else self.clock() + max(
             0, (invocation.deadline - datetime.now(timezone.utc)).total_seconds()))
         record = self.lifecycle.open(invocation, deadline=deadline, recorder=recorder)

@@ -186,3 +186,9 @@ Three rules keep a line-up unambiguous:
 The pool is an input to resolution, not part of the record: what a run persists
 is the hydrated config with concrete model strings, exactly as an inline config
 would. A colleague reading the trace sees what actually ran.
+
+Image input requires explicit `capabilities.input: [text, image]` and a
+`capabilities.evidence` reference on the concrete binding, plus a supported
+provider adapter. Unknown support remains text-only. See
+[MULTIMODAL_INPUTS.md](MULTIMODAL_INPUTS.md) for agent-pool, design-roster, and
+remote runtime examples.

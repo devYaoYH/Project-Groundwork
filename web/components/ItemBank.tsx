@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { MediaPreview } from "./MediaPreview";
 import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
@@ -70,6 +71,7 @@ export function ItemBank({ id }: { id: string }) {
             columns={[
               { label: "item", className: "mono", render: (item) => item.item_id },
               { label: "item parameters", className: "item-params", render: (item) => <ItemParameters item={item} /> },
+              { label: "images", render: (item) => <MediaPreview value={item.assets} environmentId={id} /> },
               { label: "oracle", render: (item) => item.oracle_result === null ? <span className="muted">not available</span> : <Chip tone="good">available</Chip> },
             ]}
           />

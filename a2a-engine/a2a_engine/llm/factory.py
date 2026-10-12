@@ -76,6 +76,8 @@ def make_llm_client(cfg: dict) -> LLMClient:
         if not api_key:
             api_key = get_api_key_for_provider(provider)
 
+    from a2a_engine.modalities import validate_seat
+    validate_seat({**cfg, "api_format": api_format or "openai"}, cfg.get("required_modalities", ["text"]))
     return LLMClient(
         api_format=api_format or "openai",
         api_base=api_base or "",
@@ -87,4 +89,6 @@ def make_llm_client(cfg: dict) -> LLMClient:
         gcp_project=cfg.get("gcp_project"),
         gcp_location=cfg.get("gcp_location"),
         extra=cfg.get("extra", {}),
+        capabilities=cfg.get("capabilities") or {},
+        asset_root=cfg.get("asset_root"),
     )
