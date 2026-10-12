@@ -39,6 +39,10 @@ class LocalJSONStore:
     # --- write ---
 
     def put_episode(self, trace: EpisodeTrace, manifest: EpisodeManifest) -> str:
+        from a2a_engine.episode_media import persist_episode_images
+        images = persist_episode_images(trace, self.results_dir / "assets")
+        if images:
+            manifest.image_assets = [image.model_dump(exclude={"data"}) for image in images]
         trace_path = write_episode(
             trace, self.results_dir, experiment_name=manifest.experiment_name
         )

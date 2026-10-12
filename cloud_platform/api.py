@@ -182,6 +182,11 @@ def create_app(control=None, auth=None):
         if path == "/api/episodes":
             return JSONResponse(await run_in_threadpool(viewer.episodes, owner, request.query_params))
         if path.startswith("/api/episodes/"):
+            if "/assets/" in path:
+                payload, mime = await run_in_threadpool(viewer.episode_asset, identifier,
+                                                      request.path_params["digest"], owner)
+                return Response(payload, media_type=mime,
+                                headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
             operation = request.path_params.get("operation", "detail")
             method = {"detail": viewer.episode, "raw": viewer.raw_episode,
                       "observability": viewer.observability, "artifacts": viewer.artifacts}.get(operation)
@@ -226,6 +231,7 @@ def create_app(control=None, auth=None):
               Route("/api/environments/{identifier}", endpoint),
               Route("/api/environments/{identifier}/assets/{digest}", endpoint),
               Route("/api/environments/{identifier}/{operation}", endpoint, methods=["GET", "POST"]),
+              Route("/api/episodes/{identifier}/assets/{digest}", endpoint),
               Route("/api/agent-pool", endpoint), Route("/api/designs/validate", endpoint, methods=["POST"]),
               Route("/api/experiments/{identifier}", endpoint),
               Route("/api/experiments/{identifier}/launch", endpoint, methods=["POST"]),

@@ -29,6 +29,12 @@ class ModelConfig:
 # Explicit model registry
 # Add new models here as they're released
 MODEL_REGISTRY: dict[str, ModelConfig] = {
+    "deepseek/deepseek-v4.1-flash": ModelConfig(
+        max_tokens_param="max_tokens",
+        default_max_tokens=4096,
+        supports_temperature=True,
+        notes="OpenRouter DeepSeek V4.1 Flash; image admission uses explicit seat capabilities.",
+    ),
     # OpenAI GPT-4 family (standard API)
     "gpt-4": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
     "gpt-4-turbo": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
