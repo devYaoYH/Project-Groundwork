@@ -1,0 +1,34 @@
+schema_version: 1
+id: hidden_profile.tiny
+release: v1
+description: Two repeated four-participant decisions with pinned private evidence.
+engine:
+  environment_id: hidden_profile
+  defaults:
+    num_agents: 4
+    round_item_ids:
+    - caucus_hidden_01
+    - relief_hidden_01
+    discussion_cycles: 6
+    commitment_cycles: 3
+inputs:
+- id: profiles-v1
+  path: ../hidden_profile/items/profiles_v1.jsonl
+  sha256: baf6242728a18051387ea394180dbc8180f24ef5aba1629d7e501756c0fc1e56
+roles:
+- id: participant
+  count: 4
+  accepts:
+  - llm
+  - scripted
+metrics:
+- name: optimal_choice_rate
+  producer: environment
+  direction: maximize
+item_policy:
+  mode: enumerate
+  bank_path: ../hidden_profile/items/profiles_v1.jsonl
+  item_bank_sha256: baf6242728a18051387ea394180dbc8180f24ef5aba1629d7e501756c0fc1e56
+oracle_version: distinct-evidence-sum-v1
+required_modalities:
+- text

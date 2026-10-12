@@ -1,0 +1,67 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "api_base": "https://openrouter.ai/api/v1",
+  "episode_uid": "22130dd5-4dff-4a15-a3f5-95c84bea58f5",
+  "attempt_id": "62067498755642309adbbf194e0c3549",
+  "metrics": {
+    "rounds_completed": 2,
+    "optimal_rounds": 2,
+    "optimal_choice_rate": 1.0,
+    "no_consensus_rounds": 0,
+    "decision_regret": 0,
+    "messages": 26,
+    "dialogue_words": 1269,
+    "invalid_actions": 0,
+    "preference_revisions": 8,
+    "post_score_absolute_error": 0,
+    "valid_pre_reports": 8,
+    "valid_post_reports": 8,
+    "missing_private_reports": 0
+  },
+  "round_choices": [
+    "B",
+    "C"
+  ],
+  "context_proof": {
+    "round1_participant1": {
+      "provider_message_count": 2,
+      "earlier_user_turns": 0
+    },
+    "round1_participant2": {
+      "provider_message_count": 2,
+      "earlier_user_turns": 0
+    },
+    "round1_participant3": {
+      "provider_message_count": 2,
+      "earlier_user_turns": 0
+    },
+    "round1_participant4": {
+      "provider_message_count": 2,
+      "earlier_user_turns": 0
+    },
+    "round2_participant1": {
+      "provider_message_count": 14,
+      "earlier_user_turns": 6
+    },
+    "round2_participant2": {
+      "provider_message_count": 12,
+      "earlier_user_turns": 5
+    },
+    "round2_participant3": {
+      "provider_message_count": 12,
+      "earlier_user_turns": 5
+    },
+    "round2_participant4": {
+      "provider_message_count": 12,
+      "earlier_user_turns": 5
+    }
+  },
+  "retained_prior_episode_uid": "caad4f27-6d53-4945-b361-e77a401d8a7e",
+  "tests": "17 passed; includes local/external identity parity, sealed-report privacy, scalar declaration/bank contract, consistent hidden/full sequences, /2 failure cleanup, dedup, cancellation, design selection, history, oracle and no-consensus",
+  "live_command": "PYTHONPATH=games/hidden-profile .venv/bin/python games/hidden-profile/run.py games/hidden-profile/experiments/deepseek_live.yaml",
+  "sqlite_path": "results/hidden_profile_deepseek_live.db",
+  "historical_bank_snapshot": "games/hidden-profile/hidden_profile/items/historical/ad63a78eac2bb72d260448a87885a393ec447e5cea2a9160fc8e4d2a9fd6d6ae.jsonl",
+  "historical_bank_sha256": "ad63a78eac2bb72d260448a87885a393ec447e5cea2a9160fc8e4d2a9fd6d6ae",
+  "current_bank_sha256": "baf6242728a18051387ea394180dbc8180f24ef5aba1629d7e501756c0fc1e56",
+  "display_updates": "Current labels follow configured IDs or participant_0..3; historical provider-backed traces remain unchanged. Sealed reports have private text summaries. Final hidden raw facts and round order unchanged."
+}

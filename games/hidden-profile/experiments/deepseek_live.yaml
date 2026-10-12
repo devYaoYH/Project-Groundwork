@@ -1,0 +1,34 @@
+schema_version: 1
+name: hidden_profile_deepseek_live
+description: Same four seats pool two distinct private profiles in one episode.
+release: ../environments/hidden_profile_tiny_v1.yaml
+agents:
+- &id001
+  role: participant
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+  api_format: openai
+  temperature: 0
+  max_tokens: 4096
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: https://openrouter.ai/deepseek/deepseek-v4.1-flash
+  config:
+    api_base: https://openrouter.ai/api/v1
+- *id001
+- *id001
+- *id001
+episodes:
+- label: two_rounds
+  count: 1
+  seeds:
+  - 1
+  overrides:
+    discussion_cycles: 2
+storage:
+  backend: sqlite
+  path: ./results/hidden_profile_deepseek_live.db
+observability:
+  capture_content: true
