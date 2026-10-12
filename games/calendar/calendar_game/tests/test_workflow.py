@@ -130,7 +130,7 @@ def test_calendar_producer_marks_only_invocation_wrappers():
         assert "synthetic" not in event.data
 
 
-@pytest.mark.parametrize("function", ["prepare_retry", "record_retry"])
+@pytest.mark.parametrize("function", ["prepare_retry", "record_retry_actions"])
 def test_remote_retry_producer_marks_envelope(function, monkeypatch):
     import calendar_game.workflow_steps as steps
     from a2a_engine.tracing import EventLog
@@ -138,14 +138,22 @@ def test_remote_retry_producer_marks_envelope(function, monkeypatch):
     agent = SimpleNamespace(agent_id=0, calendar=Calendar(4))
     log = EventLog()
     game = SimpleNamespace(_remote_clients={0: object()}, config=SimpleNamespace(decision_retries=2),
-                           _append_event=log.append, _prompt_calendar_for_agent=lambda *args: "calendar")
-    context = SimpleNamespace(game=game, total_client_calls={0: 0}, round_num=1)
-    state = {"attempt": 0, "mode": "DECISION", "conflict": "conflict", "result": SimpleNamespace(retry_count=1)}
+                           _append_event=log.append, _prompt_calendar_for_agent=lambda *args: "calendar",
+                           topology=SimpleNamespace(legacy=False),
+                           _worker_attempts=lambda agent_id, calls: calls,
+                           _decision_actions=lambda calls, *args, **kwargs: calls)
+    context = SimpleNamespace(game=game, total_client_calls={0: 0}, round_num=1, meeting={})
+    state = {"attempt": 0, "mode": "DECISION", "conflict": "conflict",
+             "actor_order": [0], "cursor": 0, "already_queued": set(), "turn_index": 0,
+             "result": SimpleNamespace(retry_count=1, tool_calls=[])}
     monkeypatch.setattr(steps, "select_ordered_actor", lambda *args: agent)
     monkeypatch.setattr(steps, "decision_inbox", lambda *args: {})
     monkeypatch.setattr(steps, "event_data", lambda *args, **kwargs: kwargs)
     monkeypatch.setattr(steps, "result_data", lambda *args: {})
-    asyncio.run(getattr(steps, function)(state, SimpleNamespace(context=context)))
+    updates = asyncio.run(getattr(steps, function)(state, SimpleNamespace(context=context)))
+    if function == "record_retry_actions":
+        assert updates == {"actions": [], "already_queued": set()}
+        assert context.total_client_calls[0] == 1
     assert log.all()[0].synthetic is True
     assert "synthetic" not in log.all()[0].data
 
