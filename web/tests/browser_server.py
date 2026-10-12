@@ -2,6 +2,8 @@
 
 import sys
 import os
+import shutil
+import sqlite3
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -31,6 +33,14 @@ class BrowserStackHandler(LocalStackHandler):
 
 with TemporaryDirectory(prefix="workflow-browser-") as directory:
     LocalStackHandler.database = Path(directory) / "a2a.db"
+    # Optional local evidence preview: preserve archived scientific payloads.
+    evidence = os.environ.get("GROUNDWORK_EVIDENCE_DB")
+    if evidence:
+        source = Path(evidence).resolve()
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as existing, sqlite3.connect(LocalStackHandler.database) as target:
+            existing.backup(target)
+        if (source.parent / "assets").is_dir():
+            shutil.copytree(source.parent / "assets", Path(directory) / "assets")
     LocalStackHandler.workspace = ROOT
     LocalStackHandler.static_dir = ROOT / "web/out"
     assert (LocalStackHandler.static_dir / "index.html").is_file(), "Build Next export before test:browser"

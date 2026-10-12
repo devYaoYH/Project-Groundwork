@@ -56,13 +56,17 @@ export function ChatTranscript({ chat, lanes, bounded, hideSystemEvents, onSeek,
                     <div className="chat-meta">
                       {row.kind !== "divider" ? <em className={row.continued ? "visually-hidden" : undefined}>{row.laneId}</em> : null}
                       <code>{row.type}</code>
+                      {row.data.visibility === "private" ? <span>{row.kind === "input" ? "Private input" : row.kind === "action" ? "Private action" : "Private response"}</span> : null}
                       {row.kind === "message" && row.recipients ? <span className="chat-recipients" aria-label={`Recipients: ${row.recipients.join(", ")}`}>{"\u2192 "}{row.recipients.join(", ")}</span> : null}
                       {row.kind === "divider" && ["string", "number"].includes(typeof row.data.round) ? <span>round {String(row.data.round)}</span> : null}
                     </div>
-                    {row.text ? <p>{row.text}</p> : null}
+                    {row.kind === "input" && environmentId ? <MediaPreview value={row.data} environmentId={environmentId} episodeUid={episodeUid} caption={`Input shown to ${row.laneId}`} /> : null}
+                    {row.text && row.kind === "input" ? <details className="chat-input-text" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
+                      <summary>View input text</summary><pre>{row.text}</pre>
+                    </details> : row.text ? <p>{row.text}</p> : null}
                   </>
                 )}
-                {environmentId ? <MediaPreview value={row.data} environmentId={environmentId} episodeUid={episodeUid} /> : null}
+                {environmentId && row.kind !== "input" ? <MediaPreview value={row.data} environmentId={environmentId} episodeUid={episodeUid} caption={row.type === "placement" ? "Recorded matcher board" : row.type === "drawing" ? "Recorded follower route" : row.kind === "action" ? "Recorded output" : undefined} /> : null}
                 <details
                   className="chat-payload"
                   onClick={(event) => event.stopPropagation()}

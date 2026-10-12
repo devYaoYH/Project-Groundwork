@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Chip } from "./Chip";
-import { EpisodeChat } from "./EpisodeChat";
 import { ChatTranscript } from "./ChatTranscript";
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
@@ -34,14 +33,12 @@ export function EpisodeView() {
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [showEvents, setShowEvents] = useState(false);
   const [hideSystemEvents, setHideSystemEvents] = useState(false);
   const activeLine = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => {
     if (!uid) return;
     setDetail(null);
-    setShowEvents(false);
     setError(null);
     getEpisode(uid)
       .then((next) => {
@@ -68,7 +65,6 @@ export function EpisodeView() {
     () => projectChat(transcript, projection.rows, detail?.lanes),
     [transcript, projection.rows, detail?.lanes],
   );
-  const hasInputs = (episode?.events ?? []).some(event => ["observation", "seat_observation"].includes(event.type ?? ""));
   const cursorMax = projection.cursorMax;
   const bounded = Math.min(cursor, Math.max(0, cursorMax - 1));
 
@@ -100,6 +96,9 @@ export function EpisodeView() {
   const cellId = text(provenance.cell_id);
   const status = episode.observability?.partial ? "PARTIAL" : episode.stopped ? "STOPPED" : "COMPLETED";
   const metrics = Object.entries(record(episode.metrics));
+  const configuredAgents = record(episode.config).agents;
+  const scripted = Array.isArray(configuredAgents) && configuredAgents.length > 0 &&
+    configuredAgents.every(agent => ["scripted", "heuristic"].includes(String(record(agent).type)));
 
   return (
     <>
@@ -123,6 +122,8 @@ export function EpisodeView() {
         </div>
         <Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
       </header>
+
+      {scripted ? <p className="notice" role="note">Scripted seats · deterministic test policies, not a model conversation.</p> : null}
 
       {metrics.length > 0 ? (
         <section className="metric-grid episode-measures">
@@ -219,16 +220,13 @@ export function EpisodeView() {
       <section className="card section-card">
         <div className="section-heading transcript-heading">
           <h2>Transcript</h2>
-          {hasInputs ? <button type="button" className="text-link" onClick={() => setShowEvents(value => !value)}>{showEvents ? "Show chat" : "Show all events"}</button> : null}
-          {!hasInputs || showEvents ? <label className="transcript-filter">
+          <label className="transcript-filter">
             <input type="checkbox" checked={hideSystemEvents} onChange={(event) => setHideSystemEvents(event.target.checked)} />
             Hide system events
-          </label> : null}
+          </label>
           <p>Every recorded event in order. Messages ({"{speaker, text}"}) are bubbles; other events sit between them.</p>
         </div>
-        {hasInputs && !showEvents ? <EpisodeChat events={episode.events ?? []} lanes={detail?.lanes}
-          environmentId={environmentId ?? ""} episodeUid={episode.episode_uid} cursor={bounded}
-          onSelect={next => { setPlaying(false); setCursor(next); }} /> : <ChatTranscript
+        <ChatTranscript
           chat={chat}
           lanes={projection.rows}
           bounded={bounded}
@@ -237,7 +235,7 @@ export function EpisodeView() {
           activeRef={activeLine}
           environmentId={environmentId}
           episodeUid={episode.episode_uid}
-        />}
+        />
       </section>
 
       <section className="release-meta">

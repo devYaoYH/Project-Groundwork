@@ -66,7 +66,7 @@ export type TranscriptLine = {
 
 export type ChatMode = "dyad" | "group";
 export type ChatSide = "left" | "right" | "center";
-export type ChatKind = "message" | "thought" | "notice" | "divider" | "action";
+export type ChatKind = "message" | "thought" | "notice" | "divider" | "action" | "input";
 export type ChatRow = TranscriptLine & {
   kind: ChatKind;
   side: ChatSide;
@@ -97,10 +97,11 @@ export function laneOf(
 ): string {
   const data = payload(event);
   // Negotiation records agent-owned thoughts and actions without a speaker.
-  const named = asString(data.speaker) ?? asString(data.participant_id) ?? asString(data.agent);
+  const named = asString(data.speaker) ?? asString(data.participant_id) ?? asString(data.agent) ?? asString(data.speaker_id) ?? (typeof data.seat === "string" ? data.seat : null);
   if (named !== null) {
     const declared = Array.isArray(lanes) ? lanes : [];
     if (declared.some((lane) => lane?.participant_id === named)) return named;
+    if (named === "environment" && event?.type === "feedback") return SYSTEM_LANE;
     const roleMatches = declared.filter((lane) => lane?.role === named && lane.participant_id);
     if (roleMatches.length === 1) return roleMatches[0].participant_id;
     return named;
@@ -214,8 +215,10 @@ export function projectChat(
   roster: readonly (Lane | null | undefined)[] | null | undefined = null,
 ): ChatProjection {
   const list = Array.isArray(lines) ? lines : [];
+  const isInput = (line: TranscriptLine) => line.type === "observation" || line.type === "seat_observation";
+  const isCommit = (line: TranscriptLine) => ["placement", "drawing", "round_end", "trial_end"].includes(line.type);
   const isThought = (line: TranscriptLine) => line.type === "thinking" || line.type === "reasoning";
-  const speakers = new Set(list.filter((line) => line.laneId !== SYSTEM_LANE && line.text && !isThought(line)).map((line) => line.laneId));
+  const speakers = new Set(list.filter((line) => line.laneId !== SYSTEM_LANE && line.text && !isThought(line) && !isInput(line)).map((line) => line.laneId));
   const participants = new Set<string>();
   for (const lane of Array.isArray(roster) ? roster : []) {
     const id = lane?.participant_id;
@@ -226,7 +229,7 @@ export function projectChat(
   const mode: ChatMode = participants.size > 2 || speakers.size > 2 ? "group" : "dyad";
   const kindOf = (line: TranscriptLine): ChatKind => line.laneId === SYSTEM_LANE
     ? (line.text ? "notice" : "divider")
-    : (line.text ? (isThought(line) ? "thought" : "message") : "action");
+    : (isInput(line) ? "input" : isCommit(line) ? "action" : line.text ? (isThought(line) ? "thought" : "message") : "action");
   return {
     mode,
     rows: list.map((line, index) => {

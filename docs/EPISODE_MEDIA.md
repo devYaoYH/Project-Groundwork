@@ -1,24 +1,26 @@
 # Recorded player inputs in episode replay
 
-Episodes with recorded `observation` or `seat_observation` events open as player
-turns in the shared chat viewer. Each private input appears before its acting
-seat's response. Images are shown immediately; long input text can be expanded.
-Private reports carry a private-response marker. Round boundaries and the common
-event cursor remain available. **Show all events** opens the complete chat event
-stream, including actions, reasoning, payloads, and the existing synthetic-event
-filter. Older traces keep the existing cursor-linked chat view.
+All environments use the same cursor-linked chat renderer. Dyads use opposing
+bubbles; groups use participant names and avatars. Every event remains in the
+transcript, including committed placements, drawings, private reports and final
+outcomes. The synthetic-event filter changes presentation, never event indices.
 
-This is researcher inspection of recorded evidence. It does not deliver another
-seat's private input to an agent or construct missing observations.
+Recorded `observation` and `seat_observation` events show the seat's input image
+before expandable input text and the following response. Private visibility is
+labeled explicitly. Committed output images are displayed on their actor's lane
+when the environment records them. Historical payloads remain expandable even
+when no output image was originally recorded. Scripted seat configurations carry
+a deterministic-policy notice, so browser fixtures cannot be mistaken for model
+conversations.
 
-SQLite and local JSON stores retain generated visual observations in a
-content-addressed `assets/` directory beside the store. Hosted workers publish
-those bytes with final evidence. Episode image endpoints require a reference in
-the selected trace, verify digest and MIME type, and use the episode ownership
-gate for hosted requests. Release-bank previews use their separate endpoint.
+This is researcher inspection of recorded evidence, not delivery of private
+input to another seat. No observations or historical output images are invented.
 
-The agent pool includes `ds-v4.1-flash`, the exact OpenRouter model
-`deepseek/deepseek-v4.1-flash`, with explicit text/image capability evidence.
-Keep `OPENROUTER_API_KEY` in private environment configuration. Visual environments
-must declare image requirements on their seats; text-only or unknown capability
-bindings cannot satisfy those requirements.
+SQLite and local JSON stores retain recorded image bytes in content-addressed
+`assets/` directories beside the store. Hosted workers publish the same bytes
+with final evidence. Episode endpoints verify image references, digest and MIME;
+hosted requests also pass episode ownership checks. Bank previews use their
+separate release-scoped endpoint.
+
+The agent pool includes the exact OpenRouter `deepseek/deepseek-v4.1-flash` binding
+with verified text/image capabilities. Keep its key in private configuration.

@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 
-from a2a_engine.provenance import pinned_participants
+from a2a_engine.provenance import configured_roles, pinned_participants
 from a2a_engine.registry import get_environment_spec
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace, projection_summary
@@ -230,7 +230,10 @@ class Viewer:
         experiment = self.control.owned("experiments", row["experiment_id"], owner)
         with self.private_snapshot(experiment) as cp:
             roles = {entry["participant_id"]: entry.get("role") for entry in cp.participant_roster(experiment["id"])}
+        configured = configured_roles(config)
         for lane in lanes:
+            if not lane.get("role") and configured.get(lane["participant_id"]):
+                lane["role"] = configured[lane["participant_id"]]
             if roles.get(lane["participant_id"]):
                 lane["role"] = roles[lane["participant_id"]]
         index_label = None
