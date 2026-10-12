@@ -326,7 +326,7 @@ class GameEngine:
             project_calculator=ProjectRewardCalculator(b_projects, config.resource_costs),
         )
 
-        self._event_callbacks: list[Callable] = []
+        self._event_callbacks: list[tuple[Callable, bool]] = []
         self._stopped = False
         self._api_failures = {"agent_a": 0, "agent_b": 0}
         self._scenario_pool = None
@@ -394,12 +394,16 @@ class GameEngine:
     def stop(self):
         self._stopped = True
 
-    def on_event(self, callback: Callable):
-        self._event_callbacks.append(callback)
+    def on_event(self, callback: Callable, *, envelope_metadata: bool = False):
+        """Opt in to keyword envelope metadata; legacy callbacks keep two arguments."""
+        self._event_callbacks.append((callback, envelope_metadata))
 
-    async def _emit(self, event_type: str, data: dict):
-        for cb in self._event_callbacks:
-            await cb(event_type, data)
+    async def _emit(self, event_type: str, data: dict, *, synthetic: bool = False):
+        for cb, envelope_metadata in self._event_callbacks:
+            if envelope_metadata:
+                await cb(event_type, data, synthetic=synthetic)
+            else:
+                await cb(event_type, data)
 
     def _set_stream_callback(self, agent_impl, agent_id: str, round_number: int,
                                 phase: str, turn: int = -1):
@@ -417,7 +421,7 @@ class GameEngine:
                     "round": round_number,
                     "phase": phase,
                     "turn": turn,
-                })
+                }, synthetic=True)
 
         agent_impl._on_stream_start = on_stream_start
 
@@ -817,7 +821,7 @@ class GameEngine:
                     "purchased": alloc_a,
                     "resolved_runs": resolved_a,
                     "reason": "Agent submitted resource purchases without explicit project allocations; resources auto-assigned greedily to projects.",
-                })
+                }, synthetic=True)
             if auto_allocated_b:
                 await self._emit("project_auto_allocation", {
                     "round": round_number,
@@ -825,7 +829,7 @@ class GameEngine:
                     "purchased": alloc_b,
                     "resolved_runs": resolved_b,
                     "reason": "Agent submitted resource purchases without explicit project allocations; resources auto-assigned greedily to projects.",
-                })
+                }, synthetic=True)
 
             # Compute rewards with scenario-level synergy
             details_a = calc_a.compute_reward(resolved_a, alloc_a, alloc_b, self.config.scenario_synergy)

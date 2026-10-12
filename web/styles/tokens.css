@@ -15,6 +15,10 @@
   --font-data: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   --font-head: "Source Serif 4", Georgia, serif;
   --rail-width: 13.25rem;
+  --chat-name-l: 38%;
+  --chat-s: 38%;
+  --chat-l: 96.5%;
+  --chat-edge-l: 86%;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,5 +35,9 @@
     --good: #8fbf63;
     --warn: #dda946;
     --bad: #df7b70;
+    --chat-name-l: 72%;
+    --chat-s: 22%;
+    --chat-l: 19%;
+    --chat-edge-l: 30%;
   }
 }

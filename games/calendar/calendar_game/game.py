@@ -459,7 +459,7 @@ class CalendarGame:
             return str(spec.get("name") or spec.get("id") or f"participant_{agent_id}")
         return f"participant_{agent_id}"
 
-    def _append_event(self, event_type: str, *, data: dict) -> None:
+    def _append_event(self, event_type: str, *, data: dict, **extra) -> None:
         """Emit Calendar data with stable participant and chat aliases."""
         payload = dict(data)
         agent_id = payload.get("agent_id")
@@ -482,7 +482,7 @@ class CalendarGame:
             if event_type.endswith("_sent"):
                 payload.setdefault("speaker", payload["participant_id"])
                 payload.setdefault("text", payload.get("content", ""))
-        self.events.append(event_type, data=payload)
+        self.events.append(event_type, data=payload, **extra)
 
     def _worker_attempts(self, agent_id: int, tool_calls: list) -> list:
         remote = self._remote_clients.get(agent_id)

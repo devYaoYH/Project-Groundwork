@@ -83,6 +83,20 @@ def test_local_store_round_trips_trace(tmp_path):
     assert [e.type for e in loaded.events] == ["message", "round_complete"]
 
 
+def test_synthetic_marker_survives_local_sqlite_and_compression(tmp_path):
+    from a2a_engine.storage.sqlite import SQLiteEpisodeStore
+
+    trace = make_trace()
+    trace.events = [Event(type="unknown", synthetic=True, data={"synthetic": False}),
+                    Event(type="llm_streaming", data={"synthetic": True}),
+                    Event(type="turn_start", synthetic=False)]
+    for store in (LocalJSONStore(results_dir=tmp_path / "local"), SQLiteEpisodeStore(path=tmp_path / "test.db")):
+        store.put_episode(trace, make_manifest())
+        assert store.get_episode("g1").events == trace.events
+    raw = [event.model_dump(mode="json") for event in trace.events]
+    assert decompress_events(compress_events(raw)) == raw
+
+
 def test_completed_episode_ids_supports_resume(tmp_path):
     store = LocalJSONStore(results_dir=tmp_path)
     store.put_episode(make_trace(), make_manifest())

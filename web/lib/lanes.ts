@@ -55,12 +55,28 @@ export type LaneProjection = {
 };
 
 export type TranscriptLine = {
+  synthetic?: boolean | null;
   cursor: number;
   laneId: string;
   type: string;
   text: string | null;
   data: Record<string, unknown>;
 };
+
+export type ChatMode = "dyad" | "group";
+export type ChatSide = "left" | "right" | "center";
+export type ChatKind = "message" | "thought" | "notice" | "divider" | "action";
+export type ChatRow = TranscriptLine & {
+  kind: ChatKind;
+  side: ChatSide;
+  continued: boolean;
+  recipients: string[] | null;
+};
+export type ChatProjection = { mode: ChatMode; rows: ChatRow[] };
+
+export function keepWhenHidingSystemEvents(row: ChatRow): boolean {
+  return row.synthetic !== true;
+}
 
 function payload(event: TraceEvent | null | undefined): Record<string, unknown> {
   const data = event?.data;
@@ -79,7 +95,8 @@ export function laneOf(
   lanes: readonly (Lane | null | undefined)[] | null | undefined = null,
 ): string {
   const data = payload(event);
-  const named = asString(data.speaker) ?? asString(data.participant_id);
+  // Negotiation records agent-owned thoughts and actions without a speaker.
+  const named = asString(data.speaker) ?? asString(data.participant_id) ?? asString(data.agent);
   if (named !== null) {
     const declared = Array.isArray(lanes) ? lanes : [];
     if (declared.some((lane) => lane?.participant_id === named)) return named;
@@ -181,12 +198,62 @@ export function projectTranscript(
 ): TranscriptLine[] {
   const list = Array.isArray(events) ? events : [];
   return list.map((event, cursor) => ({
+    ...(event && "synthetic" in event ? { synthetic: event.synthetic } : {}),
     cursor,
     laneId: laneOf(event, lanes),
     type: asString(event?.type) ?? "event",
     text: asString(payload(event).text) ?? asString(payload(event).content),
     data: payload(event),
   }));
+}
+
+export function projectChat(
+  lines: readonly TranscriptLine[] | null | undefined,
+  laneRows: readonly LaneRow[] | null | undefined,
+  roster: readonly (Lane | null | undefined)[] | null | undefined = null,
+): ChatProjection {
+  const list = Array.isArray(lines) ? lines : [];
+  const isThought = (line: TranscriptLine) => line.type === "thinking" || line.type === "reasoning";
+  const speakers = new Set(list.filter((line) => line.laneId !== SYSTEM_LANE && line.text && !isThought(line)).map((line) => line.laneId));
+  const participants = new Set<string>();
+  for (const lane of Array.isArray(roster) ? roster : []) {
+    const id = lane?.participant_id;
+    if (typeof id === "string" && id && id !== SYSTEM_LANE) participants.add(id);
+  }
+  const orderedSpeakers = (Array.isArray(laneRows) ? laneRows : [])
+    .filter((lane) => speakers.has(lane.participant_id)).map((lane) => lane.participant_id);
+  const mode: ChatMode = participants.size > 2 || speakers.size > 2 ? "group" : "dyad";
+  const kindOf = (line: TranscriptLine): ChatKind => line.laneId === SYSTEM_LANE
+    ? (line.text ? "notice" : "divider")
+    : (line.text ? (isThought(line) ? "thought" : "message") : "action");
+  return {
+    mode,
+    rows: list.map((line, index) => {
+      const system = line.laneId === SYSTEM_LANE;
+      const kind = kindOf(line);
+      const previous = list[index - 1];
+      return {
+        ...line,
+        kind,
+        side: system ? "center" : mode === "dyad" && line.laneId === orderedSpeakers[1] ? "right" : "left",
+        continued: mode === "group" && kind === "message" && !!previous && kindOf(previous) === "message" && previous.laneId === line.laneId,
+        recipients: recordedRecipients(line, roster),
+      };
+    }),
+  };
+}
+
+function recordedRecipients(line: TranscriptLine, roster: readonly (Lane | null | undefined)[] | null | undefined): string[] | null {
+  const values = [line.data.to_agent, ...(Array.isArray(line.data.to_agents) ? line.data.to_agents : [])];
+  const seats = [...new Set(values.filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0))];
+  if (!seats.length) return null;
+  const lanes = Array.isArray(roster) ? roster : [];
+  const ids = Array.from(lanes, (lane) => lane?.participant_id);
+  // Unknown/ambiguous seats cannot prove a broadcast, even if the channel says all.
+  const complete = ids.length > 1 && ids.every((id) => typeof id === "string" && id && id !== SYSTEM_LANE) && new Set(ids).size === ids.length;
+  const sender = ids.indexOf(line.laneId);
+  if (complete && sender >= 0 && seats.length === ids.length - 1 && seats.every((seat) => seat < ids.length && seat !== sender)) return ["all"];
+  return seats.map((seat) => typeof ids[seat] === "string" && ids[seat] ? ids[seat] : `agent_${seat}`);
 }
 
 /**

@@ -120,6 +120,36 @@ def play(cls, case, cfg, scenario):
     return game._run_with_agents(agents, copy.deepcopy(scenario)), calls
 
 
+def test_calendar_producer_marks_only_invocation_wrappers():
+    cfg, scenario = setup_case("retries", cap=2, retries=2)
+    trace, _ = play(CalendarGame, "retries", cfg, scenario)
+    wrappers = {"turn_start", "turn_end", "decide_start", "decide_end"}
+    assert wrappers <= {event.type for event in trace.events}
+    for event in trace.events:
+        assert event.synthetic == (event.type in wrappers)
+        assert "synthetic" not in event.data
+
+
+@pytest.mark.parametrize("function", ["prepare_retry", "record_retry"])
+def test_remote_retry_producer_marks_envelope(function, monkeypatch):
+    import calendar_game.workflow_steps as steps
+    from a2a_engine.tracing import EventLog
+
+    agent = SimpleNamespace(agent_id=0, calendar=Calendar(4))
+    log = EventLog()
+    game = SimpleNamespace(_remote_clients={0: object()}, config=SimpleNamespace(decision_retries=2),
+                           _append_event=log.append, _prompt_calendar_for_agent=lambda *args: "calendar")
+    context = SimpleNamespace(game=game, total_client_calls={0: 0}, round_num=1)
+    state = {"attempt": 0, "mode": "DECISION", "conflict": "conflict", "result": SimpleNamespace(retry_count=1)}
+    monkeypatch.setattr(steps, "select_ordered_actor", lambda *args: agent)
+    monkeypatch.setattr(steps, "decision_inbox", lambda *args: {})
+    monkeypatch.setattr(steps, "event_data", lambda *args, **kwargs: kwargs)
+    monkeypatch.setattr(steps, "result_data", lambda *args: {})
+    asyncio.run(getattr(steps, function)(state, SimpleNamespace(context=context)))
+    assert log.all()[0].synthetic is True
+    assert "synthetic" not in log.all()[0].data
+
+
 @pytest.mark.parametrize("case,cap,retries,frequency", [
     ("cap", 1, 1, "round"), ("cap", 2, 1, "round"), ("retries", 2, 2, "round"),
     ("blocked", 1, 1, "round"), ("exhausted", 1, 2, "round"), ("empty", 1, 0, "round"),

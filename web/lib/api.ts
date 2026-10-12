@@ -124,6 +124,7 @@ export type EpisodeFacet = { value: string; count: number };
 // One emitted event. `type` is environment-defined and `data` is a free dict,
 // so nothing beyond those two may be assumed present.
 export type TraceEvent = {
+  synthetic?: boolean | null;
   type?: string | null;
   timestamp?: string | null;
   data?: Record<string, unknown> | null;

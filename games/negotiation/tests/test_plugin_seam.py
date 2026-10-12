@@ -31,6 +31,47 @@ HEURISTIC = {
 }
 
 
+def test_explicit_producer_metadata_and_legacy_callback_compatibility():
+    from types import SimpleNamespace
+    from negotiation_game.backend.engine import GameEngine
+
+    game = NegotiationGame(HEURISTIC)
+    agent = SimpleNamespace(_on_stream_start=None, last_thinking="Thought", last_reasoning="Reason")
+    engine = GameEngine(GameConfig(), agent, agent)
+    legacy = []
+
+    async def observer(kind, data):
+        legacy.append((kind, dict(data)))
+
+    engine.on_event(observer)
+    engine.on_event(game._on_engine_event, envelope_metadata=True)
+
+    async def emit():
+        engine._set_stream_callback(agent, "agent_a", 1, "decision")
+        await agent._on_stream_start()
+        await agent._on_stream_start()
+        await engine._resolve_round(1, {}, {}, None, None, [])
+        await engine._emit_thinking(agent, "agent_a", 1)
+        await engine._emit_reasoning(agent, "agent_a", 1)
+        await engine._emit("llm_streaming", {"synthetic": True})
+        await engine._emit("unknown", {}, synthetic=True)
+
+    asyncio.run(emit())
+    assert [event.synthetic for event in game.events] == [True, True, True, False, False, False, True]
+    assert [event.type for event in game.events[:3]] == ["llm_streaming", "project_auto_allocation", "project_auto_allocation"]
+    assert all("synthetic" not in data for _, data in legacy[:5])
+    assert game.events[5].data == {"synthetic": True}
+    assert len(legacy) == len(game.events)
+
+
+def test_run_preserves_semantic_events_without_synthetic_markers():
+    trace = NegotiationGame(HEURISTIC, dry_run=True).run()
+    assert any(event.synthetic for event in trace.events)
+    for event in trace.events:
+        assert event.synthetic == (event.type == "project_auto_allocation")
+        assert "synthetic" not in event.data
+
+
 # --- registration ------------------------------------------------------------
 
 
