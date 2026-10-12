@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from contextlib import contextmanager
@@ -275,16 +276,21 @@ class ArtifactStore:
             raise ValueError("invalid artifact key")
         return str(path)
 
-    def put(self, key: str, data: bytes, immutable: bool = True) -> str:
+    def put(self, key: str, data: bytes, immutable: bool = True, *, timeout: float | None = None) -> str:
         key = self._key(key)
         if self.backend == "gcp":
             from google.api_core.exceptions import PreconditionFailed
             blob = self.bucket.blob(key)
             blob.metadata = {"sha256": hashlib.sha256(data).hexdigest()}
+            started = time.monotonic()
+            options = {"timeout": timeout, "retry": None} if timeout is not None else {}
             try:
-                blob.upload_from_string(data, if_generation_match=0 if immutable else None)
+                blob.upload_from_string(data, if_generation_match=0 if immutable else None, **options)
             except PreconditionFailed:
-                if self.get(key) != data:
+                remaining = timeout - (time.monotonic() - started) if timeout is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("immutable artifact verification exceeded its deadline") from None
+                if self.get(key, timeout=remaining) != data:
                     raise ValueError(f"immutable artifact conflict: {key}") from None
             return key
         path = self.root / key
@@ -311,10 +317,11 @@ class ArtifactStore:
             os.replace(temp, path)
         return key
 
-    def get(self, key: str) -> bytes:
+    def get(self, key: str, *, timeout: float | None = None) -> bytes:
         key = self._key(key)
         if self.backend == "gcp":
-            return self.bucket.blob(key).download_as_bytes()
+            options = {"timeout": timeout, "retry": None} if timeout is not None else {}
+            return self.bucket.blob(key).download_as_bytes(**options)
         return (self.root / key).read_bytes()
 
     def size(self, key: str) -> int:
