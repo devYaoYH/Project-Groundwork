@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
-import { backEdges, branchTargets, layoutInput, portId, routePath, subgraphSummary, summaryLabel, type WorkflowDocument, type WorkflowGraph } from "./workflow.ts";
+import { backEdges, branchTargets, canvasId, compoundLayoutInput, flattenLayout, graphAncestors, layoutInput, portId, reachableGraphs, resolveCanvasId, routePath, subgraphSummary, summaryLabel, type WorkflowDocument, type WorkflowGraph } from "./workflow.ts";
 
 const document: WorkflowDocument = {
   schema_version: 1, environment_id: "test", basis: "executable_langgraph", structure_digest: "test",
@@ -72,10 +72,10 @@ const graph: WorkflowGraph = {
 test("layout input retains cycles and branch targets without authoring a second graph", () => {
   assert.deepEqual([...backEdges(graph)], [2]);
   assert.deepEqual(branchTargets(graph, "check").map((edge) => edge.route_key), ["continue", "finished"]);
-  assert.equal(layoutInput(graph).edges.length, 4);
-  assert.equal(layoutInput(graph, true).layoutOptions["elk.direction"], "RIGHT");
-  assert.equal(layoutInput(graph).layoutOptions["elk.direction"], "RIGHT");
-  assert.deepEqual(graph.nodes.map((node) => node.id), layoutInput(graph).children.map((node) => node.id));
+  assert.equal(layoutInput(graph).edges!.length, 4);
+  assert.equal(layoutInput(graph, true).layoutOptions!["elk.direction"], "RIGHT");
+  assert.equal(layoutInput(graph).layoutOptions!["elk.direction"], "RIGHT");
+  assert.deepEqual(graph.nodes.map((node) => canvasId(graph.id, node.id)), layoutInput(graph).children!.map((node) => node.id));
 });
 test("invalid, empty and oversized topology does not reach layout", () => {
   assert.throws(() => layoutInput({ ...graph, nodes: [] }));
@@ -116,7 +116,7 @@ const geometries = [
 for (const graph of geometries) for (const narrow of [false, true]) {
   test(`real ELK ${graph.id} ${narrow ? "mobile" : "desktop"} START is leftmost and routes avoid every node interior`, async () => {
     const layout = await new ELK().layout<ElkNode>(layoutInput(graph, narrow));
-    const start = layout.children!.find((node) => node.id === "__start__")!;
+    const start = layout.children!.find((node) => node.id === canvasId(graph.id, "__start__"))!;
     for (const node of layout.children!) {
       if (node.id !== start.id) assert.ok(start.x! + start.width! < node.x!, `START box must precede ${node.id}`);
       for (const port of node.ports ?? []) assert.ok(port.x === (port.id.endsWith("source") ? node.width : 0));
@@ -127,8 +127,8 @@ for (const graph of geometries) for (const narrow of [false, true]) {
       const sections = edge.sections!;
       assert.match(routePath(sections), /^M /);
       for (const end of ["source", "target"] as const) {
-        const node = layout.children!.find((node) => node.id === graph.edges[index][end])!;
-        const port = node.ports!.find((port) => port.id === portId(index, end))!;
+        const node = layout.children!.find((node) => node.id === canvasId(graph.id, graph.edges[index][end]))!;
+        const port = node.ports!.find((port) => port.id === portId(index, end, graph.id))!;
         const point = end === "source" ? sections[0].startPoint : sections.at(-1)!.endPoint;
         assert.ok(Math.abs(point.x - node.x! - port.x!) < .01);
         assert.ok(Math.abs(point.y - node.y! - port.y!) < .01);
@@ -162,4 +162,113 @@ test("route renderer preserves all ELK sections and bends instead of smoothing",
   assert.equal(routePath([{ startPoint: { x: 1, y: 2 }, bendPoints: [{ x: 3, y: 2 }], endPoint: { x: 3, y: 4 } },
     { startPoint: { x: 3, y: 4 }, endPoint: { x: 5, y: 4 } }]), "M 1 2 L 3 2 L 3 4 M 3 4 L 5 4");
   assert.throws(() => routePath([]));
+});
+
+const compoundDoc: WorkflowDocument = { ...document, graphs: [
+  { ...geometries[3], id: "root", nodes: geometries[3].nodes.map((node) => node.id === "cheap_talk_pass"
+    ? { ...node, kind: "subgraph", subgraph: "child" } : node) },
+  { ...geometries[2], id: "child", nodes: geometries[2].nodes.map((node) => node.id === "call"
+    ? { ...node, kind: "batch", subgraph: "worker" } : node) },
+  { ...geometries[5], id: "worker" },
+] };
+
+test("compound input preserves parent ports, child-owned edges, unique identities and resolution at depth", () => {
+  const before = structuredClone(compoundDoc);
+  const input = compoundLayoutInput(compoundDoc, "root", new Set(["child", "worker"]));
+  const parent = input.children!.find((node) => node.id === "root::cheap_talk_pass")!;
+  assert.equal(parent.children!.length, compoundDoc.graphs[1].nodes.length);
+  assert.equal(parent.edges!.length, compoundDoc.graphs[1].edges.length);
+  assert.equal(input.edges![3].sources[0], portId(3, "source", "root"));
+  assert.ok(parent.ports!.some((port) => port.id === portId(3, "source", "root")));
+  const flat = flattenLayout(input);
+  assert.equal(new Set(flat.nodes.map((node) => node.layout.id)).size, flat.nodes.length);
+  assert.deepEqual(resolveCanvasId(compoundDoc, "worker::__start__"), { graph: compoundDoc.graphs[2], node: compoundDoc.graphs[2].nodes[0] });
+  assert.throws(() => resolveCanvasId(compoundDoc, "missing"));
+  assert.deepEqual(graphAncestors(compoundDoc, "root", "worker"), ["root", "child"]);
+  assert.deepEqual(compoundDoc, before);
+});
+
+test("compound guards reject missing, cyclic, multiply-owned, duplicate and malformed children even when collapsed", () => {
+  for (const mutate of [
+    (doc: WorkflowDocument) => { doc.graphs[0].nodes[2].subgraph = "missing"; },
+    (doc: WorkflowDocument) => { doc.graphs[2].nodes[0].subgraph = "root"; },
+    (doc: WorkflowDocument) => { doc.graphs[0].nodes[0].subgraph = "worker"; },
+    (doc: WorkflowDocument) => { doc.graphs.push(doc.graphs[0]); },
+    (doc: WorkflowDocument) => { doc.graphs[1].nodes.push(doc.graphs[1].nodes[0]); },
+    (doc: WorkflowDocument) => { doc.graphs[2].edges[0].target = "missing"; },
+    (doc: WorkflowDocument) => { doc.graphs[2].nodes[0].id = "bad::id"; },
+    (doc: WorkflowDocument) => { (doc.graphs[1] as unknown as { nodes: null }).nodes = null; },
+  ]) {
+    const doc = structuredClone(compoundDoc); mutate(doc);
+    assert.throws(() => compoundLayoutInput(doc, "root", new Set()));
+    assert.throws(() => reachableGraphs(doc, "root"));
+  }
+});
+
+test("expanded budgets count total drawn nodes and edges, not just the root", () => {
+  const doc = structuredClone(compoundDoc);
+  doc.graphs[0].nodes = Array.from({ length: 256 }, (_, index) => ({ id: String(index), symbol: "node", kind: "domain" }));
+  doc.graphs[0].nodes[0].subgraph = "child";
+  doc.graphs[0].edges = [];
+  assert.equal(compoundLayoutInput(doc, "root", new Set()).children!.length, 256);
+  assert.throws(() => compoundLayoutInput(doc, "root", new Set(["child"])));
+  const edges = structuredClone(compoundDoc);
+  edges.graphs[0].edges = Array(1024).fill(edges.graphs[0].edges[0]);
+  assert.equal(compoundLayoutInput(edges, "root", new Set()).edges!.length, 1024);
+  assert.throws(() => compoundLayoutInput(edges, "root", new Set(["child"])));
+});
+
+for (const narrow of [false, true]) test(`real compound ELK ${narrow ? "mobile" : "desktop"} keeps START leftmost, ports, orthogonal routes and label offsets at every depth`, async () => {
+  const layout = await new ELK().layout(compoundLayoutInput(compoundDoc, "root", new Set(["child", "worker"]), narrow));
+  function check(container: ElkNode) {
+    const start = container.children!.find((node) => node.id.endsWith("::__start__"))!;
+    for (const node of container.children!) {
+      if (node !== start) assert.ok(start.x! + start.width! < node.x!, `START precedes ${node.id}`);
+      if (node.children) check(node);
+    }
+  }
+  check(layout);
+  const flat = flattenLayout(layout);
+  assert.equal(flat.nodes.length, compoundDoc.graphs.reduce((sum, graph) => sum + graph.nodes.length, 0));
+  const offsets = new Map(flat.nodes.map((node) => [node.layout.id, node.absolute]));
+  function checkLabels(container: ElkNode, offset = { x: 0, y: 0 }) {
+    for (const edge of container.edges ?? []) for (const label of edge.labels ?? []) {
+      const rendered = flat.edges.find((item) => item.id === edge.id)!.labels!.find((item) => item.id === label.id)!;
+      assert.equal(rendered.x, label.x! + offset.x);
+      assert.equal(rendered.y, label.y! + offset.y);
+    }
+    for (const child of container.children ?? []) if (child.children) checkLabels(child, offsets.get(child.id)!);
+  }
+  checkLabels(layout);
+  for (const edge of flat.edges) {
+    const [ownerId, index] = edge.id.split("::");
+    const graph = compoundDoc.graphs.find((graph) => graph.id === ownerId)!;
+    const original = graph.edges[Number(index)];
+    for (const end of ["source", "target"] as const) {
+      const node = flat.nodes.find((node) => node.layout.id === canvasId(ownerId, original[end]))!;
+      const port = node.layout.ports!.find((port) => port.id === portId(Number(index), end, ownerId))!;
+      assert.ok(Math.abs(port.x! - (end === "source" ? node.layout.width! : 0)) < .01);
+      const endpoint = end === "source" ? edge.sections![0].startPoint : edge.sections!.at(-1)!.endPoint;
+      assert.ok(Math.abs(endpoint.x - node.absolute.x - port.x!) < .01, `${edge.id} ${end} x`);
+      assert.ok(Math.abs(endpoint.y - node.absolute.y - port.y!) < .01, `${edge.id} ${end} y`);
+    }
+    const ancestors = graphAncestors(compoundDoc, "root", ownerId);
+    const obstacles = flat.nodes.filter(({ layout }) => !layout.children || !ancestors.concat(ownerId).some((id) =>
+      compoundDoc.graphs.find((graph) => graph.id === layout.id.split("::")[0])!.nodes.find((node) => canvasId(layout.id.split("::")[0], node.id) === layout.id)?.subgraph === id));
+    for (const section of edge.sections!) {
+      const points = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint];
+      for (let index = 1; index < points.length; index++) {
+        const a = points[index - 1], b = points[index];
+        assert.ok(Math.abs(a.x - b.x) < .01 || Math.abs(a.y - b.y) < .01, `orthogonal compound route ${edge.id}: ${JSON.stringify([a, b])}`);
+        for (const { layout: node, absolute: { x, y } } of obstacles) {
+          const crosses = Math.abs(a.x - b.x) < .01 ? a.x > x + .01 && a.x < x + node.width! - .01 && Math.max(a.y, b.y) > y + .01 && Math.min(a.y, b.y) < y + node.height! - .01
+            : a.y > y + .01 && a.y < y + node.height! - .01 && Math.max(a.x, b.x) > x + .01 && Math.min(a.x, b.x) < x + node.width! - .01;
+          assert.equal(crosses, false, `${edge.id} crosses ${node.id}`);
+        }
+      }
+    }
+    for (const label of edge.labels ?? []) for (const { layout: node, absolute: { x, y } } of obstacles) {
+      assert.ok(label.x! + label.width! <= x || label.x! >= x + node.width! || label.y! + label.height! <= y || label.y! >= y + node.height!, `${edge.id} label overlaps ${node.id}`);
+    }
+  }
 });
