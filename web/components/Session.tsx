@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { sessionMutationHeaders, setSessionCsrf } from "../lib/session";
 
 type Principal = { owner_id: string; display_name: string; email: string };
@@ -113,9 +114,12 @@ function GoogleSignIn() {
 }
 
 export function SessionGate({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { phase, config, error, login, refresh } = useSession();
   const [busy, setBusy] = useState(false);
-  if (phase === "local" || phase === "signed_in") return <>{children}</>;
+  // Only the exact home route is public. An unresolved hydration pathname
+  // keeps private children behind the session check.
+  if (pathname === "/" || phase === "local" || phase === "signed_in") return <>{children}</>;
   if (phase === "checking") return <p className="empty-state" role="status">Opening your workspace…</p>;
   async function devLogin(user: string) {
     setBusy(true); try { await login("/auth/dev", { user }); } catch {} finally { setBusy(false); }
