@@ -1,3 +1,4 @@
+import { contentText } from "./content.ts";
 // The one projection the episode screen needs and cannot reliably derive from
 // the trace alone: which lane an event belongs to, and where the environment's
 // own index advances.
@@ -159,7 +160,7 @@ export function projectLanes(
       rows.set(laneId, row);
     }
     const data = payload(event);
-    const text = asString(data.text) ?? asString(data.content);
+    const text = asString(data.text) ?? contentText(data.content) ?? (Array.isArray(data.content) ? null : asString(data.content));
     const index = indexOf(event, label);
     row.marks.push({
       cursor,
@@ -202,7 +203,7 @@ export function projectTranscript(
     cursor,
     laneId: laneOf(event, lanes),
     type: asString(event?.type) ?? "event",
-    text: asString(payload(event).text) ?? asString(payload(event).content),
+    text: asString(payload(event).text) ?? contentText(payload(event).content) ?? (Array.isArray(payload(event).content) ? null : asString(payload(event).content)),
     data: payload(event),
   }));
 }

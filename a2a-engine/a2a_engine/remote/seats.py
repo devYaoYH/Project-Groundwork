@@ -26,6 +26,8 @@ def validate_runtime(spec: dict) -> str:
 
 
 def validate_runtimes(config, *, scripted=False):
+    from a2a_engine.modalities import validate_config
+    validate_config(config)
     specs = config.get("agents", [])
     for spec in specs:
         runtime = validate_runtime(spec)
@@ -69,7 +71,7 @@ class LocalProcessLauncher:
                 required += ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]
             env.update({key: os.environ[key] for key in required if key in os.environ})
             fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
-                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra") if key in spec}
+                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra", "capabilities") if key in spec}
             env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
         options = ["--environment-id", environment_id] if environment_id != "calendar" else []
         self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness,
@@ -87,6 +89,13 @@ class LocalProcessLauncher:
 
 
 def write_descriptor(directory, episode, seat, join_url, *, policy=None):
+    from .joinlink import encode_join_link
+    descriptor = {"join_url": join_url, "seat": seat.seat,
+                  "environment_id": episode.environment_id,
+                  "expires_at": seat.join_deadline, "join_ticket": seat.ticket}
+    descriptor["join_link"] = encode_join_link(descriptor)
+    if policy is not None:
+        descriptor["policy"] = policy
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError("provisioning directory must not be a symlink")
@@ -98,10 +107,7 @@ def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as handle:
-            json.dump({"join_url": join_url, "seat": seat.seat,
-                       "environment_id": episode.environment_id,
-                       "expires_at": seat.join_deadline, "join_ticket": seat.ticket,
-                       **({"policy": policy} if policy is not None else {})}, handle)
+            json.dump(descriptor, handle)
         # Watchers must never observe a partially written, one-time descriptor.
         os.link(temporary, path)
     finally:
@@ -122,6 +128,9 @@ class ExternalSeat:
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
     recorder: object = field(default=None, repr=False)
     protocol_version: str = "a2a-turns/1"
+    required_modalities: set[str] = field(default_factory=lambda: {"text"})
+    input_modalities: set[str] = field(default_factory=lambda: {"text"})
+    asset_root: str | None = field(default=None, repr=False)
 
 
 class EpisodeContext:

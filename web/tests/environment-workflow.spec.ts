@@ -58,7 +58,8 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
   });
 }
 
-test("fetch failures are isolated from detail and workflow", async ({ page }) => {
+test("fetch failures are isolated from detail and workflow", async ({ page, request }) => {
+  const { workflow } = await (await request.get("/api/environments/word_guess/workflow")).json();
   await page.route("**/api/environments/word_guess/workflow", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"controlled workflow failure"}' }));
   await page.goto("/environments/word_guess/");
   await expect(page.locator(".workflow-section").getByRole("alert")).toContainText("controlled workflow failure");
@@ -66,7 +67,7 @@ test("fetch failures are isolated from detail and workflow", async ({ page }) =>
   await page.unroute("**/api/environments/word_guess/workflow");
   await page.route("**/api/environments/word_guess/items?*", (route) => route.abort());
   await page.reload();
-  await expect(page.locator(".workflow-canvas .react-flow__node")).toHaveCount(10);
+  await expect(page.locator(".workflow-canvas .react-flow__node")).toHaveCount(workflow.graphs[0].nodes.length);
 });
 
 test("unsupported capability reports unavailable, not a guessed graph", async ({ page }) => {
@@ -210,7 +211,8 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
     const root = workflow.graphs.find((g: { id: string }) => g.id === "root");
     await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
     await expect(canvas.locator('.react-flow__edge')).toHaveCount(root.edges.length);
-    for (const route of ['unavailable', 'eligible', 'suppressed', 'success', 'depth_exceeded', 'no_feasible_slot']) {
+    await expect(canvas.getByText('unavailable', { exact: true })).toHaveCount(0);
+    for (const route of ['eligible', 'suppressed', 'success', 'depth_exceeded', 'no_feasible_slot']) {
       await expect(canvas.getByText(route, { exact: true }).first()).toBeVisible();
     }
     for (const node of root.nodes) {

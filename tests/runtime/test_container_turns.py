@@ -68,11 +68,15 @@ def test_real_container_acknowledgement_and_opposite_mcp_completion(runtime_loss
         still_pending = request("status")
         assert still_pending["accepted"] and not still_pending["closed"] and not still_pending["done"]
         assert still_pending["snapshot"] is None
+        finishing_started = time.monotonic()
         if runtime_loss:
             compose("kill", "runtime-agent")
         else:
             assert request("release", "POST")["released"]
         finished = wait_for(lambda s: s["done"], timeout=25)
+        if runtime_loss:
+            # A 15s turn deadline must not incur another 15s end-delivery wait.
+            assert time.monotonic() - finishing_started < 20
         assert finished["error"] is None and finished["closed_by"] == ("deadline" if runtime_loss else "completed")
         assert finished["result"] == {"registered": True, "completed": not runtime_loss, "actions": [{"action": {"value": "staged"}}]}
         assert finished["snapshot"] == finished["result"]["actions"] and finished["worker_calls"] == 1

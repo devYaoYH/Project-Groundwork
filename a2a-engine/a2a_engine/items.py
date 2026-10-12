@@ -49,6 +49,7 @@ class Item:
             "item_id": self.item_id,
             "params": self.params,
             "oracle_result": self.oracle_result,
+            "assets": [image.model_dump(exclude={"data"}) for image in collect_images(self.raw)],
         }
 
     def attribute(self, key: str, default: Any = None) -> Any:
@@ -73,16 +74,40 @@ class ItemBank:
     item_bank_sha256: str
     items: tuple[Item, ...]
 
+    @property
+    def asset_store(self):
+        from .content import AssetStore
+        return AssetStore(self.path.parent / "assets")
+
+    @property
+    def assets(self):
+        return collect_images([item.raw for item in self.items])
+
+    def package(self, destination):
+        """Copy bank and verified referenced assets into a portable release tree."""
+        target = Path(destination)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / self.path.name).write_bytes(self.path.read_bytes())
+        self.asset_store.package(self.assets, target / "assets")
+        return ItemBank.load(target / self.path.name, expected_sha256=self.item_bank_sha256)
+
     @classmethod
     def load(cls, path: str | Path, *, expected_sha256: str | None = None) -> "ItemBank":
         path = Path(path)
         payload = path.read_bytes()
         digest = hashlib.sha256(payload).hexdigest()
-        if expected_sha256 is not None and digest != expected_sha256.lower():
-            raise ValueError(
-                f"item bank digest mismatch: expected {expected_sha256}, got {digest}"
-            )
         raw_items = _decode_items(path, payload)
+        assets = collect_images(raw_items)
+        if assets:
+            from .content import AssetStore
+            store = AssetStore(path.parent / "assets")
+            for image in assets:
+                store.read(image)
+            blob = json.dumps({"rows_sha256": digest, "assets": [
+                image.model_dump(exclude={"data"}) for image in assets]}, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(blob.encode()).hexdigest()
+        if expected_sha256 is not None and digest != expected_sha256.lower():
+            raise ValueError(f"item bank digest mismatch: expected {expected_sha256}, got {digest}")
         items = tuple(
             Item(
                 item_id=_item_id(raw),
@@ -183,3 +208,23 @@ def _decode_items(path: Path, payload: bytes) -> list[dict[str, Any]]:
             raise ValueError(f"item-bank line {number} must be a JSON object")
         items.append(raw)
     return items
+
+
+def collect_images(value):
+    from .content import ImagePart
+    images = {}
+    def visit(node):
+        if isinstance(node, dict):
+            if node.get("type") == "image":
+                image = ImagePart.model_validate(node)
+                if image.data is not None:
+                    raise ValueError("item banks must reference packaged assets, not inline data")
+                images[(image.sha256, image.mime_type)] = image
+            else:
+                for child in node.values():
+                    visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+    visit(value)
+    return [images[key] for key in sorted(images)]

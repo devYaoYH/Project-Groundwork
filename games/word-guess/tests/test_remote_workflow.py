@@ -164,3 +164,27 @@ def test_local_process_and_mixed_seats_use_same_graph_and_persist(tmp_path, remo
     actual = next(store.iter_episodes())
     assert [(event.type, event.data) for event in actual.events] == [(event.type, event.data) for event in expected.events]
     assert actual.final_state == expected.final_state and actual.metrics == expected.metrics
+
+
+@pytest.mark.parametrize("seat", [0, 1])
+def test_seat_flip_parity(seat_flip_trace, seat):
+    config = {"environment_id": "word_guess", "secret_word": "dog", "seed": 41, "max_turns": 6,
+              "agents": [{"type": "scripted"}, {"type": "scripted"}]}
+    traces = [seat_flip_trace(WordGuessGame, config, seat, runtime)
+              for runtime in ("in_process", "local_process", "external")]
+    def play(trace):
+        return [(e.type, e.data) for e in trace.events], trace.final_state, trace.metrics
+    assert play(traces[0]) == play(traces[1]) == play(traces[2])
+
+
+def test_registration_failure_maps_to_seats_unavailable(remote_harness_v2):
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    harness = remote_harness_v2(seats=(0, 1))
+    game = WordGuessGame({"secret_word": "dog", "agents": [{"runtime": "external"}] * 2,
+                          "turn_timeout_s": .1}, dry_run=True, runtime_context=harness.context)
+    # Calendar's policy cannot consume a Word Guess registration.
+    with pytest.raises(SeatsUnavailable, match="^seat_unavailable") as error:
+        game.run()
+    assert error.value.seats == (0,)
+    assert [e.type for e in game.events.all()] == ["game_start"]
+    assert not harness.episode.active

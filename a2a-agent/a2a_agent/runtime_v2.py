@@ -1,5 +1,6 @@
 """Long-lived acknowledgement-first MCP runtime with isolated seat sessions."""
 
+from a2a_engine.modalities import policy_modalities
 import asyncio
 import hashlib
 import inspect
@@ -18,7 +19,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from a2a_engine.remote.contract import (
-    MAX_BODY_BYTES, HelloV2, JoinRequest, JoinResponseV2, PROTOCOL_VERSION_V2,
+    MAX_BODY_BYTES, valid_body_size, HelloV2, JoinRequest, JoinResponseV2, PROTOCOL_VERSION_V2,
     TurnAcceptance, TurnFinished, TurnInvocationV2,
 )
 from a2a_engine.remote.dispatch import verify_push
@@ -118,9 +119,12 @@ class AgentRuntimeV2:
         self.bootstrap[ticket] = (self.clock() + 10, None)
         try:
             request = JoinRequest(join_ticket=ticket, callback_url=callback_url,
-                                  protocol_versions=[PROTOCOL_VERSION_V2], agent_info={"name": "a2a-agent-v2"})
+                                  protocol_versions=[PROTOCOL_VERSION_V2], input_modalities=policy_modalities(policy), agent_info={"name": "a2a-agent-v2"})
             async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
-                response = await client.post(join_url, json=request.model_dump())
+                payload = request.model_dump(mode="json")
+                if request.input_modalities == {"text"}:
+                    payload.pop("input_modalities")  # Preserve text-only peers predating this extension.
+                response = await client.post(join_url, json=payload)
                 response.raise_for_status()
                 if len(response.content) > MAX_BODY_BYTES:
                     raise ValueError("admission body limit")
@@ -160,7 +164,7 @@ class AgentRuntimeV2:
         async def call(name, arguments):
             try:
                 invocation = TurnInvocationV2.model_validate(arguments)
-                if len(invocation.model_dump_json().encode()) > MAX_BODY_BYTES or name != "start_turn":
+                if not valid_body_size(invocation.model_dump_json().encode()) or name != "start_turn":
                     raise ValueError()
                 credential = self.server.request_context.request.headers.get("authorization", "").removeprefix("Bearer ")
                 acceptance = self.start(invocation, credential)

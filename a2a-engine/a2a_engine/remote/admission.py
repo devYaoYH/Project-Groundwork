@@ -21,6 +21,9 @@ async def join(context, request, base_url, *, network=None):
         seat = next((s for s in context.seats.values() if secrets.compare_digest(s.ticket, request.join_ticket)), None)
         if not context.active or seat is None or seat.consumed or seat.join_deadline <= time.time():
             raise ValueError("invalid, consumed, or expired join ticket")
+        if not seat.required_modalities <= request.input_modalities:
+            raise ValueError("remote seat does not support required input modalities")
+        seat.input_modalities = set(request.input_modalities)
         seat.consumed = True
     extra = {"environment_id": context.environment_id, "attempt_id": context.attempt_id} if version == PROTOCOL_VERSION_V2 else {}
     hello_cls = HelloV2 if extra else Hello

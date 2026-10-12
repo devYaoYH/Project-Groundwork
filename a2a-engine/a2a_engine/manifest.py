@@ -24,7 +24,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MANIFEST_SCHEMA_VERSION = 3
 
@@ -43,11 +43,14 @@ def config_hash(config: dict[str, Any]) -> str:
 
 _SECRET_KEYS = {"api_key", "apikey", "secret", "password", "token", "join_ticket", "seat_secret",
                 "capability", "authorization", "signing_key", "join_url", "callback_url", "ready_url",
-                "provisioning_dir", "mcp_base", "mcp_urls"}
+                "provisioning_dir", "mcp_base", "mcp_urls", "asset_root"}
 
 
 def redact_config(config: Any) -> Any:
     """Recursively drop credential-shaped keys from a config tree."""
+    from .content import media_metadata
+    if isinstance(config, dict) and config.get("type") == "image":
+        return media_metadata(config)
     if isinstance(config, dict):
         return {
             k: redact_config(v)
@@ -97,6 +100,8 @@ class ParticipantManifest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     type: str | None = None
     model: str | None = None
     api_format: str | None = None
@@ -145,6 +150,8 @@ class EpisodeManifest(BaseModel):
     # --- inputs ---
     resolved_config_hash: str | None = None
     seed: int | None = None
+    image_assets: list[dict[str, Any]] = Field(default_factory=list)
+    required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     dataset_path: str | None = None
     dataset_sha256: str | None = None
     task_id: str | None = None
@@ -162,6 +169,12 @@ class EpisodeManifest(BaseModel):
     local_trace_path: str | None = None
     trace_size_bytes: int | None = None
     storage: StorageManifest = Field(default_factory=StorageManifest)
+
+    @field_validator("image_assets", mode="before")
+    @classmethod
+    def metadata_only_images(cls, value):
+        from .content import media_metadata
+        return media_metadata(value)
 
     @classmethod
     def from_run(
@@ -185,6 +198,7 @@ class EpisodeManifest(BaseModel):
         ]
         dataset_path = config.get("task_path") or config.get("dataset_path")
         release = config.get("release") if isinstance(config.get("release"), dict) else {}
+        from .content import media_metadata
         return cls(
             experiment_name=experiment_name,
             episode_id=str(config.get("episode_id") or ""),
@@ -199,6 +213,8 @@ class EpisodeManifest(BaseModel):
             local_user=_safe_user(),
             resolved_config_hash=config_hash(config),
             seed=config.get("seed"),
+            image_assets=media_metadata(config.get("image_assets", [])),
+            required_modalities=config.get("required_modalities", ["text"]),
             dataset_path=str(dataset_path) if dataset_path else None,
             dataset_sha256=file_sha256(dataset_path) if dataset_path else None,
             task_id=config.get("task_id"),
@@ -223,7 +239,7 @@ def _agent_fields(spec: Any) -> dict[str, Any]:
     """Pull the behavior-relevant fields off an agent spec (dict or model)."""
     if not isinstance(spec, dict):
         spec = getattr(spec, "model_dump", lambda: {})()
-    keep = ("type", "model", "api_format", "temperature", "max_tokens", "runtime", "harness")
+    keep = ("type", "model", "api_format", "temperature", "max_tokens", "runtime", "harness", "capabilities", "required_modalities")
     if spec.get("runtime") == "external":
-        keep = ("type", "runtime", "harness")
+        keep = ("type", "runtime", "harness", "capabilities", "required_modalities")
     return {k: spec.get(k) for k in keep if spec.get(k) is not None}

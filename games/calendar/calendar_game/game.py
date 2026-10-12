@@ -387,10 +387,14 @@ class CalendarGame:
     @classmethod
     def runtime_capability(cls):
         from a2a_engine.workflow_runtime import RuntimeCapability
+        from a2a_engine.remote.contract import PROTOCOL_VERSION, PROTOCOL_VERSION_V2
         from .remote import CALENDAR_TOOLS
-        return RuntimeCapability(CALENDAR_TOOLS)
+        return RuntimeCapability(CALENDAR_TOOLS, protocols=frozenset({PROTOCOL_VERSION, PROTOCOL_VERSION_V2}))
 
-    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None, runtime_manager=None) -> None:
+    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, episode=None, runtime_context=None, runtime_manager=None) -> None:
+        from a2a_engine.remote.lobby import open_episode
+        self._owns_episode = episode is None
+        self.episode = episode
         authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
         self.config = CalendarGameConfig(**resolve_config(authored))
         from a2a_engine.remote.seats import validate_runtimes
@@ -406,9 +410,13 @@ class CalendarGame:
         self.adapter_bindings = resolve_bindings(authored, [self._agent_spec_for(seat) for seat in range(self.config.num_agents)])
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
-        self.runtime_context = runtime_context
         self.runtime_manager = runtime_manager
         self._owned_manager = None
+        if self.episode is None and runtime_context is not None:
+            self.episode = open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run,
+                                        runtime_context=runtime_context)
+        self.runtime_context = self.episode.managed if self.episode is not None else None
+        runtime_context = self.runtime_context
         self._remote_clients = {}
         self._remote_budget_usage = {}
         external = {
@@ -425,17 +433,20 @@ class CalendarGame:
                                        {"topology": self.topology, "runtime_context": runtime_context}))
 
     def _ensure_runtime(self):
-        if self.runtime_context is not None or self.adapter_bindings["communication"] != "mcp.http":
+        if self.episode is not None:
             return
-        if self.runtime_manager is None:
+        from a2a_engine.remote.lobby import open_episode
+        if self.runtime_manager is None and self.adapter_bindings["communication"] == "mcp.http":
             from a2a_engine.remote.server import RuntimeManager
             from calendar_game.remote import CALENDAR_TOOLS
             import os
             self._owned_manager = RuntimeManager(CALENDAR_TOOLS, provisioning_dir=os.environ.get("A2A_PROVISIONING_DIR"))
             self.runtime_manager = self._owned_manager.__enter__()
-        self.runtime_context = self.runtime_manager.provision(self.config.model_dump(), scripted=self.dry_run)
-        self.router = adapters.create("communication", "mcp.http",
-                                      {"topology": self.topology, "runtime_context": self.runtime_context})
+        self.episode = open_episode(self.runtime_manager, self.config.model_dump(), scripted=self.dry_run)
+        self.runtime_context = self.episode.managed
+        if self.runtime_context is not None:
+            self.router = adapters.create("communication", "mcp.http",
+                                          {"topology": self.topology, "runtime_context": self.runtime_context})
 
     def _runtime_trace(self, trace):
         from a2a_engine.schemas import ReleaseReference
@@ -470,13 +481,15 @@ class CalendarGame:
             elif event_type in {"turn_end", "decide_end"}:
                 payload.update(remote.lifecycle)
             elif event_type == "agent_registered":
-                payload.update(runtime=validate_runtime(self._agent_spec_for(agent_id)), protocol_version=remote.seat.protocol_version,
-                               agent_info={"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
+                payload.setdefault("runtime", validate_runtime(self._agent_spec_for(agent_id)))
+                payload.setdefault("protocol_version", remote.seat.protocol_version)
+                payload.setdefault("agent_info", {"source": "self_reported", "reported": redact_config(remote.seat.agent_info)})
                 if payload["runtime"] == "local_process":
                     spec = self._agent_spec_for(agent_id)
                     payload["harness"] = "scripted" if self.dry_run else spec.get("harness") or ("scripted" if spec.get("type") == "scripted" else "structured_output")
         elif event_type == "agent_registered":
-            payload.update(runtime="in_process", protocol_version=None)
+            payload.setdefault("runtime", "in_process")
+            payload.setdefault("protocol_version", None)
         if isinstance(agent_id, int) and not isinstance(agent_id, bool) and agent_id >= 0:
             payload.setdefault("participant_id", self._participant_id_for_agent(agent_id))
             if event_type.endswith("_sent"):
@@ -904,8 +917,8 @@ class CalendarGame:
 
     def _close_remote(self) -> None:
         try:
-            if self.runtime_context is not None:
-                self.runtime_context.close()
+            if self._owns_episode and self.episode is not None:
+                self.episode.close()
         finally:
             if self._owned_manager is not None:
                 manager, self._owned_manager = self._owned_manager, None
@@ -1013,11 +1026,41 @@ class CalendarGame:
 
     async def _run_async(self, scenario: dict, agents: list[Agent] | None = None) -> EpisodeTrace:
         from .workflow import episode_limit
+        self._ensure_runtime()
+        context = self.setup(scenario, agents)
+        registrations = self.registrations(context)
+        for seat, agent in enumerate(context.agents):
+            game_config = context.domain.game_configs[seat]
+            if seat in self._remote_clients:
+                agent.agent_id = seat
+                self._remote_clients[seat].config = game_config
+            else:
+                agent.register(seat, game_config)
+        timeout = self.config.turn_timeout_s
+        with self.episode.started(registrations, protocols=self.runtime_capability().protocols,
+                                  register_timeout_s=timeout.get("register", 120) if isinstance(timeout, dict) else timeout) as roster:
+            for seat in roster.seats:
+                context.domain.agent_registered(seat)
+            result = await self.build_program().ainvoke({"round_num": 0}, context=context,
+                config={"recursion_limit": episode_limit(self.config, len(scenario["meetings"]))})
+            return result["trace"]
+
+    def setup(self, scenario: dict, agents: list[Agent] | None = None):
         from .workflow_steps import EpisodeContext
-        context = EpisodeContext(self, scenario, agents)
-        result = await self.build_program().ainvoke({}, context=context,
-            config={"recursion_limit": episode_limit(self.config, len(scenario["meetings"]))})
-        return result["trace"]
+        domain = self._episode_domain(scenario, agents)
+        return EpisodeContext(self, scenario, domain.agents, domain)
+
+    def registrations(self, setup):
+        from a2a_engine.remote.lobby import Registration
+        from .remote import CALENDAR_TOOLS
+        return {seat: Registration({
+            "game_config": dataclasses.asdict(config),
+            "action_schema": {spec.name: spec.input_model.model_json_schema() for spec in CALENDAR_TOOLS},
+            "action_to_tool": {"dm": "comm.send", "participant_groupchat": "comm.send",
+                               "all_groupchat": "comm.send", "schedule": "env.schedule",
+                               "reschedule": "env.reschedule"},
+        }, build_system_prompt(dataclasses.asdict(config)))
+            for seat, config in enumerate(setup.domain.game_configs)}
 
     def _episode_domain(self, scenario: dict, agents: list[Agent] | None = None):
         self._ensure_speaker_orders(scenario)
@@ -1065,21 +1108,14 @@ class CalendarGame:
             **team_metadata,
         })
 
-        # 4. Register all agents
-        def stopped():
-            self._append_event("game_stopped", data={"reason": "seat_unavailable", "phase": "GAME_START"})
-            return EpisodeTrace(episode_uid=str(uuid.uuid4()), config=self.config,
-                                events=self.events.all(), stopped=True,
-                                final_state={"calendars": [agent.calendar.slots for agent in agents],
-                                             "rating_context": build_calendar_rating_context(scenario)}, metrics={})
-
         all_agent_ids = list(range(self.config.num_agents))
         communication_policy_by_phase = (
             {phase: self.topology.effective(phase=phase, round=0).as_dict()
              for phase in ("CHEAP_TALK", "VOLUNTARY", "DECISION")}
             if not self.topology.legacy else {}
         )
-        def register(agent_id, agent):
+        game_configs = []
+        for agent_id in all_agent_ids:
             dsm_prior_meetings = [
                 {
                     "id": int(prior["id"]),
@@ -1118,15 +1154,18 @@ class CalendarGame:
                 ),
                 communication_policy_by_phase=communication_policy_by_phase,
             )
-            try:
-                agent.register(agent_id, game_config)
-            except TimeoutError:
-                if agent_id in self._remote_clients:
-                    return False
-                raise
+            game_configs.append(game_config)
+
+        def agent_registered(seat):
+            agent_id = seat.seat
+            agent = agents[agent_id]
+            game_config = game_configs[agent_id]
             system_prompt_text = getattr(agent.client, "_system_prompt", None) or build_system_prompt(
                 dataclasses.asdict(game_config)
             )
+            metadata = {"runtime": seat.runtime, "protocol_version": seat.protocol_version}
+            if seat.runtime != "in_process":
+                metadata["agent_info"] = {"source": "self_reported", "reported": redact_config(seat.agent_info)}
             self._append_event("agent_registered", data={
                 "round": -1, "turn": -1, "phase": "GAME_START", "agent_id": agent_id,
                 "is_nosy_agent": agent_id in nosy_agent_ids,
@@ -1137,8 +1176,8 @@ class CalendarGame:
                 "representation_elo": representation_elo_by_agent[agent_id],
                 "system_prompt": system_prompt_text,
                 "calendar_render": agent.calendar.render(),
+                **metadata,
             })
-            return True
 
         # 5. Per-environment accumulators
         displacement_cost: dict[int, int] = {i: 0 for i in range(self.config.num_agents)}
@@ -1550,7 +1589,7 @@ class CalendarGame:
                 communication_protocol=communication_protocol)
 
         from types import SimpleNamespace
-        return SimpleNamespace(agents=agents, register=register, stopped=stopped,
+        return SimpleNamespace(agents=agents, game_configs=game_configs, agent_registered=agent_registered,
             start_meeting=start_meeting, resolve=resolve, fallback_search=fallback_search,
             fallback_apply=fallback_apply, finalize=finalize, enter_phase=enter_phase,
             all_agent_ids=all_agent_ids, reflection_frequency=reflection_frequency,

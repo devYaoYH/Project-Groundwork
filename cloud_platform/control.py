@@ -113,14 +113,16 @@ class PlatformControl:
                 "job_name": "local-runtime", "live_logs": True}
 
     @property
-    def local_catalogue(self):
-        if self.repo.backend != "local":
-            return None
+    def catalogue(self):
         with self._catalogue_lock:
             if self._catalogue is None:
-                from cloud_platform.catalogue import LocalCatalogue
-                self._catalogue = LocalCatalogue(self.workspace, self.repo.data_dir,
-                    os.getenv("PLATFORM_CATALOGUE_MANIFEST") or None)
+                from cloud_platform.catalogue import LocalCatalogue, FirestoreCatalogue
+                if self.repo.backend == "local":
+                    self._catalogue = LocalCatalogue(self.workspace, self.repo.data_dir,
+                        os.getenv("PLATFORM_CATALOGUE_MANIFEST") or None)
+                else:
+                    self._catalogue = FirestoreCatalogue(self.workspace, self.repo,
+                        os.getenv("PLATFORM_CATALOGUE_SHA256", ""), source_ref=self.runtime_source_sha)
         return self._catalogue
 
     def compiler(self, directory, content=None):
@@ -132,15 +134,10 @@ class PlatformControl:
         return cp
 
     def releases(self):
-        if self.local_catalogue is not None:
-            templates = self.local_catalogue.available_experiments()
-            return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
-                     **self.runtime_pin()} for release in self.local_catalogue.releases()]
-        with tempfile.TemporaryDirectory() as directory:
-            cp = self.compiler(directory)
-            templates = cp.available_experiments()
-            return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
-                     **self.runtime_pin()} for release in cp.releases()]
+        catalogue = self.catalogue
+        templates = catalogue.available_experiments()
+        return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
+                 **self.runtime_pin()} for release in catalogue.releases()]
 
     def owned(self, kind, identifier, owner_id):
         value = self.repo.get(kind, identifier)
@@ -366,7 +363,8 @@ class PlatformControl:
                            "mode,execution_path,created_at) VALUES (?,?,?,?,?,?,?,?)",
                            (launch.id, identifier, launch.status, parallelism, str(cp.path), mode,
                             execution_path, launch.created_at))
-                db.executemany("INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
+                db.executemany("INSERT INTO attempts (id,launch_id,episode_id,cell_id,episode_idx,attempt,"
+                               "status,episode_uri,error,started_at,ended_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
                     (str(uuid.uuid4()), launch.id, config["episode_id"], config["provenance"]["cell_id"],
                      config["provenance"]["episode_idx"], ordinal, "QUEUED", None, None, None, None)
                     for config in configs])

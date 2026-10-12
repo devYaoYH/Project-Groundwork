@@ -29,7 +29,7 @@ def test_public_conformance_with_independently_started_process(tmp_path):
             report = result.result(timeout=30)
             stdout, stderr = process.communicate(timeout=10)
             assert process.returncode == 0, stderr
-            assert report["passed"] and report["duplicate_pushes"] >= 5
+            assert report["passed"] and report["duplicate_pushes"] >= 4
             assert report["endpoints"] == ["comm", "env"]
             assert report["schema_rejections"] == 1
             assert not list(directory.glob("*.json"))

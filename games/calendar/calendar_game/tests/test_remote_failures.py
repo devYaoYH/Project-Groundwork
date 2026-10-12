@@ -101,18 +101,69 @@ def test_lost_push_response_deduplicates_messages_and_budget_charging(remote_har
 
 
 @pytest.mark.parametrize("admitted", [False, True])
-def test_unavailable_registration_returns_stopped_not_completed(remote_harness, admitted):
+def test_unavailable_registration_fails_attempt(remote_harness, admitted):
     harness = remote_harness(join=admitted, join_timeout_s=0.05 if not admitted else 10)
     if admitted:
         def broken(invocation):
             raise ValueError("unavailable")
         harness.runtimes[0].policy.calls = broken
-    trace = CalendarGame(config(), runtime_context=harness.context).run_with_scenario(task())
-    assert trace.stopped and not trace.metrics
-    assert [event.type for event in trace.events] == ["game_start", "game_stopped"]
-    assert trace.events[-1].data["reason"] == "seat_unavailable"
-    assert trace.final_state["calendars"] == task()["calendars"]
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    game = CalendarGame(config(), runtime_context=harness.context)
+    scenario = task()
+    with pytest.raises(SeatsUnavailable, match="seat_unavailable") as error:
+        game.run_with_scenario(scenario)
+    assert error.value.seats == (0,)
+    assert [event.type for event in game.events.all()] == ["game_start"]
+    assert scenario["calendars"] == task()["calendars"]
     assert not harness.episode.active and harness.episode.seats[0].secret is None
+
+
+@pytest.mark.parametrize("protocol", [1, 2])
+@pytest.mark.parametrize("failed_seat", [0, 1])
+def test_injected_session_registration_failure_keeps_owner_and_notifies_only_registered(
+        remote_harness, remote_harness_v2, protocol, failed_seat):
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    factory = remote_harness if protocol == 1 else remote_harness_v2
+    harness = factory(seats=(0, 1))
+    policy = harness.runtimes[failed_seat].policy if protocol == 1 else harness.policies[failed_seat]
+
+    def broken(invocation):
+        raise ValueError("private registration failure")
+
+    policy.calls = broken
+    cfg = config(agents=[{"type": "scripted", "runtime": "external"} for _ in range(2)])
+    game = CalendarGame(cfg, episode=harness.session)
+    scenario = task()
+    with pytest.raises(SeatsUnavailable, match="seat_unavailable") as error:
+        game.run_with_scenario(scenario)
+    assert error.value.seats == (failed_seat,)
+    assert [event.type for event in game.events.all()] == ["game_start"]
+    assert scenario["calendars"] == task()["calendars"]
+    assert [item.seat for item in harness.invocations if item.kind == "episode_end"] == list(range(failed_seat))
+    assert harness.episode.active and not harness.session.closed
+    harness.session.close()
+    assert not harness.episode.active
+
+
+@pytest.mark.parametrize("protocol", [1, 2])
+def test_play_exception_notifies_registered_seats_without_closing_injected_session(
+        remote_harness, remote_harness_v2, protocol, monkeypatch):
+    from types import SimpleNamespace
+    factory = remote_harness if protocol == 1 else remote_harness_v2
+    harness = factory(seats=(0, 1))
+    game = CalendarGame(config(agents=[{"type": "scripted", "runtime": "external"} for _ in range(2)]),
+                        episode=harness.session)
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("play failed")
+
+    monkeypatch.setattr(game, "build_program", lambda: SimpleNamespace(ainvoke=fail))
+    with pytest.raises(RuntimeError, match="play failed"):
+        game.run_with_scenario(task())
+    assert [item.seat for item in harness.invocations if item.kind == "episode_end"] == [0, 1]
+    assert [event.type for event in game.events.all()] == ["game_start", "agent_registered", "agent_registered"]
+    assert harness.episode.active and not harness.session.closed
+    harness.session.close()
 
 
 def test_late_completion_and_late_mcp_writes_have_no_effect(open_remote_turn):

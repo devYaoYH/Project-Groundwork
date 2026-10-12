@@ -335,6 +335,18 @@ test("empty, single-speaker, system-only and malformed chat input stay addressab
   assert.deepEqual(chat.rows.slice(-2).map((row) => row.text), ["false", "12"]);
 });
 
+test("multimodal content projects text into chat while preserving image payloads", () => {
+  const image = { type: "image", asset: `asset://${"a".repeat(64)}`, sha256: "a".repeat(64), mime_type: "image/png" };
+  const events = [{ type: "message", data: { speaker: "agent_a", content: [{ type: "text", text: "Inspect this" }, image] } }];
+  const projection = projectLanes(events, roster, null);
+  const lines = projectTranscript(events, roster);
+  const chat = projectChat(lines, projection.rows, roster);
+  assert.equal(projection.rows.flatMap((row) => row.marks)[0].shape, "utterance");
+  assert.equal(chat.rows[0].text, "Inspect this");
+  assert.equal(chat.rows[0].kind, "message");
+  assert.equal(chat.rows[0].data, events[0].data);
+});
+
 test("agent attribution uses exact ids, unique roles and discovered names in both projections", () => {
   const lanes: Lane[] = [
     { participant_id: "first", role: "seller", kind: "llm", binding: null },

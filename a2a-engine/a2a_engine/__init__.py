@@ -6,6 +6,13 @@ from typing import Any
 
 
 _EXPORTS = {
+    "ChatMessage": ("a2a_engine.content", "ChatMessage"),
+    "TextPart": ("a2a_engine.content", "TextPart"),
+    "ImagePart": ("a2a_engine.content", "ImagePart"),
+    "ContentPart": ("a2a_engine.content", "ContentPart"),
+    "SeatObservation": ("a2a_engine.content", "SeatObservation"),
+    "AssetStore": ("a2a_engine.content", "AssetStore"),
+    "ModalityCapabilities": ("a2a_engine.modalities", "ModalityCapabilities"),
     "AgentInterface": ("a2a_engine.agent", "AgentInterface"),
     "LLMAgent": ("a2a_engine.agent", "LLMAgent"),
     "ExecutionPlan": ("a2a_engine.experiment", "ExecutionPlan"),

@@ -228,6 +228,7 @@ export function EpisodeView() {
           hideSystemEvents={hideSystemEvents}
           onSeek={(next) => { setPlaying(false); setCursor(next); }}
           activeRef={activeLine}
+          environmentId={environmentId}
         />
       </section>
 

@@ -28,13 +28,7 @@ class Viewer:
 
     @contextmanager
     def catalog(self):
-        if self.control.local_catalogue is not None:
-            yield self.control.local_catalogue
-            return
-        with tempfile.TemporaryDirectory() as directory:
-            cp = self.control.compiler(directory)
-            cp.seed_installed_releases()
-            yield cp
+        yield self.control.catalogue
 
     @contextmanager
     def private_snapshot(self, record, key="snapshot_key"):
@@ -61,6 +55,10 @@ class Viewer:
             if operation == "oracle":
                 return cp.run_oracle(identifier, str((body or {}).get("item_id") or ""))
             return cp.environment_detail(identifier)
+
+    def environment_asset(self, identifier, digest):
+        with self.catalog() as cp:
+            return cp.environment_asset(identifier, digest)
 
     def agent_pool(self):
         with self.catalog() as cp:

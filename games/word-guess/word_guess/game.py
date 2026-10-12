@@ -118,18 +118,22 @@ def _extract_guess(text: str) -> str | None:
 class WordGuessGame:
     """Round-robin word-guessing environment."""
 
-    def __init__(self, config: dict | WordGuessConfig, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
+    def __init__(self, config: dict | WordGuessConfig, dry_run: bool = False, *, episode=None, runtime_manager=None, runtime_context=None) -> None:
         self.config = config if isinstance(config, WordGuessConfig) else WordGuessConfig(**config)
         self.dry_run = dry_run
         rng = random.Random(self.config.seed)
         self.secret_word = self.config.secret_word or rng.choice(self.config.word_pool)
         self.events = EventLog.from_config(self.config)
-        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+        from a2a_engine.remote.lobby import open_episode
+        self._owns_episode = episode is None
+        self.episode = episode or open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run,
+                                               runtime_context=runtime_context)
+        self.runtime = self.episode.managed
         try:
             self._build_agents()
         except BaseException:
-            if self.runtime:
-                self.runtime.close()
+            if self._owns_episode:
+                self.episode.close()
             raise
 
     def _build_agents(self) -> None:
@@ -163,21 +167,28 @@ class WordGuessGame:
 
     async def _run_async(self) -> EpisodeTrace:
         from .workflow import GameContext
-        from .remote import RemoteTextAgent
-        remote_agents = [agent for agent in (self.guesser, self.host) if isinstance(agent, RemoteTextAgent)]
         try:
-            for agent in remote_agents:
-                await asyncio.to_thread(agent.register, self.secret_word)
-            state = await self.build_program().ainvoke({}, context=GameContext(self),
-                config={"recursion_limit": max(10, self.config.max_turns * 7 + 5)})
-            return self._trace(state)
+            setup = self.setup()
+            with self.episode.started(self.registrations(setup), protocols=self.runtime_capability().protocols,
+                                      register_timeout_s=self.config.turn_timeout_s) as roster:
+                state = await self.build_program().ainvoke(setup, context=GameContext(self, roster),
+                    config={"recursion_limit": max(10, self.config.max_turns * 7 + 5)})
+                return self._trace(state)
         finally:
-            if self.runtime:
-                try:
-                    for agent in remote_agents:
-                        await asyncio.to_thread(agent.episode_end)
-                finally:
-                    self.runtime.close()
+            if self._owns_episode:
+                self.episode.close()
+
+    def setup(self):
+        self.events.append("game_start", data={"max_turns": self.config.max_turns,
+                                               "word_pool_size": len(self.config.word_pool)})
+        return {"history": [], "turns_used": 0, "guessed_word": None, "won": False}
+
+    def registrations(self, setup):
+        from a2a_engine.remote.lobby import Registration
+        from .agents import GUESSER_SYSTEM, HOST_SYSTEM
+        return {0: Registration({"role": "guesser"}, GUESSER_SYSTEM),
+                1: Registration({"role": "host", "secret_word": self.secret_word},
+                                HOST_SYSTEM.format(secret_word=self.secret_word))}
 
     def _trace(self, state):
         won, turns_used = state["won"], state["turns_used"]

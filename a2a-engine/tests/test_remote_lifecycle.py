@@ -140,6 +140,42 @@ def test_lazy_expiry_cannot_restart_post_deadline_credential_grace():
 def test_probe_builds_the_pinned_local_graph_api_without_execution():
     from a2a_engine.remote.probe import build_probe
     graph = build_probe().get_graph()
-    assert set(graph.nodes) == {"__start__", "initialize", "agent_turn", "finalize", "__end__"}
+    assert set(graph.nodes) == {"__start__", "agent_turn", "__end__"}
     assert {(edge.source, edge.target) for edge in graph.edges} == {
-        ("__start__", "initialize"), ("agent_turn", "finalize"), ("initialize", "agent_turn"), ("finalize", "__end__")}
+        ("__start__", "agent_turn"), ("agent_turn", "__end__")}
+
+
+def test_probe_shared_stage_real_loopback_and_owner_cleanup(tmp_path):
+    import asyncio
+    from a2a_agent.runtime_v2 import AgentRuntimeV2
+    from a2a_agent.service import ProbePolicy
+    from a2a_engine.remote.contract import PROTOCOL_VERSION_V2
+    from a2a_engine.remote.dispatch import LoopbackServer
+    from a2a_engine.remote.lobby import Registration, open_episode
+    from a2a_engine.remote.probe import PROBE_TOOLS, ProbeContext, ProbeRuntimeManager, build_probe
+
+    (tmp_path / "release").touch(mode=0o600)
+    agent = AgentRuntimeV2()
+    calls = []
+
+    class Policy(ProbePolicy):
+        async def calls(self, invocation):
+            calls.append(invocation.kind)
+            return await super().calls(invocation)
+
+    with ProbeRuntimeManager(PROBE_TOOLS, provisioning_dir=tmp_path) as manager, LoopbackServer(agent.app) as callback:
+        with open_episode(manager, {"environment_id": "probe", "num_agents": 1,
+                                    "agents": [{"runtime": "external"}], "join_timeout_s": 10}) as session:
+            managed = session.managed
+            callback.run(agent.join(session.handle.seats[0].join_url, callback.base_url,
+                                    managed.episode.seats[0].ticket, policy=Policy(tmp_path, NetworkPolicy())))
+            context = ProbeContext(manager.environment, manager.io, managed.episode, 3)
+            with session.started({0: Registration({})}, protocols=frozenset({PROTOCOL_VERSION_V2}),
+                                 register_timeout_s=3):
+                result = asyncio.run(build_probe().ainvoke({"registered": True}, context=context))
+            assert result == {"registered": True, "completed": True, "actions": [{"action": {"value": "staged"}}]}
+            assert calls == ["register", "turn", "episode_end"]
+            assert context.recorder.worker_calls == 1
+            assert managed.episode.active and not managed.closed
+        assert managed.closed and not managed.episode.active
+        assert not list(tmp_path.glob("*.json")) and not manager.episodes

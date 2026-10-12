@@ -82,6 +82,20 @@ class LocalStackHandler(BaseHTTPRequestHandler):
                 return self._json(self._control().environment_workflow(environment_id))
             except KeyError:
                 return self._json({"error": "environment not found"}, 404)
+        if parsed.path.startswith("/api/environments/") and "/assets/" in parsed.path:
+            environment_id, digest = parsed.path.removeprefix("/api/environments/").split("/assets/", 1)
+            try:
+                payload, mime = self._control().environment_asset(unquote(environment_id), digest)
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            except (KeyError, ValueError, FileNotFoundError):
+                return self._json({"error": "asset unavailable"}, 404)
         if parsed.path.startswith("/api/environments/") and parsed.path.endswith("/items"):
             environment_id = unquote(
                 parsed.path.removeprefix("/api/environments/").removesuffix("/items").rstrip("/")

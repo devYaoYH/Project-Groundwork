@@ -73,6 +73,9 @@ def test_private_descriptor_and_stale_attempt_isolation(tmp_path):
         first = manager.provision(cfg)
         descriptor = first.descriptors[0]
         payload = json.loads(descriptor.read_text())
+        from a2a_engine.remote.joinlink import decode_join_link
+        assert decode_join_link(payload["join_link"]) == {key: payload[key] for key in
+            ("join_url", "seat", "environment_id", "expires_at", "join_ticket")}
         assert descriptor.stat().st_mode & 0o777 == 0o600
         assert payload["seat"] == 0 and payload["expires_at"] > time.time()
         assert payload["join_url"].startswith(manager.io.base_url)
@@ -126,7 +129,7 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
         return dump(payload, handle)
 
     monkeypatch.setattr("a2a_engine.remote.seats.json.dump", observed_dump)
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/atomic/join")
     assert json.loads(descriptor.read_text())["join_ticket"] == episode.seats[0].ticket
     assert descriptor.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob("*.tmp"))
@@ -135,10 +138,10 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
 def test_duplicate_descriptor_never_overwrites_existing_ticket(tmp_path):
     from a2a_engine.remote.seats import EpisodeContext, write_descriptor
     episode = EpisodeContext("duplicate", [0])
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/join")
+    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/duplicate/join")
     original = descriptor.read_bytes()
     with pytest.raises(FileExistsError):
-        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/join")
+        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/episodes/duplicate/join")
     assert descriptor.read_bytes() == original
     assert not list(tmp_path.glob("*.tmp"))
 
@@ -181,7 +184,7 @@ def test_provision_launch_failure_cleans_earlier_child(monkeypatch):
         assert children[0].process.poll() is not None
 
 
-def test_crashed_real_child_stops_episode_and_is_reaped(monkeypatch):
+def test_crashed_real_child_fails_attempt_and_is_reaped(monkeypatch):
     real = LocalProcessLauncher
 
     def crash(*args):
@@ -192,8 +195,10 @@ def test_crashed_real_child_stops_episode_and_is_reaped(monkeypatch):
 
     monkeypatch.setattr("a2a_engine.remote.seats.LocalProcessLauncher", crash)
     game = CalendarGame(config(join_timeout_s=0.2))
-    trace = game.run()
-    assert trace.stopped and trace.events[-1].data["reason"] == "seat_unavailable"
+    from a2a_engine.remote.lobby import SeatsUnavailable
+    with pytest.raises(SeatsUnavailable, match="seat_unavailable"):
+        game.run()
+    assert [event.type for event in game.events.all()] == ["game_start"]
     assert game.runtime_context.closed and not game.runtime_manager.io.thread.is_alive()
     assert all(child.process.poll() is not None for child in game.runtime_context.children)
 

@@ -7,6 +7,7 @@ import pytest
 
 from a2a_agent.runtime_v2 import AgentRuntimeV2
 from a2a_engine.remote.dispatch import LoopbackServer
+from a2a_engine.remote.lobby import EpisodeSession, SeatsUnavailable
 from a2a_engine.remote.server import ManagedEpisode, RuntimeManager
 from buyer_seller.agents import BuyerAgent, SellerAgent
 from buyer_seller.game import BuyerSellerGame
@@ -31,6 +32,8 @@ def run_remote(config, *, provider_lines=None, mode=None, outcome=None):
             original = policy.calls
             async def calls(invocation, original=original):
                 invocations.append(invocation.model_copy(deep=True))
+                if invocation.kind == "register" and mode == f"register_failed_{invocation.seat}":
+                    raise RuntimeError("private provider details")
                 if invocation.kind == "turn":
                     if mode in {"staged_failed", "staged_expiry"}:
                         from a2a_agent.mcp_client import execute
@@ -48,17 +51,20 @@ def run_remote(config, *, provider_lines=None, mode=None, outcome=None):
             policy.calls = calls
             callback.run(runtime.join(manager.io.base_url + "/episodes/bargain/join", callback.base_url,
                                       episode.seats[seat].ticket, policy=policy))
-        game = BuyerSellerGame({**config, "agents": [{"runtime": "external"}] * 2},
-                               dry_run=True, runtime_context=managed)
+        config = {**config, "environment_id": "buyer_seller", "agents": [{"runtime": "external"}] * 2}
+        session = stack.enter_context(EpisodeSession(config, managed))
+        game = BuyerSellerGame(config, dry_run=True, episode=session)
         if mode in {"expiry", "staged_expiry"}:
             game.seller.timeout_s = .15
         try:
             trace = game.run()
         finally:
+            assert not managed.closed
+            session.close()
             if outcome is not None:
                 outcome.update(events=[e.type for e in game.events.all()],
                                records=game.seller.records, closed=managed.closed,
-                               active=bool(manager.episodes))
+                               active=bool(manager.episodes), invocations=invocations)
         assert not manager.episodes
         return trace, invocations, game, policies
 
@@ -220,3 +226,24 @@ def test_local_process_mixed_seats_runner_persistence(tmp_path, remote_seats):
         _run_one(context, store, tmp_path / "results")
         assert not manager.episodes
     assert_trace_parity(next(store.iter_episodes()), expected)
+
+
+@pytest.mark.parametrize("seat", [0, 1])
+def test_seat_flip_parity(seat_flip_trace, seat):
+    config = {"environment_id": "buyer_seller", "seed": 41, "num_items": 2,
+              "max_rounds": 4, "agents": [{"type": "scripted"}, {"type": "scripted"}]}
+    traces = [seat_flip_trace(BuyerSellerGame, config, seat, runtime)
+              for runtime in ("in_process", "local_process", "external")]
+    assert_trace_parity(traces[0], traces[1])
+    assert_trace_parity(traces[0], traces[2])
+
+
+@pytest.mark.parametrize("seat", [0, 1])
+def test_registration_failure_maps_to_seats_unavailable(seat):
+    outcome = {}
+    with pytest.raises(SeatsUnavailable, match="^seat_unavailable") as error:
+        run_remote({}, mode=f"register_failed_{seat}", outcome=outcome)
+    assert error.value.seats == (seat,)
+    assert outcome["events"] == ["game_start"]
+    assert outcome["closed"] and not outcome["active"]
+    assert [i.seat for i in outcome["invocations"] if i.kind == "episode_end"] == list(range(seat))

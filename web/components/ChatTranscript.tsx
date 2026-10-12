@@ -1,14 +1,16 @@
 import type { CSSProperties, Ref } from "react";
+import { MediaPreview } from "./MediaPreview";
 
 import { keepWhenHidingSystemEvents, laneHue, type ChatProjection, type LaneRow } from "../lib/lanes";
 
-export function ChatTranscript({ chat, lanes, bounded, hideSystemEvents, onSeek, activeRef }: {
+export function ChatTranscript({ chat, lanes, bounded, hideSystemEvents, onSeek, activeRef, environmentId }: {
   chat: ChatProjection;
   lanes: readonly LaneRow[];
   bounded: number;
   hideSystemEvents: boolean;
   onSeek: (cursor: number) => void;
   activeRef: Ref<HTMLLIElement>;
+  environmentId?: string | null;
 }) {
   return (
     <>
@@ -59,6 +61,7 @@ export function ChatTranscript({ chat, lanes, bounded, hideSystemEvents, onSeek,
                     {row.text ? <p>{row.text}</p> : null}
                   </>
                 )}
+                {environmentId ? <MediaPreview value={row.data} environmentId={environmentId} /> : null}
                 <details
                   className="chat-payload"
                   onClick={(event) => event.stopPropagation()}

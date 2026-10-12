@@ -1,14 +1,15 @@
 """Signed hello/turn callback and private provisioning CLI."""
 
 import argparse
+from a2a_engine.modalities import policy_modalities
 import asyncio
 import hashlib
 import inspect
 import json
 import os
-import stat
 import threading
 import time
+import sys
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -22,6 +23,8 @@ from a2a_engine.remote.dispatch import LoopbackServer, loopback_url, verify_push
 from .mcp_client import execute
 from .scripted import ScriptedPolicy
 from .runtime_v2 import AgentRuntimeV2
+from a2a_engine.remote.joinlink import decode_join_link, MAX_LINK_BYTES
+from .service import read_descriptor
 
 
 class ScriptedRuntime:
@@ -55,9 +58,12 @@ class ScriptedRuntime:
         loopback_url(join_url)
         loopback_url(callback_url)
         request = JoinRequest(join_ticket=self.ticket, callback_url=callback_url,
-                              protocol_versions=[PROTOCOL_VERSION], agent_info={"name": "a2a-agent", "version": "0.1.0"})
+                              protocol_versions=[PROTOCOL_VERSION], input_modalities=policy_modalities(self.policy), agent_info={"name": "a2a-agent", "version": "0.1.0"})
         async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
-            result = await client.post(join_url, json=request.model_dump())
+            payload = request.model_dump(mode="json")
+            if request.input_modalities == {"text"}:
+                payload.pop("input_modalities")  # Preserve text-only peers predating this extension.
+            result = await client.post(join_url, json=payload)
             result.raise_for_status()
             self.admission = JoinResponse.model_validate(result.json())
             loopback_url(self.admission.ready_url)
@@ -162,27 +168,40 @@ def main():
     parser = argparse.ArgumentParser(description="Run an admitted reference seat")
     parser.add_argument("--join-url", default=os.environ.get("A2A_JOIN_URL"))
     parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
+    parser.add_argument("--join-link", action="store_true", help="Read private link from A2A_JOIN_LINK or stdin (not argv)")
     parser.add_argument("--harness", default="scripted", choices=["scripted", "structured_output"])
     parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess", "buyer_seller", "negotiation"])
     parser.add_argument("--model-config", help="Nonsecret model configuration JSON file")
     parser.add_argument("--port", type=int, default=0, help="Loopback callback port (default: ephemeral)")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        parser.error("unexpected arguments; private join links must come from stdin or A2A_JOIN_LINK")
     ticket = os.environ.get("A2A_JOIN_TICKET")
+    if args.join_link and args.join_descriptor:
+        parser.error("choose one private provisioning source")
+    if args.join_link:
+        try:
+            link = os.environ.get("A2A_JOIN_LINK")
+            if link is None:
+                link = sys.stdin.read(MAX_LINK_BYTES + 2).removesuffix("\n")
+            descriptor = decode_join_link(link)
+            args.join_url, ticket = descriptor["join_url"], descriptor["join_ticket"]
+            args.environment_id = descriptor["environment_id"]
+        except (OSError, ValueError):
+            parser.error("invalid private join link")
     if args.join_descriptor:
         try:
-            fd = os.open(args.join_descriptor, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd) as handle:
-                info = os.fstat(handle.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 16384:
-                    raise ValueError()
-                descriptor = json.load(handle)
-                args.join_url, ticket = descriptor["join_url"], descriptor["join_ticket"]
-                if not isinstance(args.join_url, str) or not isinstance(ticket, str):
-                    raise ValueError()
+            descriptor = read_descriptor(args.join_descriptor)
+            args.join_url, ticket = descriptor["join_url"], descriptor["join_ticket"]
+            args.environment_id = descriptor["environment_id"]
+            if not isinstance(args.join_url, str) or not isinstance(ticket, str):
+                raise ValueError()
         except (OSError, ValueError, KeyError, TypeError):
             parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
+    if args.environment_id not in {"calendar", "word_guess", "buyer_seller", "negotiation"}:
+        parser.error("unsupported provisioning environment")
     if args.environment_id == 'negotiation':
         from negotiation_game.runtime_strategy import NegotiationStrategy
         config = None

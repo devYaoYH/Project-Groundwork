@@ -64,6 +64,7 @@ def build_provenance(
         "item_id": item_id,
         "item_bank_sha256": release.get("item_bank_sha256"),
         "oracle_version": release.get("oracle_version"),
+        "image_assets": config.get("image_assets", []),
         "participants": pinned_participants(config),
         # A randomized item attribute varies *within* a cell, so the cell's
         # levels cannot describe it and the episode's own record must.  The

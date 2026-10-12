@@ -65,6 +65,8 @@ async def execute(engine_cls, cfg, agents, *, single_round=False, stop=False, ro
         if stop and kind == 'round_complete':
             engine.stop()
     engine.on_event(emit)
+    if engine_cls is GameEngine and not single_round:
+        await engine._start_game()
     result = await engine.run_round(2) if single_round else await engine.run_game()
     return result, events, agents, engine
 
@@ -153,6 +155,8 @@ def test_export_never_executes_backend_or_selectors(monkeypatch):
     assert output == environment_workflow('negotiation')
     graphs = output['workflow']['graphs']
     assert len(graphs) == 5
+    assert not {'initialize', 'register_a', 'register_b', 'end_a', 'end_b'} & {node['id'] for node in graphs[0]['nodes']}
+    assert not {'register', 'episode_end'} & {node.get('operation') for graph in graphs for node in graph['nodes']}
     for graph in graphs:
         assert {node['id'] for node in graph['nodes']} == {edge[key] for edge in graph['edges'] for key in ('source', 'target')}
     keys = {edge.get('route_key') for graph in graphs for edge in graph['edges']}
@@ -170,6 +174,11 @@ def test_actual_human_future_stays_on_episode_loop():
     async def run():
         human = HumanAgent()
         engine = GameEngine(GameConfig(num_rounds=1, cheap_talk_turns=1), human, ControlledAgent(['{}']))
+        events = []
+        async def emit(kind, data):
+            events.append(kind)
+        engine.on_event(emit)
+        await engine._start_game()
         task = asyncio.create_task(engine.run_game())
         for _ in range(1000):
             if human._pending is not None:
@@ -179,6 +188,7 @@ def test_actual_human_future_stays_on_episode_loop():
         human.submit_input('{}')
         result = await asyncio.wait_for(task, 5)
         assert result['num_rounds'] == 1
+        assert events.count('game_start') == 1
     asyncio.run(run())
 
 

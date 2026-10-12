@@ -16,7 +16,7 @@ export type ClientDesign = {
   release?: string;
   parameters?: Record<string, ClientDisposition>;
   units?: { episodes_per_cell?: number };
-  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null; runtime?: string; harness?: string | null }[];
+  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null; runtime?: string; harness?: string | null; capabilities?: { input?: string[]; evidence?: string }; api_format?: string }[];
   seed?: { mode?: string; root?: number };
 };
 
@@ -131,6 +131,12 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
       issues.push({ path: `roster[${index}].binding`, message: "A non-human participant needs a binding." });
     }
     const role = typeof participant.role === "string" ? rolesById.get(participant.role) : undefined;
+    const required = [...(detail.required_modalities ?? ["text"]), ...(role?.required_modalities ?? ["text"])];
+    const inputs = Array.isArray(participant.capabilities?.input) ? participant.capabilities.input : ["text"];
+    const evidence = typeof participant.capabilities?.evidence === "string" ? participant.capabilities.evidence.trim() : "";
+    if (required.some((modality) => modality !== "text") && (!evidence || required.some((modality) => !inputs.includes(modality)))) {
+      issues.push({ path: `roster[${index}].capabilities`, message: "Declare verified input capabilities for this role." });
+    }
     if (!participant.role) {
       issues.push({ path: `roster[${index}].role`, message: "Select one declared environment role." });
     } else if (!role) {

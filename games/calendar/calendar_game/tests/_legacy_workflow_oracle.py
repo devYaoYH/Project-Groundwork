@@ -54,6 +54,16 @@ from calendar_game.game import CalendarGame, compute_headline_scores, _clip01
 
 
 class LegacyCalendarGame(CalendarGame):
+    def _build_agents(self, scenario):
+        from ._legacy_remote_oracle import LegacyRemoteSeatClient
+        agents = super()._build_agents(scenario)
+        for seat, client in self._remote_clients.items():
+            legacy = LegacyRemoteSeatClient(client.runtime, seat, client.router,
+                turn_timeout_s=client.turn_timeout_s, private_prompts=client.private_prompts)
+            agents[seat].client.delegate = legacy
+            self._remote_clients[seat] = legacy
+        return agents
+
     def _close_remote(self):
         if self.runtime_context is not None and self.runtime_context.episode.active:
             for client in self._remote_clients.values():

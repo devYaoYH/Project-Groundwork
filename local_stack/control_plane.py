@@ -53,6 +53,7 @@ import yaml
 
 
 _LIVE_RESULT = re.compile(r"INFO expt_runner: ok\s+(?P<episode>\S+)\s+->\s+(?P<uri>\S+)")
+_EPISODE_OPENED = re.compile(r"INFO expt_runner: opened\s+(?P<episode>\S+)\s+(?P<handle>\{.*\})")
 _SMOKE_RESULT = re.compile(
     r"^\s*OK\s+(?P<episode>\S+)\s+\[[^]]+\]\s+->\s+(?P<uri>\S+)"
 )
@@ -591,6 +592,7 @@ class ControlPlane:
                 self._parameter_view(parameter, bank) for parameter in declaration.parameters
             ],
             "roles": [role.model_dump(mode="json") for role in declaration.roles],
+            "required_modalities": sorted(declaration.required_modalities),
             "measures": [measure.model_dump(mode="json") for measure in declaration.measures],
             "item_policy": {
                 **declaration.item_policy.model_dump(mode="json"),
@@ -634,6 +636,13 @@ class ControlPlane:
             "next_cursor": next_cursor,
             "item_bank_sha256": bank.item_bank_sha256,
         }
+
+    def environment_asset(self, environment_id: str, digest: str):
+        bank = self._item_bank(environment_id)
+        image = next((image for image in bank.assets if image.sha256 == digest), None)
+        if image is None:
+            raise KeyError("asset is not referenced by this release")
+        return bank.asset_store.read(image), image.mime_type
 
     def run_oracle(self, environment_id: str, item_id: str) -> dict[str, Any]:
         declaration = self._declaration(environment_id)
@@ -686,6 +695,7 @@ class ControlPlane:
             entries.append({
                 "name": name,
                 "description": entry.description,
+                "capabilities": entry.capabilities,
                 "type": entry.type,
                 "model": entry.model,
                 "api_format": entry.api_format,
@@ -1088,7 +1098,8 @@ class ControlPlane:
                  launch.shard_count, launch.created_at, launch.started_at, launch.ended_at, launch.error),
             )
             db.executemany(
-                "INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO attempts (id, launch_id, episode_id, cell_id, episode_idx, attempt, "
+                "status, episode_uri, error, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (str(uuid.uuid4()), launch.id, episode_id, cell_id, episode_idx,
                      attempt, "QUEUED", None, None, None, None)
@@ -1213,6 +1224,8 @@ class ControlPlane:
                 # URI provenance remains available to older callers, while the
                 # explicit uid is the durable link to a persisted episode.
                 "episode_uid": row["episode_uid"],
+                "engine_episode_id": row["engine_episode_id"],
+                "engine_attempt_id": row["engine_attempt_id"],
                 "redis_stream": prefix + row["episode_id"],
             } for row in attempts],
             "progress": self.progress(launch_id),
@@ -1569,6 +1582,20 @@ class ControlPlane:
             return
         with self._session() as db:
             self._event(db, launch_id, "runner.log", {"line": line})
+            opened = _EPISODE_OPENED.search(line)
+            if opened:
+                try:
+                    handle = json.loads(opened["handle"])
+                    engine_episode_id, engine_attempt_id = handle["episode_id"], handle["attempt_id"]
+                except (ValueError, KeyError, TypeError):
+                    return
+                db.execute(
+                    "UPDATE attempts SET engine_episode_id = ?, engine_attempt_id = ? "
+                    "WHERE launch_id = ? AND episode_id = ?",
+                    (engine_episode_id, engine_attempt_id, launch_id, opened["episode"]),
+                )
+                self._event(db, launch_id, "episode.opened", {"episode_id": opened["episode"], "handle": handle})
+                return
             result = _LIVE_RESULT.search(line) or _SMOKE_RESULT.search(line)
             if result:
                 identifier, uri = result["episode"], result["uri"]

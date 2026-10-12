@@ -27,6 +27,7 @@ class GameState(TypedDict, total=False):
 @dataclass
 class GameContext:
     game: object
+    roster: object = None
 
     def __post_init__(self):
         for role in ("seller", "buyer"):
@@ -35,60 +36,12 @@ class GameContext:
                 setattr(self.game, role, GuardedAgent(agent))
 
 
-async def initialize(state: GameState, runtime: Runtime[GameContext]):
-    game, cfg = runtime.context.game, runtime.context.game.config
-    game.events.append("game_start", data={
-        "num_items": cfg.num_items, "max_rounds": cfg.max_rounds,
-        "discount_factor": cfg.discount_factor,
-        "enforce_monotonic_offers": cfg.enforce_monotonic_offers,
-        "opening_price": game.opening_price,
-    })
-    return {"round": 1, "units_sold": 0, "history": [], "strikes": [],
-            "buyer_utility": 0.0, "seller_utility": 0.0, "last_price": None}
-
-
 def select_seller(state, context):
     return context.game.seller
 
 
 def select_buyer(state, context):
     return context.game.buyer
-
-
-def seller_registration(state, context):
-    return registration(context, "seller")
-
-
-def buyer_registration(state, context):
-    return registration(context, "buyer")
-
-
-def registration(context, role):
-    cfg = context.game.config
-    info = {"role": role, "num_items": cfg.num_items, "max_rounds": cfg.max_rounds,
-            "discount_factor": cfg.discount_factor}
-    if role == "seller":
-        info.update(cost=cfg.seller_cost, opening=context.game.opening_price,
-                    monotonic=cfg.enforce_monotonic_offers)
-    else:
-        info.update(value=cfg.buyer_value, patience=cfg.buyer_patience)
-    return info
-
-
-async def lifecycle_adapter(actor, operation, observation, state, context):
-    require_agent_step()
-    from .remote import RemoteBargainingAgent
-    if isinstance(actor.agent, RemoteBargainingAgent):
-        import asyncio
-        if operation == "register":
-            await asyncio.to_thread(actor.register, observation)
-        else:
-            await asyncio.to_thread(actor.episode_end)
-    return {}
-
-
-def no_observation(state, context):
-    return {}
 
 
 def inventory_deadline_guard(state: GameState):
@@ -186,19 +139,12 @@ async def finalize(state: GameState, runtime: Runtime[GameContext]):
 
 def build_program():
     builder = StateGraph(GameState, context_schema=GameContext)
-    for node in (initialize, inventory_deadline_guard, start_round, normalize_offer, emit_offer,
+    for node in (inventory_deadline_guard, start_round, normalize_offer, emit_offer,
                  emit_response, trade_one_unit, advance_round, finalize):
         builder.add_node(node.__name__, node)
-    builder.add_node("seller_register", AgentStep(select_seller, "register", seller_registration, lifecycle_adapter))
-    builder.add_node("buyer_register", AgentStep(select_buyer, "register", buyer_registration, lifecycle_adapter))
     builder.add_node("seller_call", AgentStep(select_seller, "act", seller_observation, bargaining_adapter))
     builder.add_node("buyer_call", AgentStep(select_buyer, "act", buyer_observation, bargaining_adapter))
-    builder.add_node("seller_end", AgentStep(select_seller, "episode_end", no_observation, lifecycle_adapter))
-    builder.add_node("buyer_end", AgentStep(select_buyer, "episode_end", no_observation, lifecycle_adapter))
-    builder.add_edge(START, "initialize")
-    builder.add_edge("initialize", "seller_register")
-    builder.add_edge("seller_register", "buyer_register")
-    builder.add_edge("buyer_register", "inventory_deadline_guard")
+    builder.add_edge(START, "inventory_deadline_guard")
     builder.add_conditional_edges("inventory_deadline_guard", can_continue,
                                  {"continue": "start_round", "finished": "finalize"})
     builder.add_edge("start_round", "seller_call")
@@ -210,7 +156,5 @@ def build_program():
                                  {"accepted": "trade_one_unit", "rejected": "advance_round"})
     builder.add_edge("trade_one_unit", "advance_round")
     builder.add_edge("advance_round", "inventory_deadline_guard")
-    builder.add_edge("finalize", "seller_end")
-    builder.add_edge("seller_end", "buyer_end")
-    builder.add_edge("buyer_end", END)
+    builder.add_edge("finalize", END)
     return GraphProgram(builder)
