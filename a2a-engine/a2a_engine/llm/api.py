@@ -30,6 +30,7 @@ from a2a_engine._context import current_conversation_id
 from a2a_engine.llm.retry import (
     DEFAULT_POLICY,
     FailureInfo,
+    ImageProviderError,
     RateLimiter,
     RetryExhausted,
     RetryPolicy,
@@ -140,10 +141,18 @@ def _finish_chat_span(span, *, response_model: str | None = None,
             pass
 
 
-def _record_chat_error(span, exc: BaseException) -> None:
+def _record_chat_error(span, exc: BaseException, *, image_input: bool = False) -> None:
     span.set_status(Status(StatusCode.ERROR))
     span.set_attribute("error.type", type(exc).__name__)
-    span.record_exception(exc)
+    if image_input:
+        # Provider diagnostics may echo submitted bytes. Keep the exception type
+        # while overriding both attributes that can contain the provider body.
+        span.record_exception(exc, attributes={
+            "exception.message": "Image provider request failed; diagnostic content omitted",
+            "exception.stacktrace": "",
+        })
+    else:
+        span.record_exception(exc)
 
 log = logging.getLogger("a2a_engine.llm")
 
@@ -309,12 +318,15 @@ def call_llm_streaming(
     asset_root: str | None = None,
 ) -> dict:
     """Streaming LLM call. Returns dict with text, model, duration_s, token usage."""
-    require_modalities(content_modalities(messages), capabilities, api_format=api_format)
+    modalities = content_modalities(messages)
+    require_modalities(modalities, capabilities, api_format=api_format)
+    image_input = "image" in modalities
     converted = provider_messages(messages, api_format, asset_root)
     span = _start_chat_span(model, api_base, messages, temperature, max_tokens, stream=True)
     messages = converted
     try:
-        with _otel_trace.use_span(span, end_on_exit=False):
+        with _otel_trace.use_span(span, end_on_exit=False, record_exception=not image_input,
+                                  set_status_on_exception=not image_input):
             if api_format == "anthropic":
                 result = _stream_anthropic(api_base, api_key, model, messages, max_tokens,
                                            temperature, on_first_chunk, loop, timeout=timeout)
@@ -360,7 +372,9 @@ def call_llm_streaming(
         )
         return result
     except BaseException as exc:
-        _record_chat_error(span, exc)
+        _record_chat_error(span, exc, image_input=image_input)
+        if image_input and isinstance(exc, Exception):
+            raise ImageProviderError(exc) from None
         raise
     finally:
         span.end()
@@ -429,7 +443,9 @@ def call_llm_oneshot(
     asset_root: str | None = None,
 ) -> str:
     """Non-streaming LLM call returning text."""
-    require_modalities(content_modalities(messages), capabilities, api_format=api_format)
+    modalities = content_modalities(messages)
+    require_modalities(modalities, capabilities, api_format=api_format)
+    image_input = "image" in modalities
     model_cfg = get_model_config(model)
     effective_max = max_tokens or model_cfg.default_max_tokens
 
@@ -437,7 +453,8 @@ def call_llm_oneshot(
     span = _start_chat_span(model, api_base, messages, temperature, effective_max, stream=False)
     messages = converted
     try:
-        with _otel_trace.use_span(span, end_on_exit=False):
+        with _otel_trace.use_span(span, end_on_exit=False, record_exception=not image_input,
+                                  set_status_on_exception=not image_input):
             if api_format == "anthropic":
                 text = _oneshot_anthropic(api_base, api_key, model, messages, effective_max,
                                           temperature, timeout, model_cfg)
@@ -468,7 +485,9 @@ def call_llm_oneshot(
         _finish_chat_span(span, response_model=model, output_text=text)
         return text
     except BaseException as exc:
-        _record_chat_error(span, exc)
+        _record_chat_error(span, exc, image_input=image_input)
+        if image_input and isinstance(exc, Exception):
+            raise ImageProviderError(exc) from None
         raise
     finally:
         span.end()

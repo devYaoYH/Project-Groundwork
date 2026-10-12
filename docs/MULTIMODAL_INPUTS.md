@@ -136,6 +136,10 @@ references, MIME metadata, and digests. Inline `data` is removed from persisted
 schemas and events; provider telemetry records media metadata, never base64.
 `A2A_CAPTURE_CONTENT=false` continues to suppress provider input/output content.
 Provider HTTP error bodies are not logged because they may echo image bytes.
+Image-call exception spans also omit provider messages and stack traces while
+retaining the exception type. Image provider errors exposed to callers retain
+safe status/retry metadata and suppress provider diagnostic text, so retry logs
+and ancestor spans cannot reintroduce the image payload.
 Replay resolves the recorded digest against the packaged release asset store;
 retain that store with the release/trace bundle. It never substitutes a caption.
 

@@ -454,3 +454,50 @@ def test_text_only_tool_messages_keep_nullable_content_unchanged():
                 {"role": "tool", "content": "text result", "tool_call_id": "fixture"}]
     assert content_modalities(messages) == {"text"}
     assert provider_messages(messages, "openai") == messages
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_image_provider_exception_spans_omit_echoed_bytes(bank, monkeypatch, stream):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(api, "get_tracer", lambda: provider.get_tracer("image-errors"))
+    encoded = base64.b64encode(PNG).decode()
+    def fail(*args, **kwargs):
+        raise RuntimeError(f"provider echoed submitted image: {encoded}")
+    monkeypatch.setattr(api, "_stream_openai" if stream else "_oneshot_openai", fail)
+    invoke = api.call_llm_streaming if stream else api.call_llm_oneshot
+    with pytest.raises(RuntimeError):
+        invoke(api_format="openai", api_base="http://fixture", api_key="", model="fixture",
+               messages=message(bank), capabilities=CAPS, asset_root=str(bank.asset_store.root), max_tokens=20, temperature=0)
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes["error.type"] == "RuntimeError"
+    assert span.events[0].attributes["exception.type"] == "RuntimeError"
+    assert all(encoded not in json.dumps(dict(event.attributes)) for event in span.events)
+    assert encoded not in (span.status.description or "")
+    assert encoded not in json.dumps(dict(span.attributes))
+    provider.shutdown()
+
+
+def test_image_provider_retry_logs_and_exhaustion_preserve_policy_without_bytes(bank, monkeypatch, caplog):
+    from a2a_engine.llm.retry import RetryPolicy, RetryExhausted, retry_after_seconds
+    import urllib.error
+    encoded = base64.b64encode(PNG).decode()
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise urllib.error.HTTPError("http://fixture", 429, f"provider echoed {encoded}", {"Retry-After": "0"}, None)
+    monkeypatch.setattr(api, "_oneshot_openai", fail)
+    client = api.LLMClient(model="fixture", capabilities=CAPS, asset_root=str(bank.asset_store.root),
+                           retry=RetryPolicy(max_attempts=2, backoff_base=0, jitter_ratio=0, retry_after_jitter_ratio=0))
+    with pytest.raises(RetryExhausted) as error:
+        client.oneshot(message(bank))
+    assert len(calls) == 2
+    assert error.value.last_exception.status_code == 429
+    assert retry_after_seconds(error.value.last_exception) == 0
+    assert encoded not in str(error.value)
+    assert encoded not in error.value.failure.error_message
+    assert encoded not in caplog.text
