@@ -14,6 +14,9 @@
   scripted verification, and preservation of existing data.
 - Fix scaffold imports to load the generated `environment.py`. Verify a fresh
   scaffold with its generated tests and scripted SQLite execution/readback.
+- Serialize local Compose descriptor publication with cancellation cleanup so
+  provisioning cannot leave descriptor files after an episode is cancelled.
+  Add a deterministic regression for the interleaving exposed by container CI.
 
 ## Hosted Firestore catalogue — 2026-10-11
 
