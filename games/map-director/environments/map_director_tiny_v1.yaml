@@ -1,0 +1,147 @@
+schema_version: 1
+id: map_director.tiny
+release: v1
+description: Repeated private-map route grounding with discrepant landmarks and persistent
+  dyad context.
+engine:
+  environment_id: map_director
+  defaults:
+    num_agents: 2
+    num_rounds: 2
+    max_turns: 6
+inputs:
+- id: maps
+  path: ../map_director/items/maps_v1.jsonl
+  sha256: a3e6e3e1c89b1e570cf08a2e8ea20a6a0200e3a1c3aad10dcce0766af4231bbb
+- id: asset.0c7f907b383f170935ed328591b70b9bca0d6c1ec249ba72e05c8db17087e858
+  path: ../map_director/items/assets/0c7f907b383f170935ed328591b70b9bca0d6c1ec249ba72e05c8db17087e858
+  sha256: 0c7f907b383f170935ed328591b70b9bca0d6c1ec249ba72e05c8db17087e858
+- id: asset.24ef97babcfc600f05e8b8b4b66708af684f409a18e7f723a9a4125281cca086
+  path: ../map_director/items/assets/24ef97babcfc600f05e8b8b4b66708af684f409a18e7f723a9a4125281cca086
+  sha256: 24ef97babcfc600f05e8b8b4b66708af684f409a18e7f723a9a4125281cca086
+- id: asset.629684ded48757434827b15c199a0360f9ac4701bfb968ffb6977f2b20c8f0f5
+  path: ../map_director/items/assets/629684ded48757434827b15c199a0360f9ac4701bfb968ffb6977f2b20c8f0f5
+  sha256: 629684ded48757434827b15c199a0360f9ac4701bfb968ffb6977f2b20c8f0f5
+- id: asset.63a8bc185544a02ffe234214de35e7a9c9682658ac75919d350045538fd6e9d3
+  path: ../map_director/items/assets/63a8bc185544a02ffe234214de35e7a9c9682658ac75919d350045538fd6e9d3
+  sha256: 63a8bc185544a02ffe234214de35e7a9c9682658ac75919d350045538fd6e9d3
+- id: asset.d027eb16ccbb2c7ee00f2d706b594b7a57e22a4fe8c6a59b97d9f1cd1f0da36a
+  path: ../map_director/items/assets/d027eb16ccbb2c7ee00f2d706b594b7a57e22a4fe8c6a59b97d9f1cd1f0da36a
+  sha256: d027eb16ccbb2c7ee00f2d706b594b7a57e22a4fe8c6a59b97d9f1cd1f0da36a
+- id: asset.eaa96beb842133dc6685fdf2eee6a8a5bac2c00adbcec55b627161a7a6cc5e03
+  path: ../map_director/items/assets/eaa96beb842133dc6685fdf2eee6a8a5bac2c00adbcec55b627161a7a6cc5e03
+  sha256: eaa96beb842133dc6685fdf2eee6a8a5bac2c00adbcec55b627161a7a6cc5e03
+roles:
+- required_modalities:
+  - image
+  - text
+  id: giver
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+- required_modalities:
+  - image
+  - text
+  id: follower
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+resources: []
+metrics:
+- name: success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: route_error
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: turns_used
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: success_rate
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+measures:
+- name: success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: route_error
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: turns_used
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: success_rate
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+adapter_bindings:
+  model: engine.llm
+  communication: local.in_process
+  resources: {}
+environment_id: map_director
+version: v1
+blurb: Repeated private-map route grounding with discrepant landmarks and persistent
+  dyad context.
+source_url: https://groups.inf.ed.ac.uk/maptask/maptask-description.html
+parameters:
+- name: discrepancy
+  type: categorical
+  fixed: false
+  source: item
+- name: num_rounds
+  type: integer
+  fixed: true
+  source: design
+  domain:
+  - 2.0
+  - 2.0
+- name: max_turns
+  type: integer
+  fixed: false
+  source: design
+  domain:
+  - 1.0
+  - 20.0
+item_policy:
+  mode: enumerate
+  bank_path: ../map_director/items/maps_v1.jsonl
+  item_bank_sha256: b41e126671000827df698ab20f74b2fdb3d86f226725a84a28dbfc001f475c83
+oracle_version: ordered-frechet-v1
+required_modalities:
+- image
+- text
