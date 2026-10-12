@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import uuid
 import zipfile
 import yaml
@@ -78,6 +79,19 @@ class PlatformControl:
         self.source_sha = os.getenv("PLATFORM_SOURCE_SHA", "local")
         self.image_digest = os.getenv("PLATFORM_IMAGE_DIGEST", "local")
         self.job_name = os.getenv("PLATFORM_JOB_NAME", "")
+        self._catalogue = None
+        self._catalogue_lock = threading.Lock()
+
+    @property
+    def local_catalogue(self):
+        if self.repo.backend != "local":
+            return None
+        with self._catalogue_lock:
+            if self._catalogue is None:
+                from cloud_platform.catalogue import LocalCatalogue
+                self._catalogue = LocalCatalogue(self.workspace, self.repo.data_dir,
+                    os.getenv("PLATFORM_CATALOGUE_MANIFEST") or None)
+        return self._catalogue
 
     def compiler(self, directory, content=None):
         path = Path(directory) / "compiler.db"
@@ -88,6 +102,11 @@ class PlatformControl:
         return cp
 
     def releases(self):
+        if self.local_catalogue is not None:
+            templates = self.local_catalogue.available_experiments()
+            return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
+                     "source_sha": self.source_sha, "image_digest": self.image_digest,
+                     "job_name": self.job_name} for release in self.local_catalogue.releases()]
         with tempfile.TemporaryDirectory() as directory:
             cp = self.compiler(directory)
             templates = cp.available_experiments()
