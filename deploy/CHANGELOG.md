@@ -16,7 +16,8 @@
   scaffold with its generated tests and scripted SQLite execution/readback.
 - Serialize local Compose descriptor publication with cancellation cleanup so
   provisioning cannot leave descriptor files after an episode is cancelled.
-  Add a deterministic regression for the interleaving exposed by container CI.
+  Reserve descriptor ownership before writing so single-worker signal exits
+  also clean up published files. Cover both paths with deterministic regressions.
 
 ## Hosted Firestore catalogue — 2026-10-11
 
