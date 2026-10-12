@@ -1,0 +1,44 @@
+schema_version: 1
+name: tangram_reference_deepseek_live
+release: ../environments/tangram_reference_tiny_v1.yaml
+agents:
+- role: director
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+  api_format: openai
+  temperature: 0.2
+  max_tokens: 2200
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: https://openrouter.ai/deepseek/deepseek-v4.1-flash
+  config:
+    api_base: https://openrouter.ai/api/v1
+- role: matcher
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+  api_format: openai
+  temperature: 0.2
+  max_tokens: 2200
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: https://openrouter.ai/deepseek/deepseek-v4.1-flash
+  config:
+    api_base: https://openrouter.ai/api/v1
+episodes:
+- label: two_round_dyad
+  count: 1
+  seeds:
+  - 17
+  overrides:
+    num_rounds: 2
+    max_exchanges: 4
+storage:
+  backend: sqlite
+  path: games/tangram-reference/results/live_deepseek.db
+  mirror_json: true
+observability:
+  capture_content: true

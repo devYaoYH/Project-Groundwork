@@ -28,6 +28,7 @@ Project-Groundwork/
     calendar/     multi-agent meeting scheduling
     negotiation/  resource negotiation with cheap talk
     word-guess/   minimal reference environment
+    tangram-reference/ repeated visual reference with private figure galleries
   docs/
 ```
 

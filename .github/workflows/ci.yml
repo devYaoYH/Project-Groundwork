@@ -34,7 +34,7 @@ jobs:
       - run: uv venv
       - run: >-
           uv pip install -e a2a-engine -e a2a-agent -e expt-runner
-          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
+          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess -e games/tangram-reference
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: npm run test:browser
@@ -50,11 +50,11 @@ jobs:
       - run: uv venv
       - run: >-
           uv pip install -e a2a-engine -e a2a-agent -e a2a-judge -e expt-runner
-          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess
+          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess -e games/tangram-reference
       - run: >-
           uv run pytest a2a-engine/tests a2a-agent/tests a2a-judge/tests expt-runner/tests
           games/buyer-seller/tests games/calendar/calendar_game/tests games/calendar/tests
-          games/negotiation/tests games/word-guess/tests local_stack/tests
+          games/negotiation/tests games/word-guess/tests local_stack/tests games/tangram-reference/tests
         env:
           PYTHONPATH: games/negotiation
       - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
@@ -74,7 +74,7 @@ jobs:
       - run: python scripts/release_check.py
       - run: docker compose config
       - run: |
-          for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess; do
+          for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess games/tangram-reference; do
             uv build "$package" --out-dir dist
           done
       - name: Export from ordinary installed wheels without credentials
@@ -88,6 +88,7 @@ jobs:
           --with ./dist/calendar_environment-0.1.0-py3-none-any.whl
           --with ./dist/negotiation_environment-0.1.0-py3-none-any.whl
           --with ./dist/word_guess-0.1.0-py3-none-any.whl
+          --with ./dist/tangram_reference-0.1.0-py3-none-any.whl
           python scripts/check_runtime_packages.py
 
   runtime-containers:
@@ -225,7 +226,7 @@ jobs:
           assert health["episode_count"] >= 5
           environments = json.load(urlopen(f"{base}/api/environments"))["environments"]
           assert {environment["environment_id"] for environment in environments} == {
-              "buyer_seller", "calendar", "negotiation", "word_guess"
+              "buyer_seller", "calendar", "negotiation", "word_guess", "tangram_reference"
           }
           calendar_environment = json.load(urlopen(f"{base}/api/environments/calendar"))
           assert calendar_environment["parameters"]

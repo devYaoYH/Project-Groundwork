@@ -14,7 +14,7 @@ def test_legacy_controlled_service_keeps_its_policy_hook(tmp_path, monkeypatch):
     assert selected == [tmp_path]
 
 
-@pytest.mark.parametrize("game", ["calendar", "word_guess", "buyer_seller", "negotiation"])
+@pytest.mark.parametrize("game", ["calendar", "word_guess", "buyer_seller", "negotiation", "tangram_reference"])
 def test_descriptor_strategies_are_constructed_without_provider_calls(game, tmp_path):
     policy = descriptor_policy({"environment_id": game, "policy": {"type": "scripted"}},
                                tmp_path, NetworkPolicy())

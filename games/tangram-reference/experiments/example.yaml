@@ -1,0 +1,32 @@
+schema_version: 1
+name: tangram_reference_smoke
+release: ../environments/tangram_reference_tiny_v1.yaml
+agents:
+- role: director
+  type: scripted
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: tangram_reference.agents.ScriptedAgent pixel-classification policy v1
+- role: matcher
+  type: scripted
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: tangram_reference.agents.ScriptedAgent pixel-classification policy v1
+episodes:
+- label: two_round_dyad
+  count: 1
+  seeds:
+  - 17
+  overrides:
+    num_rounds: 2
+    max_exchanges: 4
+storage:
+  backend: sqlite
+  path: games/tangram-reference/results/example.db
+  mirror_json: true
+observability:
+  capture_content: true

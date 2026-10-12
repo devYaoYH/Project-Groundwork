@@ -86,6 +86,9 @@ def descriptor_policy(descriptor, directory, network):
     if environment_id == "buyer_seller":
         from buyer_seller.runtime_strategy import BuyerSellerStrategy
         return BuyerSellerStrategy(client=model)
+    if environment_id == "tangram_reference":
+        from tangram_reference.runtime_strategy import TangramReferenceStrategy
+        return TangramReferenceStrategy(client=model)
     if environment_id == "probe":
         return ProbePolicy(directory, network)
     raise ValueError("unsupported environment strategy")
