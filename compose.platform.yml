@@ -78,6 +78,7 @@ services:
     depends_on:
       worker:
         condition: service_started
+        restart: true
 volumes:
   platform-data:
   platform-execution:
