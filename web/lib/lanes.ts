@@ -101,6 +101,7 @@ export function laneOf(
   if (named !== null) {
     const declared = Array.isArray(lanes) ? lanes : [];
     if (declared.some((lane) => lane?.participant_id === named)) return named;
+    if (named === "environment" && event?.type === "feedback") return SYSTEM_LANE;
     const roleMatches = declared.filter((lane) => lane?.role === named && lane.participant_id);
     if (roleMatches.length === 1) return roleMatches[0].participant_id;
     return named;

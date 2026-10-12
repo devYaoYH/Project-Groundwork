@@ -95,6 +95,22 @@ def pinned_participants(config: dict[str, Any]) -> list[dict[str, Any]]:
     return pinned
 
 
+
+def configured_roles(config: dict[str, Any]) -> dict[str, str]:
+    """Read explicit typed seat-role assignments against configured identities.
+
+    This enriches replay metadata only; it neither changes the frozen roster nor
+    guesses roles from speaker names. Reviewed control-plane roles take priority.
+    """
+    roles = config.get("seat_roles")
+    participants = pinned_participants(config)
+    if not isinstance(roles, list) or len(roles) != len(participants):
+        return {}
+    ids = [entry["participant_id"] for entry in participants]
+    return {identifier: role for identifier, role in zip(ids, roles, strict=True)
+            if ids.count(identifier) == 1 and isinstance(role, str) and role}
+
+
 def _participant_kind(spec: dict[str, Any]) -> str:
     """Map an agent entry onto a declared participant kind.
 

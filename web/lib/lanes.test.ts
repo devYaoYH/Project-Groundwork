@@ -546,3 +546,18 @@ test("historical follower actions remain attributable without normalized speaker
   assert.equal(result.rows[0].laneId, "follower");
   assert.equal(result.rows[0].kind, "action");
 });
+
+
+test("environment feedback remains a system notice rather than a third dyad speaker", () => {
+  const result = chatOf([
+    { type: "message", data: { speaker: "director", text: "Tall one" } },
+    { type: "message", data: { speaker: "matcher", text: "Placed" } },
+    { type: "feedback", data: { speaker: "environment", text: "Round complete" } },
+  ], [{ participant_id: "participant_0", role: "director", kind: "llm", binding: null },
+      { participant_id: "participant_1", role: "matcher", kind: "llm", binding: null }]);
+  assert.equal(result.mode, "dyad");
+  assert.equal(result.rows[0].laneId, "participant_0");
+  assert.equal(result.rows[1].side, "right");
+  assert.equal(result.rows[2].laneId, SYSTEM_LANE);
+  assert.equal(result.rows[2].kind, "notice");
+});
