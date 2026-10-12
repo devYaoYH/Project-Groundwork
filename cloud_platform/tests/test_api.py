@@ -288,7 +288,7 @@ def test_researcher_image_preview_requires_session_and_verified_release_asset(pl
     path = tmp_path / "items.jsonl"
     path.write_text(json.dumps({"item_id": "private-fixture", "params": {"content": [image.model_dump(exclude_none=True)]}}))
     bank = ItemBank.load(path)
-    monkeypatch.setattr(control.local_catalogue, "_item_bank", lambda identifier: bank)
+    monkeypatch.setattr(control.catalogue, "_item_bank", lambda identifier: bank)
     url = f"/api/environments/calendar/assets/{image.sha256}"
     assert TestClient(application).get(url).status_code == 401
     client = sign_in(application, "Alice")
