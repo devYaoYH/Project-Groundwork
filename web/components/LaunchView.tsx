@@ -105,14 +105,22 @@ export function LaunchView() {
   const plannedReplicationsByCell = Object.fromEntries(
     progress.by_cell.map((cell) => [cell.cell_id, cell.planned]),
   );
+  const provenance = [
+    { component: "Experiment runtime", source: launch.runtime_source_sha ?? launch.source_sha, image: launch.runtime_image_digest ?? launch.image_digest, contract: undefined as string | number | undefined },
+    { component: "Worker", source: launch.worker_source_sha, image: launch.worker_image_digest, contract: launch.worker_contract_version },
+  ].filter(row => row.source || row.image);
   return <>
     <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: "experiment", href: `/experiment/?id=${encodeURIComponent(launch.experiment_id)}` }, { label: "launch" }]} />
     <header className="page-heading page-heading-split"><div><h1>Launch inspection</h1><p className="mono">{launch.id}</p></div><Chip tone={STATUS_TONE[launch.status] ?? "plain"}>{launch.status}</Chip></header>
     {launch.error ? <p className="notice notice-error">{launch.error}</p> : null}
     {detail.provisional ? <p className="notice notice-muted">Live progress is provisional. Episode traces and downloadable results become available once the launch finishes saving.</p> : null}
-    {launch.live_logs === false && ACTIVE_LAUNCH_STATUSES.has(launch.status) ? <p className="notice notice-muted">This experiment uses an earlier release; runner logs become available after the launch ends. Fork the design to use live logs.</p> : null}
+    {launch.live_logs === false && ACTIVE_LAUNCH_STATUSES.has(launch.status) ? <p className="notice notice-muted">This launch used an earlier worker; runner logs become available after completion. New launches use the current worker without changing the experiment runtime.</p> : null}
     <section className="metric-grid"><div className="metric"><span>mode</span><strong>{launch.mode.replace("_", " ")}</strong></div><div className="metric"><span>progress</span><strong>{progress.completed}/{progress.planned}</strong></div><div className="metric"><span>failed</span><strong>{progress.failed}</strong></div><div className="metric"><span>parallelism</span><strong>{launch.max_parallelism}</strong></div></section>
-    <section className="card section-card"><div className="section-heading"><h2>Launch record</h2><p>Created {timestamp(launch.created_at)} · started {timestamp(launch.started_at)} · ended {timestamp(launch.ended_at)}</p></div><dl className="launch-metadata"><dt>experiment</dt><dd><Link href={`/experiment/?id=${encodeURIComponent(launch.experiment_id)}`}>{launch.experiment_id}</Link></dd><dt>trace database</dt><dd className="mono">{launch.trace_database}</dd><dt>execution plan</dt><dd className="mono">{launch.execution_path ?? "-"}</dd></dl></section>
+    <section className="card section-card"><div className="section-heading"><h2>Launch record</h2><p>Created {timestamp(launch.created_at)} · started {timestamp(launch.started_at)} · ended {timestamp(launch.ended_at)}</p></div><dl className="launch-metadata"><dt>experiment</dt><dd><Link href={`/experiment/?id=${encodeURIComponent(launch.experiment_id)}`}>{launch.experiment_id}</Link></dd><dt>trace database</dt><dd className="mono">{launch.trace_database}</dd><dt>execution plan</dt><dd className="mono">{launch.execution_path ?? "-"}</dd></dl>{provenance.length ? <details><summary>Runtime and worker provenance</summary><DataTable rows={provenance} rowKey={row => row.component} columns={[
+      { label: "component", render: row => <span>{row.component}{row.contract !== undefined ? ` · contract ${row.contract}` : ""}</span> },
+      { label: "source", className: "mono", render: row => row.source ?? "-" },
+      { label: "image digest", className: "mono", render: row => row.image ?? "-" },
+    ]} /></details> : null}</section>
     <section className="card section-card"><div className="section-heading"><h2>Episodes</h2><p>One row per replication in this launch. Open the cell trace history to inspect earlier physical runs; dry runs intentionally have no trace.</p></div><DataTable rows={attempts} rowKey={(attempt) => attempt.id} columns={[
       { label: "episode", render: (attempt) => attempt.episode_uid && !detail.provisional ? <Link className="table-link" href={`/episode/?uid=${encodeURIComponent(attempt.episode_uid)}`}><strong>{attempt.episode_id}</strong><span>Open episode</span></Link> : <span className="mono">{attempt.episode_id}</span> },
       { label: "cell", className: "mono", render: (attempt) => attempt.cell_id }, { label: "replication", className: "mono", render: (attempt) => `${attempt.episode_idx + 1} / ${plannedReplicationsByCell[attempt.cell_id] ?? "-"}` },

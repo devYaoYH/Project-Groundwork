@@ -25,6 +25,8 @@ from a2a_engine.registry import get_environment_spec
 from a2a_engine.provenance import pinned_participants
 from cloud_platform.budget import apply_policy
 from cloud_platform.storage import Repository, ArtifactStore
+from cloud_platform.runtime_bindings import CONTRACT_VERSION, resolve_binding, validate_catalog
+from cloud_platform.frozen import open_frozen_control
 
 MAX_EXPORT_LAUNCHES = 20
 MAX_EXPORT_ARTIFACTS = 10000
@@ -77,7 +79,35 @@ class PlatformControl:
         self.workspace = Path(workspace or os.getenv("PLATFORM_WORKSPACE", Path.cwd())).resolve()
         self.source_sha = os.getenv("PLATFORM_SOURCE_SHA", "local")
         self.image_digest = os.getenv("PLATFORM_IMAGE_DIGEST", "local")
-        self.job_name = os.getenv("PLATFORM_JOB_NAME", "")
+        self.runtime_source_sha = os.getenv("PLATFORM_RUNTIME_SOURCE_SHA", self.source_sha)
+        self.runtime_image_digest = os.getenv("PLATFORM_RUNTIME_DIGEST", self.image_digest)
+        self.runtime_image = os.getenv("PLATFORM_RUNTIME_IMAGE", "local")
+        self.runtime_catalog_key = os.getenv("PLATFORM_RUNTIME_CATALOG_KEY", "")
+        self._runtime_catalog = None
+
+    def runtime_pin(self):
+        # Legacy aliases describe science, not the independently updated worker.
+        return {"source_sha": self.runtime_source_sha, "image_digest": self.runtime_image_digest,
+                "runtime_source_sha": self.runtime_source_sha,
+                "runtime_image_digest": self.runtime_image_digest, "runtime_image": self.runtime_image}
+
+    def execution_binding(self, experiment):
+        if self.runtime_catalog_key:
+            if self._runtime_catalog is None:
+                catalog = json.loads(self.artifacts.get(self.runtime_catalog_key))
+                self._runtime_catalog = validate_catalog(catalog, worker_digest=self.image_digest,
+                                                         worker_source_sha=self.source_sha)
+            return resolve_binding(self._runtime_catalog, experiment)
+        if self.repo.backend != "local":
+            raise ValueError("This deployment has no runtime binding catalog; no launch was admitted")
+        digest = experiment.get("runtime_image_digest", experiment.get("image_digest"))
+        source = experiment.get("runtime_source_sha", experiment.get("source_sha"))
+        if digest != self.runtime_image_digest or source != self.runtime_source_sha:
+            raise ValueError("The local runtime no longer matches this experiment pin")
+        return {"runtime_source_sha": source, "runtime_image_digest": digest,
+                "runtime_image": self.runtime_image, "worker_source_sha": self.source_sha,
+                "worker_image_digest": self.image_digest, "worker_contract_version": CONTRACT_VERSION,
+                "job_name": "local-runtime", "live_logs": True}
 
     def compiler(self, directory, content=None):
         path = Path(directory) / "compiler.db"
@@ -92,8 +122,7 @@ class PlatformControl:
             cp = self.compiler(directory)
             templates = cp.available_experiments()
             return [{**asdict(release), "experiments": templates.get(release.environment_id, []),
-                     "source_sha": self.source_sha, "image_digest": self.image_digest,
-                     "job_name": self.job_name} for release in cp.releases()]
+                     **self.runtime_pin()} for release in cp.releases()]
 
     def owned(self, kind, identifier, owner_id):
         value = self.repo.get(kind, identifier)
@@ -183,8 +212,7 @@ class PlatformControl:
                 for cell_id, cell_configs in grouped.items():
                     db.execute("UPDATE cells SET episode_configs=? WHERE experiment_id=? AND cell_id=?",
                                (json.dumps(cell_configs, sort_keys=True), exp.id, cell_id))
-        data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
-                "image_digest": self.image_digest, "job_name": self.job_name, "live_logs": True,
+        data = {**asdict(exp), "owner_id": owner_id, **self.runtime_pin(),
                 "status": "READY", "launch_ordinal": 0, "platform_policy": policy}
         prefix = f"experiments/{exp.id}" if previous is None else f"experiments/{exp.id}/locked/{uuid.uuid4()}"
         key = f"{prefix}/compiler.db"
@@ -205,8 +233,7 @@ class PlatformControl:
     def _persist_draft(self, cp, exp, owner_id, previous=None):
         revision = str(uuid.uuid4())
         prefix = f"experiments/{exp.id}/drafts/{revision}"
-        data = {**asdict(exp), "owner_id": owner_id, "source_sha": self.source_sha,
-                "image_digest": self.image_digest, "job_name": self.job_name, "live_logs": True,
+        data = {**asdict(exp), "owner_id": owner_id, **self.runtime_pin(),
                 "status": "DRAFT", "launch_ordinal": 0,
                 "snapshot_key": f"{prefix}/compiler.db"}
         self.artifacts.put(data["snapshot_key"], snapshot(cp.path))
@@ -222,7 +249,7 @@ class PlatformControl:
         record = self.owned("experiments", identifier, owner_id)
         if record["status"] != "DRAFT":
             raise ValueError("This experiment is locked; fork it before editing")
-        if record["image_digest"] != self.image_digest:
+        if record.get("runtime_image_digest", record.get("image_digest")) != self.runtime_image_digest:
             raise ValueError("The environment release changed; fork this draft against the current release")
         return record
 
@@ -292,6 +319,7 @@ class PlatformControl:
         parallelism = int(body.get("max_parallelism", 1))
         if not 1 <= parallelism <= 2:
             raise ValueError("Episode parallelism must be between 1 and 2")
+        binding = self.execution_binding(exp)
         configs = json.loads(self.artifacts.get(exp["frozen_plan_key"]))
         if mode == "smoke":
             seen = set()
@@ -305,13 +333,10 @@ class PlatformControl:
         with tempfile.TemporaryDirectory() as directory:
             # Materialize frozen dimensions without loading current release
             # declarations or resolving the old experiment against new code.
-            cp = ControlPlane.__new__(ControlPlane)
-            cp.path = Path(directory) / "compiler.db"
-            cp.path.write_bytes(self.artifacts.get(exp["snapshot_key"]))
-            cp.trace_database = cp.path
-            cp.workspace = self.workspace
-            cp.results_dir = Path(directory) / "results"
-            cp._init_db()
+            database = Path(directory) / "compiler.db"
+            database.write_bytes(self.artifacts.get(exp["snapshot_key"]))
+            cp = open_frozen_control(database, workspace=self.workspace,
+                                     results_dir=Path(directory) / "results")
             frozen_experiment = cp.experiment(identifier)
             launch_id = str(uuid.uuid4())
             execution_path = cp._write_execution_plan(launch_id, frozen_experiment, configs)
@@ -334,8 +359,7 @@ class PlatformControl:
             self.artifacts.put(f"{prefix}/input.db", snapshot(cp.path))
             self.artifacts.put(f"{prefix}/plan.yaml", plan)
             data = {**asdict(launch), "owner_id": owner_id, "source_sha": exp["source_sha"],
-                    "image_digest": exp["image_digest"], "job_name": exp["job_name"],
-                    "live_logs": self.repo.backend == "local" or bool(exp.get("live_logs", False)),
+                    "image_digest": exp["image_digest"], **binding,
                     "source_snapshot_key": f"{prefix}/input.db", "snapshot_key": f"{prefix}/input.db",
                     "plan_key": f"{prefix}/plan.yaml", "episode_count": len(detail["attempts"]),
                     "artifact_prefix": prefix, "dispatch_status": "PENDING"}

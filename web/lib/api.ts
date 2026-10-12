@@ -185,6 +185,10 @@ export type Experiment = {
   design_sha256: string | null;
   locked_at: string | null;
   forked_from: string | null;
+  runtime_source_sha?: string;
+  runtime_image_digest?: string;
+  source_sha?: string;
+  image_digest?: string;
 };
 
 export type MetricSummary = {
@@ -251,6 +255,13 @@ export type Launch = {
   ended_at: string | null;
   error: string | null;
   live_logs?: boolean;
+  runtime_source_sha?: string;
+  runtime_image_digest?: string;
+  worker_source_sha?: string;
+  worker_image_digest?: string;
+  worker_contract_version?: string | number;
+  source_sha?: string;
+  image_digest?: string;
 };
 
 export type LaunchAttempt = {

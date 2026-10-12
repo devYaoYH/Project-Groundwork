@@ -50,10 +50,13 @@ def dispatch(control, launch_id):
     project = os.environ["GOOGLE_CLOUD_PROJECT"]
     region = os.environ["PLATFORM_REGION"]
     job = launch["job_name"]
+    override = {"env": [{"name": "PLATFORM_LAUNCH_ID", "value": launch_id}]}
+    if launch.get("worker_contract_version"):
+        override["name"] = "worker"
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     response = AuthorizedSession(credentials).post(
         f"https://run.googleapis.com/v2/projects/{project}/locations/{region}/jobs/{job}:run",
-        json={"overrides": {"containerOverrides": [{"env": [{"name": "PLATFORM_LAUNCH_ID", "value": launch_id}]}]}},
+        json={"overrides": {"containerOverrides": [override]}},
         timeout=30)
     response.raise_for_status()
     operation = response.json()

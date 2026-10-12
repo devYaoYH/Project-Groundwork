@@ -139,28 +139,65 @@ def test_template_path_is_allowlisted(platform):
     assert "checked-in" in response.json()["error"]
 
 
-def test_repeat_attempts_keep_prior_evidence_and_release_pin(platform):
+def test_repeat_attempts_keep_prior_evidence_and_release_pin(platform, monkeypatch):
     application, control, worker = platform
     alice = sign_in(application, "Alice")
-    control.job_name = "immutable-release-job"
-    control.image_digest = "sha256:original-image"
+    runtime_source = "1" * 40
+    runtime_digest = "sha256:" + "1" * 64
+    control.runtime_source_sha = runtime_source
+    control.runtime_image_digest = runtime_digest
+    control.runtime_image = "registry/runtime@" + runtime_digest
+    control.source_sha, control.image_digest = "a" * 40, "sha256:" + "a" * 64
+
+    def install_catalog(job):
+        key = "platform/runtime-bindings/" + control.image_digest + "/catalog.json"
+        catalog = {"schema_version": 1,
+            "worker": {"source_sha": control.source_sha, "image_digest": control.image_digest,
+                       "image": "registry/platform@" + control.image_digest},
+            "runtimes": {runtime_digest: {"runtime_image": control.runtime_image,
+                "runtime_source_sha": runtime_source, "job_name": job, "contract_version": 1}}}
+        control.artifacts.put(key, json.dumps(catalog).encode())
+        control.runtime_catalog_key, control._runtime_catalog = key, None
+
+    install_catalog("worker-a-runtime-one")
     experiment = create_experiment(alice, design=True)
+    frozen_plan = control.artifacts.get(experiment["frozen_plan_key"])
+    # Current scientific backfills must never run while materializing or
+    # inspecting an admitted execution of the old locked snapshot.
+    def forbidden_backfill(*_):
+        raise AssertionError("Current science attempted to rewrite a frozen design")
+    monkeypatch.setattr("local_stack.control_plane.ControlPlane._backfill_compatible_word_guess_roles", forbidden_backfill)
     first_response = alice.post(f"/api/experiments/{experiment['id']}/launch", json={"mode": "smoke"})
     assert first_response.status_code == 202, first_response.text
     first = first_response.json()
+    assert first["worker_source_sha"] == "a" * 40
+    monkeypatch.setenv("PLATFORM_WORKER_SOURCE_SHA", first["worker_source_sha"])
+    monkeypatch.setenv("PLATFORM_WORKER_IMAGE_DIGEST", first["worker_image_digest"])
     assert worker.run_once(first["id"])
     first_episodes = control.repo.list("episodes", owner_id="local:alice", experiment_id=experiment["id"])
     assert first_episodes and all(row["attempt"] == 1 for row in first_episodes)
-    # A newer control release must still schedule the immutable older Job.
-    control.source_sha = "new-source"
-    control.job_name = "new-release-job"
-    control.image_digest = "sha256:new-image"
+    # Infrastructure and the current science release can both advance. The
+    # existing experiment still runs its original science with the new worker.
+    control.source_sha, control.image_digest = "b" * 40, "sha256:" + "b" * 64
+    install_catalog("worker-b-runtime-one")
+    control.runtime_source_sha = "2" * 40
+    control.runtime_image_digest = "sha256:" + "2" * 64
+    control.runtime_image = "registry/runtime@" + control.runtime_image_digest
     second_response = alice.post(f"/api/experiments/{experiment['id']}/launch", json={"mode": "smoke"})
     assert second_response.status_code == 202, second_response.text
     second = second_response.json()
-    assert second["job_name"] == "immutable-release-job"
-    assert second["image_digest"] == "sha256:original-image"
-    assert second["source_sha"] == "test-source"
+    assert second["job_name"] == "worker-b-runtime-one"
+    assert second["image_digest"] == second["runtime_image_digest"] == runtime_digest
+    assert second["source_sha"] == second["runtime_source_sha"] == runtime_source
+    assert second["worker_source_sha"] == "b" * 40
+    assert second["worker_image_digest"] == "sha256:" + "b" * 64
+    assert second["live_logs"] is True
+    assert control.artifacts.get(experiment["frozen_plan_key"]) == frozen_plan
+    saved = control.repo.get("experiments", experiment["id"])
+    assert saved["runtime_image_digest"] == runtime_digest
+    assert control.repo.get("launches", first["id"])["worker_source_sha"] == "a" * 40
+    monkeypatch.setenv("PLATFORM_WORKER_SOURCE_SHA", second["worker_source_sha"])
+    monkeypatch.setenv("PLATFORM_WORKER_IMAGE_DIGEST", second["worker_image_digest"])
     assert worker.run_once(second["id"])
     all_episodes = control.repo.list("episodes", owner_id="local:alice", experiment_id=experiment["id"])
     assert len(all_episodes) == len(first_episodes) * 2

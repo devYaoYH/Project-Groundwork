@@ -16,10 +16,29 @@ using stable log IDs after disconnections and stop when the launch ends or the
 application session expires. Episode trace links become available when final
 evidence has been published.
 
-Experiments created before live logs were introduced retain their original
-digest-pinned worker. Fork and lock an existing design to run it on the current
-release with live logs. An existing launch cannot acquire this feature during
-execution; completed launches still show their persisted output.
+Experiment execution and worker infrastructure have independent image pins.
+The experiment retains its runtime source SHA, image digest and frozen plan;
+each new launch resolves the currently deployed worker. Worker fixes, live logs,
+artifact publication and cancellation therefore apply to a new execution of an
+older locked experiment without changing its game code or requiring a fork.
+Forking remains the way to change a locked scientific design. Existing launch
+records and results retain the worker they actually used and are never rewritten.
+
+Hosted Jobs run two containers: the current worker coordinates the execution,
+while the pinned runtime runs the episode runner and agent children. They exchange
+plans, output and completion state through shared execution files. Both runtime
+and worker source SHAs and image digests, plus the worker contract version, are
+recorded on each launch and included in exports. Legacy `source_sha` and
+`image_digest` fields remain aliases for the experiment runtime; unknown worker
+provenance in historical records is left absent.
+
+Deployment automatically creates `groundwork-run-<runtimeDigest12>-<workerDigest12>`
+Jobs for the newly published runtime and supported legacy `groundwork-ep-*`
+runtime images. The current API loads their bindings from an immutable private GCS
+catalog. Existing experiments keep their original runtime pin while their next
+launch uses the current worker binding. There is no separate migration command.
+Runtime images predating the supported platform execution contract are rejected
+explicitly; deployment does not guess how to execute an incompatible image.
 
 ## Local first
 
@@ -29,7 +48,7 @@ docker compose -f compose.platform.yml up --build --detach --wait
 
 Open <http://localhost:8080>. Local development login supports Alice and Bob so
 ownership and forbidden cross-user reads can be verified without cloud accounts.
-The worker reads provider keys from environment interpolation; scripted smoke
+The runtime container reads provider keys from environment interpolation; scripted smoke
 experiments need no keys. Metadata and immutable artifacts survive restarts in
 the `platform-data` named volume. This is a separate stack from the existing
 credential-free runtime examples in `docker-compose.yml`.
@@ -47,10 +66,12 @@ Groundwork-named resources:
 
 - `groundwork-control` Cloud Run control service, publicly reachable login and
   assets, with application authentication on private API routes.
-- `groundwork-ep-<commit>-<digest>` digest-pinned Cloud Run Jobs, one execution per launch,
-  one task per execution, with agent children in that sandbox. Automatic retries
-  are zero; scientific retries are explicit new attempts. Jobs have a one-hour
-  execution limit and bounded episode parallelism of two.
+- `groundwork-run-<runtimeDigest12>-<workerDigest12>` Cloud Run Jobs pin both container
+  images, with one execution per launch and one task per execution. Agent children
+  run in the runtime container within that sandbox. Automatic retries
+  are zero; scientific retries are explicit new attempts. Jobs share a 512 MiB
+  memory budget, have a one-hour execution limit and bounded episode parallelism
+  of two. Only registered v1 execution-contract runtimes are supported.
 - Native Firestore `groundwork_*` metadata collections in the existing default
   database, with application-enforced owner filtering and detail checks. Server
   libraries bypass Firestore rules; these backend checks are the security boundary.
@@ -73,8 +94,8 @@ No provider secret is created with an empty value. To enable a provider, add a
 Secret Manager secret with its real value, then grant `groundwork-worker` the
 `roles/secretmanager.secretAccessor` role **on that secret**. Supported names are
 `groundwork-openai-api-key`, `groundwork-anthropic-api-key`,
-`groundwork-google-api-key`, and `groundwork-openrouter-api-key`. Only the worker
-receives these references during deployment. `groundwork-session` is generated
+`groundwork-google-api-key`, and `groundwork-openrouter-api-key`. These references
+are scoped to launch Jobs, never the control API. `groundwork-session` is generated
 by bootstrap and available only to the control API.
 
 Create a Google Web OAuth client and add the deployed Cloud Run URL as an
@@ -125,6 +146,12 @@ environment and item pages from that generated JSON, so adding a trusted game
 does not require editing a frontend environment list. A game that fails to
 register fails the image build rather than silently disappearing.
 
+The workflow determines the latest commit affecting scientific runtime inputs and
+reuses that runtime tag's existing immutable digest when only infrastructure code
+changes. A logging or storage fix publishes a new worker and binding catalog while
+retaining the default experiment runtime. Scientific input changes publish a new
+runtime; older locked experiments continue to reference their original image.
+
 For a plain local web build after installing a new game, regenerate the same
 route artifact before building:
 
@@ -167,9 +194,11 @@ while secret value access belongs to the worker only.
 Verify that unauthenticated private requests fail, two experimenters cannot read
 each other's metadata or exports, a scripted hosted launch completes and persists
 its artifacts, and a GitHub workflow records a successful Cloud Build deployment.
-Image digests and source SHA are recorded in the deployment output and release
-metadata. Retain old Jobs while experiments reference them; do not rewrite old
-release images.
+Runtime and worker image digests and source SHAs are recorded separately in launch
+metadata and exports. Retain pinned runtime images and their release metadata;
+publish new worker/runtime bindings rather than rewriting old launch records or
+release images. Historical Jobs may still be needed by executions already in
+flight when a new binding is deployed.
 
 ```sh
 python deploy/verify_hosted.py --project cicl-487801 --source-sha FULL_COMMIT
@@ -198,3 +227,8 @@ no cross-user leaderboard or collaboration sharing in this initial release.
 Authored `local_process` rosters currently support Calendar baseline scripted
 agents; other registered games use `in_process` rosters, as enforced by the
 existing design compiler.
+
+The two hosted containers are trusted repository code. They share the Job service
+account, execution volume and network; the worker/runtime split assigns operational
+responsibility and preserves runtime pins, but provides no credential or IAM
+isolation between them. User-supplied images and untrusted agents are unsupported.

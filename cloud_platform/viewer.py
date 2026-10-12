@@ -19,6 +19,7 @@ from a2a_engine.registry import get_environment_spec
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace, projection_summary
 from local_stack.control_plane import ControlPlane
+from cloud_platform.frozen import open_frozen_control
 
 
 class Viewer:
@@ -37,13 +38,10 @@ class Viewer:
         # Caller has checked ownership. Never construct a normal ControlPlane
         # here: its local-server startup recovery would mark launches abandoned.
         with tempfile.TemporaryDirectory() as directory:
-            cp = ControlPlane.__new__(ControlPlane)
-            cp.path = Path(directory) / "private.sqlite"
-            cp.path.write_bytes(self.control.artifacts.get(record[key]))
-            cp.trace_database = cp.path
-            cp.workspace = self.control.workspace
-            cp.results_dir = Path(directory) / "results"
-            cp._init_db()
+            database = Path(directory) / "private.sqlite"
+            database.write_bytes(self.control.artifacts.get(record[key]))
+            cp = open_frozen_control(database, workspace=self.control.workspace,
+                                     results_dir=Path(directory) / "results")
             yield cp
 
     def environments(self, owner):
