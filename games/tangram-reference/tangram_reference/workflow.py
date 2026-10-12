@@ -143,6 +143,16 @@ def record_matcher(state, runtime: Runtime[GameContext]):
             "round": state["round"],
             "visibility": "private",
             "seat": "matcher",
+            "speaker": "matcher",
+            "text": (
+                ("Board submitted. " if submit else "Current board, not submitted. ")
+                + "; ".join(
+                    f"Slot {i}: {handle or 'empty'}"
+                    for i, handle in enumerate(board, 1)
+                )
+                + (f". Invalid action: {error}" if error else "")
+            ),
+            "content": [game.board_image(state["round"], board)],
             "arrangement": board,
             "submitted": submit,
         },
@@ -182,8 +192,27 @@ def score_trial(state, runtime: Runtime[GameContext]):
         "chosen": chosen,
         "target": row["target"],
         "mismatched_slots": [i + 1 for i, c in enumerate(correct) if not c],
+        "board_image": game.board_image(state["round"], state["board"]),
     }
-    game.events.append("round_end", data=outcome)
+    game.events.append(
+        "round_end",
+        data={
+            **outcome,
+            "speaker": "matcher",
+            "visibility": "private",
+            "text": (
+                f"Final matcher board for round {state['round']} "
+                + ("submitted" if state["submitted"] else "at the exchange deadline")
+                + ": "
+                + "; ".join(
+                    f"Slot {i}: {handle or 'empty'}"
+                    for i, handle in enumerate(state["board"], 1)
+                )
+                + f". {sum(correct)}/4 positions correct."
+            ),
+            "content": [outcome["board_image"]],
+        },
+    )
     feedback = {
         "speaker": "environment",
         "text": f"Round {state['round']} ended: {sum(correct)}/4 positions correct; mismatched slots {outcome['mismatched_slots']}.",

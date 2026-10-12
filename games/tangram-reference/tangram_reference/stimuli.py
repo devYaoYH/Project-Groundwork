@@ -42,7 +42,11 @@ def panel(indices, labels):
     im = Image.new("RGB", (width * len(indices), 260), "white")
     draw = ImageDraw.Draw(im)
     for i, (index, label) in enumerate(zip(indices, labels, strict=True)):
-        im.paste(figure(index, 220), (i * width + 10, 30))
+        if index is None:
+            draw.rectangle((i * width + 10, 30, i * width + 230, 250), outline="gray")
+            draw.text((i * width + 80, 130), "Empty", fill="gray", font_size=22)
+        else:
+            im.paste(figure(index, 220), (i * width + 10, 30))
         draw.text((i * width + 90, 0), str(label), fill="black", font_size=22)
     output = BytesIO()
     im.save(output, format="PNG")

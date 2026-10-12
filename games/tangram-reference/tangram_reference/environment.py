@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -66,11 +67,17 @@ class TangramReferenceEnvironment:
             {**row, **row["gallery_variants"][i]}
             for row, i in zip(self.item.raw["rounds"], indices, strict=True)
         ]
-        # Default assets include all pinned panels; optional relocated root is verified.
-        self.config.asset_root = self.config.asset_root or str(
-            BANK_PATH.parent / "assets"
-        )
+        # Generated board evidence belongs to a writable runtime store, never
+        # the installed, immutable item bank. Relocated bank panels are verified.
+        if (
+            self.config.asset_root is None
+            or Path(self.config.asset_root).resolve() == self.bank.asset_store.root
+        ):
+            self.config.asset_root = tempfile.mkdtemp(
+                prefix="groundwork-tangram-assets-"
+            )
         self.store = AssetStore(self.config.asset_root)
+        self.config.asset_root = str(self.store.root)
         for image in self.bank.assets:
             if self.store.root != self.bank.asset_store.root:
                 self.store.put(self.bank.asset_store.read(image), image.mime_type)
@@ -162,6 +169,24 @@ class TangramReferenceEnvironment:
             "messages": list(state["history"]),
             "content": [TextPart(text=prompt).model_dump(), row[f"{role}_image"]],
         }
+
+    def board_image(self, round_number, board):
+        """Reviewer evidence from accepted handles only; never the target order.
+
+        This image is not added to dialogue or either seat's observation. Both
+        references and exact bytes are retained for episode-scoped replay.
+        """
+        from .stimuli import panel
+
+        row = self.rounds[round_number - 1]
+        mapping = dict(zip(row["handles"], row["gallery"], strict=True))
+        image = self.store.put(
+            panel([mapping.get(handle) for handle in board], [1, 2, 3, 4]),
+            "image/png",
+        ).model_dump(exclude_none=True)
+        if image not in self.config.image_assets:
+            self.config.image_assets.append(image)
+        return image
 
     def run(self):
         return asyncio.run(self._run_async())

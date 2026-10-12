@@ -318,9 +318,155 @@ def test_remote_scripted_strategy_uses_only_inline_private_pixels():
         strategy.calls(SimpleNamespace(kind="turn", observation=private))
     )
     assert calls[0][:2] == ("env", "submit_tangram")
-    assert calls[0][2]["text"] == "Visual signatures by slot: 0,2,1,3"
+    text = calls[0][2]["text"]
+    assert text.startswith("Slot 1: a solid square; Slot 2: a square")
+    assert "upper right diamond notch" in text
+    assert "Visual signatures" not in text
     assert strategy.agent.asset_root is None
     g.episode.close()
+
+
+def test_matcher_final_board_records_exact_accepted_figures_and_persists(tmp_path):
+    from a2a_engine.content import ImagePart
+    from a2a_engine.storage.sqlite import SQLiteEpisodeStore
+    from a2a_engine.manifest import EpisodeManifest
+    from a2a_engine.episode_media import read_episode_image
+    from tangram_reference.stimuli import panel
+
+    class GalleryOrder:
+        name = "matcher"
+
+        async def act(self, observation, tools):
+            return {
+                "text": "I submit the gallery order",
+                "arrangement": list(observation["labels"]),
+                "submit": True,
+            }
+
+    g = game(seed=17, asset_root=str(tmp_path / "runtime-assets"))
+    g.matcher = GalleryOrder()
+    trace = g.run()
+    assert trace.metrics["round_success"] != [1, 1]
+    for event in [e for e in trace.events if e.type == "round_end"]:
+        assert event.data["speaker"] == "matcher"
+        assert event.data["visibility"] == "private"
+        assert "submitted" in event.data["text"]
+        image = ImagePart.model_validate(event.data["content"][0])
+        # Render accepted gallery order, even when it differs from the answer.
+        assert g.store.read(image) == panel(event.data["chosen"], [1, 2, 3, 4])
+        assert image.model_dump(exclude_none=True) in trace.config.image_assets
+        assert event.data["board_image"] == event.data["content"][0]
+    # Reviewer-only board images never become director inputs or dialogue.
+    board_digests = {
+        e.data["content"][0]["sha256"]
+        for e in trace.events if e.type == "placement"
+    }
+    assert not any(
+        o["content"][-1]["sha256"] in board_digests
+        for o in g.director.observations
+    )
+    assert not any(
+        "board_image" in m
+        for o in g.director.observations
+        for m in o["messages"]
+    )
+    store = SQLiteEpisodeStore(path=tmp_path / "episodes.db")
+    store.put_episode(
+        trace,
+        EpisodeManifest.from_run(
+            config=trace.config.model_dump(),
+            experiment_name="board-replay",
+            cell_id="fixture",
+            episode_idx=0,
+            episode_uid=trace.episode_uid,
+        ),
+    )
+    saved = next(store.iter_episodes())
+    for outcome in saved.final_state["outcomes"]:
+        payload, mime = read_episode_image(
+            saved, outcome["board_image"]["sha256"], tmp_path / "assets"
+        )
+        assert payload == panel(outcome["chosen"], [1, 2, 3, 4])
+        assert mime == "image/png"
+
+
+def test_unsubmitted_and_incomplete_boards_have_reviewer_images(tmp_path):
+    from a2a_engine.content import ImagePart
+    from tangram_reference.stimuli import panel
+
+    class NoPlacement:
+        name = "matcher"
+
+        async def act(self, observation, tools):
+            return {"text": "I need clarification"}
+
+    g = game(max_exchanges=1, asset_root=str(tmp_path / "runtime-assets"))
+    g.matcher = NoPlacement()
+    trace = g.run()
+    for event in [e for e in trace.events if e.type == "round_end"]:
+        assert event.data["speaker"] == "matcher"
+        assert not event.data["submitted"]
+        assert "deadline" in event.data["text"]
+        assert event.data["text"].count("empty") == 4
+        assert g.store.read(ImagePart.model_validate(event.data["content"][0])) == panel(
+            [None] * 4, [1, 2, 3, 4]
+        )
+    partial = [g.rounds[0]["handles"][0], None, None, None]
+    image = ImagePart.model_validate(g.board_image(1, partial))
+    assert g.store.read(image) == panel(
+        [g.rounds[0]["gallery"][0], None, None, None], [1, 2, 3, 4]
+    )
+
+
+def test_scripted_dialogue_uses_visual_descriptions_for_every_permutation(tmp_path):
+    from tangram_reference.agents import ScriptedAgent
+
+    g = game(num_rounds=6, seed=17, asset_root=str(tmp_path / "runtime-assets"))
+    trace = g.run()
+    descriptions = [
+        e.data["text"]
+        for e in trace.events
+        if e.type == "message" and e.data["speaker"] == "director"
+    ]
+    assert trace.metrics["round_success"] == [1] * 6
+    assert all(len(text.split("; ")) == 4 for text in descriptions)
+    assert all(
+        description in text
+        for text in descriptions
+        for description in ScriptedAgent.descriptions
+    )
+    assert all("Visual signatures" not in text for text in descriptions)
+
+
+@pytest.mark.parametrize("compiled_bank_root", [False, True])
+def test_default_assets_support_readonly_runtime_and_persist_after_game(
+    tmp_path, monkeypatch, compiled_bank_root
+):
+    from a2a_engine.content import ImagePart
+    from a2a_engine.episode_media import persist_episode_images
+
+    readonly = tmp_path / "readonly-workspace"
+    readonly.mkdir()
+    readonly.chmod(0o555)
+    monkeypatch.chdir(readonly)
+    kwargs = (
+        {"asset_root": str(BANK_PATH.parent / "assets")}
+        if compiled_bank_root
+        else {}
+    )
+    g = game(**kwargs)
+    assert g.store.root != g.bank.asset_store.root
+    assert not g.store.root.is_relative_to(readonly)
+    trace = g.run()
+    assert trace.metrics["round_success"] == [1, 1]
+    destination = tmp_path / "persisted-assets"
+    persisted = persist_episode_images(trace, destination)
+    assert persisted
+    for outcome in trace.final_state["outcomes"]:
+        image = ImagePart.model_validate(outcome["board_image"])
+        assert image in persisted
+        assert (destination / image.sha256).read_bytes() == g.store.read(image)
+    assert not list(readonly.iterdir())
 
 
 def test_shared_declaration_and_bank_contracts():

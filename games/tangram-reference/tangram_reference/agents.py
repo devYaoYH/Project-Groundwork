@@ -73,6 +73,14 @@ class ScriptedAgent:
         "input": ["text", "image"],
         "evidence": "tangram_reference.agents.ScriptedAgent pixel policy v1",
     }
+    # Labels describe visible silhouettes, rather than transmitting shared
+    # internal figure indices as if they were a model's emerging conventions.
+    descriptions = (
+        "a solid square",
+        "a square with a lower right notch and a bottom triangle extending right",
+        "a square with an upper right diamond notch and a top triangle extending right",
+        "a square with both right notches and triangles extending right at top and bottom",
+    )
 
     def __init__(self, name, asset_root):
         self.name = name
@@ -99,13 +107,21 @@ class ScriptedAgent:
             tile = image.crop((i * 240 + 10, 30, i * 240 + 230, 250)).tobytes()
             order.append(next(j for j in range(4) if tile == figure(j, 220).tobytes()))
         if self.name == "director":
-            return {"text": "Visual signatures by slot: " + ",".join(map(str, order))}
+            return {
+                "text": "; ".join(
+                    f"Slot {slot}: {self.descriptions[index]}"
+                    for slot, index in enumerate(order, 1)
+                )
+            }
         last = next(
             m["text"]
             for m in reversed(observation["messages"])
             if m["speaker"] == "director"
         )
-        target = list(map(int, last.split(": ")[1].split(",")))
+        target = [
+            self.descriptions.index(description.partition(": ")[2])
+            for description in last.split("; ")
+        ]
         return {
             "text": "I submit my arrangement.",
             "arrangement": [observation["labels"][order.index(j)] for j in target],
