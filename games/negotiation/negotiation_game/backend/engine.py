@@ -684,7 +684,7 @@ class GameEngine:
 
     async def run_game(self) -> dict:
         from .workflow import GameContext, execution_limit
-        state = await self.build_program().ainvoke({}, context=GameContext(self),
+        state = await self.build_program().ainvoke({"round_number": 1, "reflections": {}}, context=GameContext(self),
                     config={"recursion_limit": execution_limit(self.config)})
         return state["summary"]
 

@@ -121,12 +121,15 @@ class NegotiationGame:
     """Runs one negotiation environment and returns a ``EpisodeTrace``."""
 
     def __init__(self, config: dict, dry_run: bool = False, *, episode=None, runtime_manager=None, runtime_context=None) -> None:
-        runtime_context = runtime_context or (episode.managed if episode else None)
         self.config = NegotiationConfig(**config)
         self.dry_run = dry_run
         self.events: list[Event] = []
         self._publisher = publisher_from_config(self.config)
-        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+        from a2a_engine.remote.lobby import EpisodeSession, open_episode
+        self._owns_episode = episode is None
+        self.episode = episode or (EpisodeSession(self.config.model_dump(), runtime_context) if runtime_context
+                                   else open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run))
+        self.runtime = self.episode.managed
 
     @classmethod
     def build_program(cls):
@@ -136,7 +139,8 @@ class NegotiationGame:
     def runtime_capability(cls):
         from a2a_engine.workflow_runtime import RuntimeCapability
         from .remote import NEGOTIATION_TOOLS
-        return RuntimeCapability(NEGOTIATION_TOOLS)
+        from a2a_engine.remote.contract import PROTOCOL_VERSION_V2
+        return RuntimeCapability(NEGOTIATION_TOOLS, protocols=frozenset({PROTOCOL_VERSION_V2}))
 
     # --- event adaptation ---
 
@@ -181,19 +185,32 @@ class NegotiationGame:
 
     # --- runner contract ---
 
+    async def setup(self):
+        engine_config = _to_engine_config(self.config)
+        _sync_effective_config(self.config, engine_config)
+        engine = GameEngine(engine_config, *self._make_agents())
+        engine.on_event(self._on_engine_event)
+        await engine._start_game()
+        return engine
+
+    def registrations(self, setup):
+        from a2a_engine.remote.lobby import Registration
+        first = self.config.first_speaker
+        return {seat: Registration({}) for seat in (first, 1 - first)}
+
+    async def _run_async(self):
+        engine = await self.setup()
+        with self.episode.started(self.registrations(engine), protocols=self.runtime_capability().protocols,
+                                  register_timeout_s=120):
+            return await engine.run_game()
+
     def run(self) -> EpisodeTrace:
         started = datetime.now(timezone.utc)
         try:
-            engine_config = _to_engine_config(self.config)
-            # Record the visibility values pinned by the backend, not the requested values.
-            _sync_effective_config(self.config, engine_config)
-            agent_a, agent_b = self._make_agents()
-            engine = GameEngine(engine_config, agent_a, agent_b)
-            engine.on_event(self._on_engine_event)
-            result = asyncio.run(engine.run_game())
+            result = asyncio.run(self._run_async())
         finally:
-            if self.runtime:
-                self.runtime.close()
+            if self._owns_episode:
+                self.episode.close()
         ended = datetime.now(timezone.utc)
         if self._publisher is not None:
             self._publisher.flush()

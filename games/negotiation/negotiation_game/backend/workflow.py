@@ -142,11 +142,6 @@ async def local_operation(actor, operation, info):
     return {}
 
 
-async def initialize(state: GameState, runtime: Runtime[GameContext]):
-    await runtime.context.engine._start_game()
-    return {'round_number': 1, 'reflections': {}}
-
-
 async def choose_a(state: GameState):
     return {'actor': 'agent_a'}
 
@@ -495,7 +490,7 @@ def round_program():
 
 def build_program():
     builder = graph()
-    domain(builder, initialize, check, stopped, choose_a, choose_b, advance_round, build_summary, complete_game)
+    domain(builder, check, stopped, choose_a, choose_b, advance_round, build_summary, complete_game)
     builder.add_node('round', round_program().compiled)
     for suffix, selector, chooser in (('a', select_a, choose_a), ('b', select_b, choose_b)):
         builder.add_node('initialize_' + suffix, AgentStep(selector, 'initialize_session', actor_observation, invoke))
@@ -504,9 +499,7 @@ def build_program():
         builder.add_node('record_reset_' + suffix, record_reset)
         builder.add_node('reflect_guard_' + suffix, chooser)
         builder.add_node('reflect_' + suffix, AgentStep(selector, 'reflect', reflection_observation, invoke))
-        builder.add_node('register_' + suffix, AgentStep(selector, 'register', no_observation, invoke))
-        builder.add_node('end_' + suffix, AgentStep(selector, 'episode_end', no_observation, invoke))
-    chain(builder, START, 'initialize', 'register_a', 'register_b', 'choose_a', 'initialize_a', 'choose_b', 'initialize_b', 'check')
+    chain(builder, START, 'choose_a', 'initialize_a', 'choose_b', 'initialize_b', 'check')
     builder.add_conditional_edges('check', round_destination, {'continue': 'reset_guard_a', 'stopped': 'stopped', 'exhausted': 'build_summary'})
     chain(builder, 'stopped', 'build_summary')
     for suffix, target in (('a', 'reset_guard_b'), ('b', 'round')):
@@ -517,7 +510,7 @@ def build_program():
     for suffix, target in (('a', 'reflect_guard_b'), ('b', 'complete_game')):
         builder.add_conditional_edges('reflect_guard_' + suffix, reflection_destination, {'reflect': 'reflect_' + suffix, 'bypass': target})
         chain(builder, 'reflect_' + suffix, target)
-    chain(builder, 'complete_game', 'end_a', 'end_b', END)
+    chain(builder, 'complete_game', END)
     return GraphProgram(builder)
 
 
