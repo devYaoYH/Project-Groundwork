@@ -18,7 +18,7 @@ export function MediaPreview({ value, environmentId, episodeUid, caption }: {
   if (!images.length) return null;
   const base = episodeUid ? `/api/episodes/${encodeURIComponent(episodeUid)}` : `/api/environments/${encodeURIComponent(environmentId)}`;
   return <figure className="media-preview"><figcaption>{caption ?? "Recorded image input"}</figcaption>
-    {images.map((image, index) => <img key={`${image.sha256}-${index}`} style={{ maxWidth: 320, maxHeight: 240, objectFit: "contain" }}
+    {images.map((image, index) => <img key={`${image.sha256}-${index}`} style={{ maxWidth: "100%", maxHeight: 360, objectFit: "contain" }}
       src={`${base}/assets/${image.sha256}`} alt="Recorded image input" />)}
   </figure>;
 }

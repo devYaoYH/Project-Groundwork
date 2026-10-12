@@ -519,3 +519,30 @@ test("all abbreviation requires exact known non-sender seats, never a channel or
   assert.deepEqual(chatOf([{ data: { agent_id: 0, text: "hi", to_agent: 1 } }], calendarRoster.slice(0, 2)).rows[0].recipients, ["all"]);
   assert.deepEqual(chatOf([{ data: { agent_id: 0, text: "hi", to_agent: 0 } }], calendarRoster.slice(0, 1)).rows[0].recipients, ["alice"]);
 });
+
+
+test("private inputs and committed outputs preserve the full common chat cursor", () => {
+  const events = [
+    { type: "round_start", data: { round: 1 } },
+    { type: "observation", data: { speaker: "director", content: [{ type: "text", text: "Private panel" }], visibility: "private" } },
+    { type: "message", data: { speaker: "director", text: "A tall figure" } },
+    { type: "observation", data: { speaker: "matcher", content: [{ type: "text", text: "Your gallery" }] } },
+    { type: "message", data: { speaker: "matcher", text: "I submit" } },
+    { type: "placement", data: { seat: "matcher", arrangement: ["h1", "h2"], submitted: true, visibility: "private", text: "Submitted board" } },
+    { type: "round_end", data: { round: 1, board: ["h1", "h2"] } },
+  ];
+  const result = chatOf(events);
+  assert.equal(result.rows.length, events.length);
+  assert.deepEqual(result.rows.map(row => row.cursor), [0,1,2,3,4,5,6]);
+  assert.equal(result.rows[1].kind, "input");
+  assert.equal(result.rows[3].kind, "input");
+  assert.equal(result.rows[5].kind, "action");
+  assert.equal(result.rows[5].laneId, "matcher");
+  assert.equal(result.rows[6].kind, "divider");
+});
+
+test("historical follower actions remain attributable without normalized speaker", () => {
+  const result = chatOf([{ type: "drawing", data: { speaker_id: "follower", route: [[1,2],[3,4]], visibility: "private" } }]);
+  assert.equal(result.rows[0].laneId, "follower");
+  assert.equal(result.rows[0].kind, "action");
+});
