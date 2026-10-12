@@ -187,7 +187,6 @@ class BuyerSellerGame:
     """Seller-led alternating-offer bargaining over k identical units."""
 
     def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False, *, episode=None, runtime_manager=None, runtime_context=None) -> None:
-        runtime_context = runtime_context or (episode.managed if episode else None)
         self.config = (
             config if isinstance(config, BuyerSellerConfig) else BuyerSellerConfig(**config)
         )
@@ -199,12 +198,16 @@ class BuyerSellerGame:
             if self.config.opening_price is not None
             else round(self.config.seller_cost * 2.5, 2)
         )
-        self.runtime = runtime_context or (runtime_manager.provision(self.config.model_dump(), scripted=dry_run) if runtime_manager else None)
+        from a2a_engine.remote.lobby import EpisodeSession, open_episode
+        self._owns_episode = episode is None
+        self.episode = episode or (EpisodeSession(self.config.model_dump(), runtime_context) if runtime_context
+                                   else open_episode(runtime_manager, self.config.model_dump(), scripted=dry_run))
+        self.runtime = self.episode.managed
         try:
             self._build_agents()
         except BaseException:
-            if self.runtime:
-                self.runtime.close()
+            if self._owns_episode:
+                self.episode.close()
             raise
 
     def _build_agents(self) -> None:
@@ -236,8 +239,9 @@ class BuyerSellerGame:
     @classmethod
     def runtime_capability(cls):
         from a2a_engine.workflow_runtime import RuntimeCapability
+        from a2a_engine.remote.contract import PROTOCOL_VERSION_V2
         from .remote import BUYER_SELLER_TOOLS
-        return RuntimeCapability(BUYER_SELLER_TOOLS)
+        return RuntimeCapability(BUYER_SELLER_TOOLS, protocols=frozenset({PROTOCOL_VERSION_V2}))
 
     # --- observations: the information-leakage boundary (§5) ---
 
@@ -275,22 +279,37 @@ class BuyerSellerGame:
 
     async def _run_async(self) -> EpisodeTrace:
         from .workflow import GameContext
-        from .remote import RemoteBargainingAgent
-        remote_agents = [agent for agent in (self.seller, self.buyer) if isinstance(agent, RemoteBargainingAgent)]
-        succeeded = False
         try:
-            state = await self.build_program().ainvoke({}, context=GameContext(self),
-                config={"recursion_limit": self.config.max_rounds * 9 + 15})
-            succeeded = True
-            return self._trace(state)
+            setup = self.setup()
+            with self.episode.started(self.registrations(setup), protocols=self.runtime_capability().protocols,
+                                      register_timeout_s=120) as roster:
+                state = await self.build_program().ainvoke(setup, context=GameContext(self, roster),
+                    config={"recursion_limit": self.config.max_rounds * 9 + 15})
+                return self._trace(state)
         finally:
-            if self.runtime:
-                try:
-                    if not succeeded:
-                        for agent in remote_agents:
-                            await asyncio.to_thread(agent.episode_end)
-                finally:
-                    self.runtime.close()
+            if self._owns_episode:
+                self.episode.close()
+
+    def setup(self):
+        cfg = self.config
+        self.events.append("game_start", data={
+            "num_items": cfg.num_items, "max_rounds": cfg.max_rounds,
+            "discount_factor": cfg.discount_factor,
+            "enforce_monotonic_offers": cfg.enforce_monotonic_offers,
+            "opening_price": self.opening_price,
+        })
+        return {"round": 1, "units_sold": 0, "history": [], "strikes": [],
+                "buyer_utility": 0.0, "seller_utility": 0.0, "last_price": None}
+
+    def registrations(self, setup):
+        from a2a_engine.remote.lobby import Registration
+        cfg = self.config
+        common = {"num_items": cfg.num_items, "max_rounds": cfg.max_rounds,
+                  "discount_factor": cfg.discount_factor}
+        return {0: Registration({**common, "role": "seller", "cost": cfg.seller_cost,
+                                 "opening": self.opening_price, "monotonic": cfg.enforce_monotonic_offers}),
+                1: Registration({**common, "role": "buyer", "value": cfg.buyer_value,
+                                 "patience": cfg.buyer_patience})}
 
     def _trace(self, state):
         cfg = self.config

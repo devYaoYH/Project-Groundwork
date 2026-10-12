@@ -80,13 +80,12 @@ def test_export_is_deterministic_and_never_executes_domain_or_runtime(monkeypatc
     from buyer_seller import workflow, game, remote, runtime_strategy
     def fail(*args, **kwargs):
         raise AssertionError("export executed game code")
-    for module, names in ((workflow, ["initialize", "can_continue", "accepted_offer", "seller_observation",
-                                      "buyer_observation", "select_seller", "select_buyer", "registration",
-                                      "trade_one_unit", "normalize_offer", "lifecycle_adapter", "bargaining_adapter",
-                                      "seller_registration", "buyer_registration", "no_observation",
+    for module, names in ((workflow, ["can_continue", "accepted_offer", "seller_observation",
+                                      "buyer_observation", "select_seller", "select_buyer",
+                                      "trade_one_unit", "normalize_offer", "bargaining_adapter",
                                       "inventory_deadline_guard", "start_round", "emit_offer", "emit_response",
                                       "advance_round", "finalize"]),
-                          (game.BuyerSellerGame, ["__init__", "_build_agents", "_seller_observation", "_buyer_observation"]),
+                          (game.BuyerSellerGame, ["__init__", "_build_agents", "setup", "registrations", "_seller_observation", "_buyer_observation"]),
                           (game, ["make_llm_client"]), (remote.RemoteBargainingAgent, ["__init__"]),
                           (runtime_strategy.BuyerSellerStrategy, ["__init__"]),
                           (remote.TurnDispatcherV2, ["__init__"]),
@@ -98,8 +97,8 @@ def test_export_is_deterministic_and_never_executes_domain_or_runtime(monkeypatc
     assert first["status"] == "available"
     graph = first["workflow"]["graphs"][0]
     assert {e.get("route_key") for e in graph["edges"] if e["conditional"]} == {"continue", "finished", "accepted", "rejected"}
-    assert len(graph["nodes"]) == 17
-    assert len(graph["edges"]) == 18
+    assert len(graph["nodes"]) == 12
+    assert len(graph["edges"]) == 13
     assert {node["actor_selector"] for node in graph["nodes"] if node["kind"] == "agent_call"} == {
         "buyer_seller.workflow.select_seller", "buyer_seller.workflow.select_buyer"}
 

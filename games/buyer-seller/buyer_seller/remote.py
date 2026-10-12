@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import Field
 
-from a2a_engine.remote.contract import CapabilityClaims, PROTOCOL_VERSION_V2, ToolOutcome, TurnInvocationV2, WireModel
-from a2a_engine.remote.dispatch import DeliveryFailure, TurnDispatcherV2
+from a2a_engine.remote.contract import CapabilityClaims, ToolOutcome, TurnInvocationV2, WireModel
+from a2a_engine.remote.dispatch import TurnDispatcherV2
 from a2a_engine.remote.turns import ToolSpec, TurnRecorder
 
 
@@ -56,16 +56,6 @@ class RemoteBargainingAgent:
                                 deadline=datetime.now(timezone.utc) + timedelta(seconds=self.timeout_s),
                                 mcp={name: f"{root}/{name}/mcp" for name in ("env", "comm", "lifecycle")})
 
-    def register(self, observation):
-        seat = self.runtime.episode.wait_ready(self.seat_id)
-        if seat.protocol_version != PROTOCOL_VERSION_V2:
-            raise RuntimeError("buyer_seller requires a2a-turns/2")
-        try:
-            self.dispatcher.dispatch(seat, self.invocation("register", observation))
-        except DeliveryFailure:
-            raise RuntimeError("buyer_seller runtime registration failed") from None
-        seat.registered = True
-
     def _act(self, observation):
         invocation = self.invocation("turn", observation)
         capabilities = self.runtime.environment.registry.capabilities
@@ -89,11 +79,3 @@ class RemoteBargainingAgent:
 
     async def act(self, observation, tools):
         return await asyncio.to_thread(self._act, observation)
-
-    def episode_end(self):
-        seat = self.runtime.episode.seats[self.seat_id]
-        if seat.registered:
-            try:
-                self.dispatcher.dispatch(seat, self.invocation("episode_end"))
-            except DeliveryFailure:
-                pass
