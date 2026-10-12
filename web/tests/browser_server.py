@@ -1,7 +1,7 @@
 """Serve built Next export with the actual Python route and disposable storage."""
 
-import os
 import sys
+import os
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
