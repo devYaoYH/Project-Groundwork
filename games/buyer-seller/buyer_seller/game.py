@@ -186,7 +186,8 @@ class _ScriptedBuyer:
 class BuyerSellerGame:
     """Seller-led alternating-offer bargaining over k identical units."""
 
-    def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
+    def __init__(self, config: dict | BuyerSellerConfig, dry_run: bool = False, *, episode=None, runtime_manager=None, runtime_context=None) -> None:
+        runtime_context = runtime_context or (episode.managed if episode else None)
         self.config = (
             config if isinstance(config, BuyerSellerConfig) else BuyerSellerConfig(**config)
         )

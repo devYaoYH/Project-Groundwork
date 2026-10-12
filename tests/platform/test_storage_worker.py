@@ -168,6 +168,8 @@ def test_worker_scripted_scientific_identity_and_duplicate_delivery(tmp_path, mo
     snapshot = tmp_path / "snapshot.sqlite"
     with sqlite3.connect(control.path) as source, sqlite3.connect(snapshot) as destination:
         source.backup(destination)
+        destination.execute("ALTER TABLE attempts DROP COLUMN engine_episode_id")
+        destination.execute("ALTER TABLE attempts DROP COLUMN engine_attempt_id")
     artifacts.put("input/snapshot.sqlite", snapshot.read_bytes())
     artifacts.put("input/plan.yaml", Path(launch.execution_path).read_bytes())
     repository.admit_launch({**asdict(launch), "owner_id": "alice", "snapshot_key": "input/snapshot.sqlite", "plan_key": "input/plan.yaml", "episode_count": 1})
@@ -184,6 +186,12 @@ def test_worker_scripted_scientific_identity_and_duplicate_delivery(tmp_path, mo
     assert row["episode_id"] == control.planned_episode_ids(launch.id)[0]
     assert row["events"] and row["manifest"]
     assert len(repository.list("attempts", owner_id="alice")) == 1
+    attempt = repository.list("attempts", owner_id="alice")[0]
+    assert attempt["engine_episode_id"] and attempt["engine_attempt_id"]
+    assert attempt["engine_episode_id"] != attempt["engine_attempt_id"]
+    runner_log = artifacts.get(f"launches/{launch.id}/runner.log").decode()
+    assert runner_log.count("INFO expt_runner: opened ") == 1
+    assert "join_ticket" not in runner_log and "a2a-join:" not in runner_log
     assert repository.get("quotas", "alice")["active"] == 0
 
 

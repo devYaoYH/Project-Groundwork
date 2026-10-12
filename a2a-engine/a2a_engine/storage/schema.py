@@ -195,6 +195,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     status            TEXT NOT NULL,
     episode_uri       TEXT,
     error             TEXT,
+    engine_episode_id TEXT,
+    engine_attempt_id TEXT,
     started_at        TEXT,
     ended_at          TEXT
 );
@@ -286,6 +288,8 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("experiments", "role_normalization", "ALTER TABLE experiments ADD COLUMN role_normalization TEXT"),
     ("participants", "role", "ALTER TABLE participants ADD COLUMN role TEXT"),
     ("attempts", "attempt", "ALTER TABLE attempts ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1"),
+    ("attempts", "engine_episode_id", "ALTER TABLE attempts ADD COLUMN engine_episode_id TEXT"),
+    ("attempts", "engine_attempt_id", "ALTER TABLE attempts ADD COLUMN engine_attempt_id TEXT"),
     ("launches", "mode", "ALTER TABLE launches ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'"),
     ("launches", "execution_path", "ALTER TABLE launches ADD COLUMN execution_path TEXT"),
     ("launches", "shard_index", "ALTER TABLE launches ADD COLUMN shard_index INTEGER"),

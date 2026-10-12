@@ -120,7 +120,8 @@ def _sync_effective_config(cfg: NegotiationConfig, engine_cfg: GameConfig) -> No
 class NegotiationGame:
     """Runs one negotiation environment and returns a ``EpisodeTrace``."""
 
-    def __init__(self, config: dict, dry_run: bool = False, *, runtime_manager=None, runtime_context=None) -> None:
+    def __init__(self, config: dict, dry_run: bool = False, *, episode=None, runtime_manager=None, runtime_context=None) -> None:
+        runtime_context = runtime_context or (episode.managed if episode else None)
         self.config = NegotiationConfig(**config)
         self.dry_run = dry_run
         self.events: list[Event] = []

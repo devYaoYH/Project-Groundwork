@@ -390,7 +390,8 @@ class CalendarGame:
         from .remote import CALENDAR_TOOLS
         return RuntimeCapability(CALENDAR_TOOLS)
 
-    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, runtime_context=None, runtime_manager=None) -> None:
+    def __init__(self, config: dict | CalendarGameConfig, dry_run: bool = False, *, episode=None, runtime_context=None, runtime_manager=None) -> None:
+        runtime_context = runtime_context or (episode.managed if episode else None)
         authored = config.model_dump() if isinstance(config, CalendarGameConfig) else config
         self.config = CalendarGameConfig(**resolve_config(authored))
         from a2a_engine.remote.seats import validate_runtimes

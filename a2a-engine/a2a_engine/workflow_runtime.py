@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from langgraph.runtime import Runtime
+from .remote.contract import PROTOCOL_VERSION_V2
 
 _invoking = ContextVar("workflow_agent_invocation", default=None)
 
@@ -61,9 +62,10 @@ class AgentStep:
 @dataclass(frozen=True)
 class RuntimeCapability:
     tools: tuple
+    protocols: frozenset = frozenset({PROTOCOL_VERSION_V2})
 
-    def bind(self, manager):
-        return {"runtime_manager": manager}
+    def bind(self, session):
+        return {"episode": session}
 
 
 def runtime_capability(environment_id):
