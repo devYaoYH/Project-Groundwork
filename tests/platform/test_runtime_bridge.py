@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from cloud_platform.control import PlatformControl
-from cloud_platform.runtime_bridge import RuntimeBridge
+from cloud_platform.runtime_bridge import LocalProcess, RuntimeBridge
 from cloud_platform.storage import ArtifactStore, Repository
 from cloud_platform.worker import Worker
 from tests.platform.test_storage_worker import DESIGN, WORKSPACE
@@ -258,6 +258,184 @@ def test_hard_worker_death_cancels_runtime_without_waiting_for_another_event(tmp
         assert process.wait(timeout=5) == -signal.SIGKILL
         assert "infrastructure worker heartbeat expired" in process.error
         assert peer.wait(timeout=3) == 0
+    finally:
+        process.close()
+        stop(peer)
+
+
+def orphan_code(run, *, leader_success=False):
+    ready, calls = run / "descendant-ready", run / "model-calls"
+    child = "import os,signal,time,pathlib; signal.signal(signal.SIGTERM,signal.SIG_IGN); p=pathlib.Path(" + repr(str(calls)) + "); p.write_text('call\\n'); pathlib.Path(" + repr(str(ready)) + ").write_text(str(os.getpid()))\nwhile True:\n with p.open('a') as out: out.write('call\\n')\n time.sleep(.02)\n"
+    leader = "import subprocess,sys,time,pathlib; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); p=pathlib.Path(" + repr(str(ready)) + ")\nwhile not p.exists(): time.sleep(.02)\n"
+    if not leader_success:
+        leader += "time.sleep(60)\n"
+    return leader, ready, calls
+
+
+def assert_descendant_stopped(pid, calls):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        state = Path(f"/proc/{pid}/stat")
+        if state.exists() and state.read_text().split(")", 1)[1].split()[0] == "Z":
+            break  # A container PID1 may defer reaping; zombies cannot execute.
+        time.sleep(.02)
+    else:
+        raise AssertionError("descendant still runs after its leader exited")
+    before = calls.read_bytes()
+    time.sleep(.15)
+    assert calls.read_bytes() == before, "orphan performed another model call"
+
+
+@pytest.mark.parametrize("mode", ["cancel", "heartbeat", "success"])
+def test_persistent_supervisor_removes_descendants_after_leader_exits(tmp_path, monkeypatch, mode):
+    monkeypatch.setenv("PLATFORM_RUNTIME_WORKSPACE", str(tmp_path))
+    bridge = RuntimeBridge(tmp_path / "execution", ArtifactStore(backend="local", data_dir=tmp_path / "data"))
+    run = bridge.root / "run"
+    run.mkdir()
+    log = run / "runner.log"
+    log.touch()
+    code, ready, calls = orphan_code(run, leader_success=mode == "success")
+    process = bridge.start([sys.executable, "-c", code], env={}, log_path=log, run_dir=run, launch_id="descendant-runtime")
+    request = json.loads((run / "request.json").read_text())
+    request["worker_heartbeat_timeout"] = 1.5
+    (run / "request.json").write_text(json.dumps(request))
+    peer = supervisor(bridge, loop=True)
+    pid = None
+    descendant_cleaned = False
+    try:
+        wait_for(ready)
+        pid = int(ready.read_text())
+        if mode == "cancel":
+            process.cancel(grace=1)
+            assert process.wait(timeout=5) == -signal.SIGTERM
+        elif mode == "heartbeat":
+            process.finished.set()
+            process.pump.join(timeout=1)
+            assert process.wait(timeout=5) == -signal.SIGTERM
+            assert "infrastructure worker heartbeat expired" in process.error
+        else:
+            assert process.wait(timeout=5) == 0
+        assert_descendant_stopped(pid, calls)
+        descendant_cleaned = True
+        process.close()
+        following = bridge.root / "following"
+        following.mkdir()
+        next_log = following / "runner.log"
+        next_log.touch()
+        next_process = bridge.start([sys.executable, "-c", "pass"], env={}, log_path=next_log, run_dir=following, launch_id="following-runtime")
+        assert next_process.wait(timeout=5) == 0
+        next_process.close()
+        assert_descendant_stopped(pid, calls)
+    finally:
+        process.close()
+        stop(peer)
+        if pid is not None and not descendant_cleaned:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("mode", ["cancel", "success"])
+def test_local_executor_cleans_orphans_and_never_rekills_after_close(tmp_path, mode):
+    code, ready, calls = orphan_code(tmp_path, leader_success=mode == "success")
+    process = LocalProcess([sys.executable, "-c", code], cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pid = None
+    descendant_cleaned = False
+    try:
+        wait_for(ready)
+        pid = int(ready.read_text())
+        if mode == "cancel":
+            process.cancel(grace=1)
+            assert process.wait(timeout=5) == -signal.SIGTERM
+        else:
+            assert process.wait(timeout=5) == 0
+        process.close()
+        assert process.group_cleaned
+        assert_descendant_stopped(pid, calls)
+        descendant_cleaned = True
+        process.close()
+        process.cancel()  # cleanup is idempotent; never reuse a stale PGID
+        assert_descendant_stopped(pid, calls)
+    finally:
+        process.close()
+        if pid is not None and not descendant_cleaned:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_restarted_peer_never_reexecutes_an_ambiguous_started_request(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLATFORM_RUNTIME_WORKSPACE", str(tmp_path))
+    bridge = RuntimeBridge(tmp_path / "execution", ArtifactStore(backend="local", data_dir=tmp_path / "data"))
+    run = bridge.root / "run"
+    run.mkdir()
+    log = run / "runner.log"
+    log.touch()
+    counter = run / "executions"
+    code = "import pathlib,time; p=pathlib.Path(" + repr(str(counter)) + "); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); time.sleep(60)"
+    process = bridge.start([sys.executable, "-c", code], env={}, log_path=log, run_dir=run, launch_id="ambiguous-runtime")
+    first_peer = supervisor(bridge, loop=True)
+    restarted = None
+    runner_pid = None
+    try:
+        wait_for(counter)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            runner_pid = json.loads((run / "started.json").read_text())["pid"]
+            if runner_pid is not None:
+                break
+            time.sleep(.02)
+        assert runner_pid is not None
+        first_peer.kill()
+        first_peer.wait(timeout=5)
+        # A container restart kills the old PID namespace. Simulate that here
+        # without using a persisted PID to kill anything during recovery.
+        os.killpg(runner_pid, signal.SIGKILL)
+        runner_pid = None
+        restarted = supervisor(bridge, loop=True)
+        assert process.wait(timeout=5) == 125
+        assert "already started" in process.error
+        assert counter.read_text() == "1"
+        process.close()
+        assert restarted.poll() is None
+        assert not (bridge.root / "request.json").exists()
+    finally:
+        process.close()
+        stop(first_peer)
+        if restarted:
+            stop(restarted)
+        if runner_pid is not None:
+            try:
+                os.killpg(runner_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_stale_worker_heartbeat_rejected_before_any_child_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLATFORM_RUNTIME_WORKSPACE", str(tmp_path))
+    bridge = RuntimeBridge(tmp_path / "execution", ArtifactStore(backend="local", data_dir=tmp_path / "data"))
+    run = bridge.root / "run"
+    run.mkdir()
+    log = run / "runner.log"
+    log.touch()
+    marker = run / "must-not-exist"
+    code = "import pathlib; pathlib.Path(" + repr(str(marker)) + ").touch()"
+    process = bridge.start([sys.executable, "-c", code], env={}, log_path=log, run_dir=run, launch_id="stale-worker")
+    process.finished.set()
+    process.pump.join(timeout=1)
+    (run / "worker-heartbeat.json").write_text(json.dumps({"id": "stale-worker", "heartbeat": 0}))
+    peer = supervisor(bridge)
+    try:
+        assert process.wait(timeout=5) == 125
+        assert "expired before runtime startup" in process.error
+        assert not marker.exists() and not (run / "started.json").exists()
+        assert peer.wait(timeout=5) == 0
     finally:
         process.close()
         stop(peer)

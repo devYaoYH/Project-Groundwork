@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 
-from cloud_platform.runtime_supervisor import atomic
+from cloud_platform.runtime_supervisor import atomic, finish_process_group
 
 RUNTIME_ENV = {
     "A2A_LAUNCH_ID", "A2A_RUNNER_LAUNCH_ID", "A2A_TRACE_DB", "A2A_RUNTIME_MODE",
@@ -36,6 +36,7 @@ class LocalProcess:
     def __init__(self, command, **kwargs):
         self.process = subprocess.Popen(command, start_new_session=True, **kwargs)
         self.error = None
+        self.group_cleaned = False
 
     def poll(self):
         return self.process.poll()
@@ -44,16 +45,14 @@ class LocalProcess:
         return self.process.wait(timeout=timeout)
 
     def cancel(self, grace=10):
-        if self.poll() is None:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.wait(timeout=grace)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.wait()
+        if not self.group_cleaned:
+            finish_process_group(self.process, terminate=True, grace=grace)
+            self.group_cleaned = True
 
     def close(self):
-        pass
+        if not self.group_cleaned:
+            finish_process_group(self.process)
+            self.group_cleaned = True
 
 
 class RuntimeBridge:

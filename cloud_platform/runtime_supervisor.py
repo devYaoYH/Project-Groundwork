@@ -23,6 +23,48 @@ def atomic(path, value):
     os.replace(temporary, path)
 
 
+def exclusive(path, value):
+    """Claim a request atomically without exposing partially written JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as out:
+        temporary = Path(out.name)
+        out.write(json.dumps(value, sort_keys=True).encode())
+        out.flush()
+        os.fsync(out.fileno())
+    try:
+        os.link(temporary, path)
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def finish_process_group(process, *, terminate=False, grace=0):
+    """A reaped leader does not imply its descendants have stopped."""
+    if terminate:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+    # Always remove remaining descendants before rearming or publishing a
+    # result, even when the leader already exited successfully/on SIGTERM.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return process.wait()
+
+
+def fresh_worker(run, request):
+    heartbeat = json.loads((run / "worker-heartbeat.json").read_text())
+    return heartbeat["id"] == request["id"] and time.time() - heartbeat["heartbeat"] <= request.get("worker_heartbeat_timeout", 30)
+
+
 def confined(root, path):
     path = Path(path).resolve()
     if not path.is_relative_to(root):
@@ -40,6 +82,7 @@ def execute(root, pointer, stopped):
         return
     log_path = confined(run, request["log_path"])
     process = None
+    group_cleaned = False
     code, error = 125, None
     try:
         for key, variable in (("source_sha", "PLATFORM_RUNTIME_SOURCE_SHA"), ("image_digest", "PLATFORM_RUNTIME_DIGEST")):
@@ -49,6 +92,12 @@ def execute(root, pointer, stopped):
         if (run / "cancel.json").exists() or stopped[0]:
             code = 130
             return
+        if (run / "started.json").exists():
+            raise RuntimeError("runtime request already started; refusing ambiguous re-execution")
+        if not fresh_worker(run, request):
+            raise RuntimeError("infrastructure worker heartbeat expired before runtime startup")
+        if not exclusive(run / "started.json", {"id": request["id"], "heartbeat": time.time(), "phase": "CLAIMED", "pid": None}):
+            raise RuntimeError("runtime request already claimed; refusing re-execution")
         # Secrets and runtime package paths belong to this pinned container.
         # The worker request contains only explicitly selected runner settings.
         env = dict(os.environ)
@@ -62,28 +111,23 @@ def execute(root, pointer, stopped):
             next_heartbeat = 0
             while process.poll() is None:
                 if time.monotonic() >= next_heartbeat:
-                    atomic(run / "started.json", {"id": request["id"], "heartbeat": time.time(), "pid": process.pid})
+                    atomic(run / "started.json", {"id": request["id"], "heartbeat": time.time(), "phase": "RUNNING", "pid": process.pid})
                     next_heartbeat = time.monotonic() + 1
-                worker_heartbeat = json.loads((run / "worker-heartbeat.json").read_text())
-                infrastructure_stale = worker_heartbeat["id"] != request["id"] or time.time() - worker_heartbeat["heartbeat"] > request.get("worker_heartbeat_timeout", 30)
+                infrastructure_stale = not fresh_worker(run, request)
                 if infrastructure_stale:
                     error = "infrastructure worker heartbeat expired; runtime cancelled"
                 if stopped[0] or infrastructure_stale or (run / "cancel.json").exists():
-                    os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        process.wait(timeout=float(request.get("cancel_grace", 10)))
-                    except subprocess.TimeoutExpired:
-                        os.killpg(process.pid, signal.SIGKILL)
+                    code = finish_process_group(process, terminate=True, grace=float(request.get("cancel_grace", 10)))
+                    group_cleaned = True
                     break
                 time.sleep(.05)
             code = process.wait()
     except Exception as exc:
         error = f"runtime supervisor failed: {type(exc).__name__}: {exc}"
     finally:
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        atomic(result, {"id": request["id"], "exit_code": code, "error": error})
+        if process is not None and not group_cleaned:
+            code = finish_process_group(process)
+        exclusive(result, {"id": request["id"], "exit_code": code, "error": error})
 
 
 def main():
