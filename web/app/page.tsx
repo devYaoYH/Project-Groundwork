@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Installation } from "../components/Installation";
+import { repositoryUrl } from "../lib/installation";
 
 const vocabulary = [
   {
@@ -69,15 +71,21 @@ export default function Home() {
     <>
       <header className="page-heading onboarding-heading">
         <div>
-          <p className="eyebrow">Researcher primer</p>
+          <p className="eyebrow">Groundwork</p>
           <h1>From a question to recorded evidence.</h1>
           <p>
             Groundwork helps you define a controlled study, run its planned observations, and inspect the
             evidence each execution produces.
           </p>
         </div>
-        <Link className="button button-primary" href="/environments/">Start with an environment</Link>
+        <div className="onboarding-actions">
+          <Link className="button button-primary" href="/experiments/">Open workspace</Link>
+          <a className="button" href={repositoryUrl}>View on GitHub</a>
+          <p>Sign in to launch experiments and access your results.</p>
+        </div>
       </header>
+
+      <Installation />
 
       <section className="card onboarding-card onboarding-model" aria-labelledby="research-model-heading">
         <div className="section-heading">

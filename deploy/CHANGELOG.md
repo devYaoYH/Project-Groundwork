@@ -1,5 +1,24 @@
 # Platform deployment changelog
 
+## Public onboarding and coding-agent setup — 2026-10-12
+
+- Render the landing page without login, including while authentication is
+  loading or unavailable. Workspace pages and private API access retain their
+  session and ownership checks.
+- Add copyable prompts for local setup and game authoring, manual Docker Compose
+  commands, and links to the installation guide, development skill, and
+  contributor instructions. Clipboard failures provide selectable prompt text.
+- Add repository `AGENTS.md`, a root skill entry point, and the installable
+  `skills/groundwork-development` workflow. Document the separate local API,
+  worker, and runtime stack, isolated checkout settings, Python development,
+  scripted verification, and preservation of existing data.
+- Fix scaffold imports to load the generated `environment.py`. Verify a fresh
+  scaffold with its generated tests and scripted SQLite execution/readback.
+- Serialize local Compose descriptor publication with cancellation cleanup so
+  provisioning cannot leave descriptor files after an episode is cancelled.
+  Reserve descriptor ownership before writing so single-worker signal exits
+  also clean up published files. Cover both paths with deterministic regressions.
+
 ## Hosted Firestore catalogue — 2026-10-11
 
 - Publish build-generated environment declarations and checked-in template paths

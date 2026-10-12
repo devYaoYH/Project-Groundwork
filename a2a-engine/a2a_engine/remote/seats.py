@@ -88,6 +88,10 @@ class LocalProcessLauncher:
             self.process.wait(timeout=5)
 
 
+def descriptor_path(directory, episode, seat):
+    return Path(directory) / f"{episode.episode_id}-seat-{seat.seat}.json"
+
+
 def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     from .joinlink import encode_join_link
     descriptor = {"join_url": join_url, "seat": seat.seat,
@@ -102,7 +106,7 @@ def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise ValueError("provisioning directory must be owner-only")
-    path = directory / f"{episode.episode_id}-seat-{seat.seat}.json"
+    path = descriptor_path(directory, episode, seat)
     temporary = directory / f".descriptor-{uuid.uuid4().hex}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:

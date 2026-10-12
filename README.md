@@ -1,17 +1,25 @@
-# a2a-comm
+# Project Groundwork
 
 A framework for multi-agent communication experiments: one engine, one
-experiment runner, one analysis layer — and a environment per release.
+experiment runner, one analysis layer, and an environment per release.
+
+Start locally with the researcher workspace, or ask a coding agent to set it up
+and help author a game. [Installation and copyable agent prompts](docs/INSTALLATION.md)
+cover both paths; [AGENTS.md](AGENTS.md) describes the repository's invariants.
 
 ```
-a2a-comm/
+Project-Groundwork/
   a2a-engine/     contract + runtime: schemas, agents, LLM clients, registry,
                   dataset, tracing, ratings, EpisodeManifest, EpisodeStore backends
+  a2a-agent/      agent-side runtime, strategies, model harnesses and history
   expt-runner/    CLI: expand -> run -> persist
   a2a-judge/      LLM-as-judge scaffolding: prompts, judgment store, resume
   web/            Next.js researcher control plane, static-exported and served
-                  by local_stack (environments, design, experiment, episode)
+                  by cloud_platform or local_stack
   local_stack/    local control-plane service: releases, experiments, launches
+  cloud_platform/ authenticated control API, owner-scoped evidence, infrastructure
+                  worker and bridge to separately pinned science runtimes
+  skills/         installable agent workflows
   site/           static landing page (GitHub Pages) linking out to environment sites
   experiments/    cross-environment experiment configs + shared sink definitions
   scripts/        new_game.py scaffold
@@ -25,74 +33,37 @@ a2a-comm/
 
 ## Quickstart
 
-```bash
-uv venv
-uv pip install -e a2a-engine -e expt-runner -e a2a-judge
-uv pip install -e games/buyer-seller -e games/word-guess \
-               -e games/calendar     -e games/negotiation
-
-cp .env.example .env      # add keys for the providers you use
-```
-
-Verify everything, without API keys or model spend — all four games run with
-scripted agents and write to a local SQLite file:
+Install Git and start Docker Desktop (or Docker Engine with Compose on Linux).
+No cloud account, model key, or host Python/Node installation is needed.
 
 ```bash
-a2a-run experiments/all_games_smoke.yaml --smoke-test
+git clone https://github.com/devYaoYH/Project-Groundwork.git
+cd Project-Groundwork
+docker compose -f compose.platform.yml up --build --detach --wait
+docker compose -f compose.platform.yml ps
+curl --fail http://127.0.0.1:8080/api/health
 ```
 
-## Local stack and browser control plane
+Open [the local workspace](http://127.0.0.1:8080/experiments/) and choose
+**Continue as Alice**. Pick an environment, create and lock an experiment, then
+launch it in **smoke** mode. Inspect streamed logs, recorded episodes, and the
+downloadable experiment export. Bob has a separate local workspace.
 
-One command brings up the whole thing on Docker Desktop — runner, Redis, SQLite
-trace store, and the web control plane. No cloud account, no API key:
+This stack has separate API, worker, and runtime containers. Verify execution,
+private ownership, and exported evidence through the public HTTP contracts:
 
 ```bash
-docker compose up --build
+docker compose -f compose.platform.yml exec -T api \
+  python deploy/verify_local.py --url http://127.0.0.1:8080
 ```
 
-| | |
-|---|---|
-| <http://localhost:8080/environments/> | what each installed release declares: parameters, roles, measures, item bank |
-| <http://localhost:8080/experiments/> | write a design, watch it compile, lock it, launch it |
-| <http://localhost:8080/episodes/> | the episode fact table; open one for lanes, a scrubber and a transcript |
-
-The loop is: pick an environment, write a design against its declaration, watch
-cell and episode counts recompute as you type, lock the design as a
-preregistration, launch it, and open any single episode. The browser never
-uploads code, a Dockerfile, or an image — it authors a design against a release
-that is already installed in the workspace.
-
-Two environments are set up as worked examples:
-
-```text
-Calendar     games/calendar/experiments/typed_local_smoke.yaml
-Negotiation  games/negotiation/experiments/smoke_local.yaml
-```
-
-The default job uses scripted agents, so it has no cloud or API dependency. See
-`docs/LOCAL_STACK.md` for episode statuses, follow-up jobs, local model
-endpoints, and the single-host SQLite boundary; `docs/RUNTIMES_AND_REPLAY.md`
-covers the per-environment runtime images and replay apps.
-
-```
-[1/3] Sink reachability
-      OK   sqlite [./results/a2a.db] (4ms): write/read/delete round-trip succeeded
-[2/3] Experiment expansion
-      OK   word_guess -> environment=word_guess
-      OK   buyer_seller -> environment=buyer_seller
-      OK   calendar -> environment=calendar
-      OK   negotiation -> environment=negotiation
-[3/3] End-to-end write/read via sqlite (4 runs, scripted agents)
-      ...
-PASS  4/4 runs persisted and read back  | sink: sqlite
-```
-
-Then run something real:
-
-```bash
-a2a-run games/buyer-seller/experiments/example.yaml --dry-run   # check model access
-a2a-run games/buyer-seller/experiments/example.yaml             # go
-```
+For an existing checkout, skip cloning and preserve its configuration and data.
+[INSTALLATION.md](docs/INSTALLATION.md) covers port conflicts, parallel checkouts,
+refreshes, Python 3.12 CLI setup, Node 22 frontend development, and copyable
+prompts for any coding agent. The original unauthenticated
+`docker compose` runner/viewer stack remains a distinct option described in
+[LOCAL_STACK.md](docs/LOCAL_STACK.md). Hosted Google login and release deployment
+are documented separately in [deploy/README.md](deploy/README.md).
 
 ## The workflow
 
@@ -116,8 +87,11 @@ See `docs/STORAGE.md`.
 | | question | needs keys | writes |
 |---|---|---|---|
 | `--smoke-test` | is my data pipeline wired end to end? | no | yes, then reads back |
-| `--dry-run` | are my models reachable? | yes | no |
-| *(neither)* | the experiment | yes | yes |
+| `--dry-run` | are my models reachable? | provider-dependent | no |
+| *(neither)* | the experiment | provider-dependent | yes |
+
+Scripted agents remain credential-free in live mode. A model-access dry run can
+contact providers, so use smoke mode for setup without provider calls.
 
 **Analysis is sink-agnostic** — switching storage does not change analysis code:
 
@@ -127,17 +101,23 @@ ds = EpisodeDataset.from_config({"backend": "sqlite", "path": "./results/a2a.db"
 ds.to_episodes_df(); ds.to_messages_df(); ds.to_events_df()
 ```
 
-## Adding a environment
+## Adding an environment
+
+With the [CLI development environment](docs/INSTALLATION.md#python-development-and-the-cli)
+activated:
 
 ```bash
 python scripts/new_game.py my-environment
-uv pip install -e games/my-environment
+python -m pip install -e games/my-environment
+python -m pytest games/my-environment/tests
 a2a-run games/my-environment/experiments/example.yaml --smoke-test
 ```
 
-The scaffold passes its smoke test before you write any environment logic. See
-`docs/ADDING_A_GAME.md` and `CONTRIBUTING.md`; `games/buyer-seller/` is the
-reference implementation.
+The scaffold verifies the minimum CLI contract before you replace its rules.
+Finish the declaration, executable workflow, and adapters your game requires.
+See [ADDING_A_GAME.md](docs/ADDING_A_GAME.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md); `games/buyer-seller/` is the reference
+implementation.
 
 Games are found through an `a2a_engine.environments` entry point, so `a2a-run` works on
 any installed environment without importing it first.
@@ -145,19 +125,23 @@ any installed environment without importing it first.
 ## Tests
 
 ```bash
-uv run pytest                          # the whole offline suite
+python -m pytest                       # the whole offline suite
 python scripts/release_check.py        # release-hazard scan, no network
 ```
 
-None need API keys, a server, or cloud credentials. CI runs the same suite on
-Python 3.12, plus the cross-environment smoke test, every per-environment runtime release,
-package builds, and a full Compose bring-up that asserts the trace, OTel,
-artifact, leaderboard, and replay APIs.
+These checks need no model keys or cloud credentials; some exercise local HTTP
+servers and loopback agents. CI uses Python 3.12 and Node 22, checks scripted
+smoke/readback and runtime releases, builds packages and the UI, and verifies
+Compose APIs. Install development dependencies first as documented in the
+installation guide.
 
 ## Docs
 
 | | |
 |---|---|
+| [docs/INSTALLATION.md](docs/INSTALLATION.md) | local setup, development prerequisites, and agent prompts |
+| [AGENTS.md](AGENTS.md) | codebase, scientific invariants, and verification guidance |
+| [skills/groundwork-development/SKILL.md](skills/groundwork-development/SKILL.md) | canonical installable setup/game-authoring workflow |
 | `docs/CONTRACTS.md` | the environment, trace, storage and judge interfaces |
 | `docs/ADDING_A_GAME.md` | adding an release |
 | `docs/STORAGE.md` | sinks, config inheritance, the data loader |
@@ -167,6 +151,7 @@ artifact, leaderboard, and replay APIs.
 | `docs/RUNTIMES_AND_REPLAY.md` | per-environment runtime images, Redis streams, replay and recovery |
 | `docs/VIEWER_EXTENSIONS.md` | viewer and control-plane front-end structure |
 | `CONTRIBUTING.md` | setup, house style, PR checklist |
+| [deploy/README.md](deploy/README.md) | hosted platform, immutable runtime bindings, and release CI |
 
 ## Status and known limitations
 

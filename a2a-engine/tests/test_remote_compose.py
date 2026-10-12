@@ -1,8 +1,27 @@
 import copy
+from contextlib import nullcontext
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 from a2a_engine.remote.compose import compose_enabled, runtime_config
+
+
+def descriptor_manager(tmp_path, monkeypatch):
+    from a2a_engine.remote import compose
+    from a2a_engine.remote.server import EpisodeRegistry
+
+    manager = compose.ComposeRuntimeManager([])
+    manager.environment = SimpleNamespace(registry=EpisodeRegistry())
+    manager.io = SimpleNamespace(base_url="http://viewer:8100")
+    manager.provisioning_dir = tmp_path
+    monkeypatch.setattr(compose, "_managers", {manager})
+    monkeypatch.setattr(compose, "validate_runtimes", lambda config, **kwargs: config["agents"])
+    response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"healthy": True})
+    client = SimpleNamespace(get=lambda url: response)
+    monkeypatch.setattr(compose.httpx, "Client", lambda **kwargs: nullcontext(client))
+    return manager
 
 
 def test_compose_is_opt_in_and_rosters_are_not_mutated(monkeypatch):
@@ -28,3 +47,93 @@ def test_unknown_mode_does_not_silently_use_loopback(monkeypatch):
     monkeypatch.setenv("A2A_RUNTIME_MODE", "other")
     with pytest.raises(ValueError):
         compose_enabled()
+
+
+def test_cancellation_during_descriptor_publication_removes_every_descriptor(tmp_path, monkeypatch):
+    from a2a_engine.remote import compose
+
+    first_written, cancellation_progress = threading.Event(), threading.Event()
+
+    class ObservedLock:
+        """Resume the publisher only after cancellation blocks or completes."""
+        def __init__(self):
+            self.lock = threading.RLock()
+
+        def __enter__(self):
+            if threading.current_thread().name == "cancel-descriptors":
+                if not self.lock.acquire(blocking=False):
+                    cancellation_progress.set()
+                    self.lock.acquire()
+            else:
+                self.lock.acquire()
+            return self
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    manager = descriptor_manager(tmp_path, monkeypatch)
+    manager.lock = ObservedLock()
+    original_write = compose.write_descriptor
+
+    def pause_first_write(directory, episode, seat, join_url, **kwargs):
+        path = original_write(directory, episode, seat, join_url, **kwargs)
+        if seat.seat == 0:
+            first_written.set()
+            assert cancellation_progress.wait(5), "cancellation did not reach the publication boundary"
+        return path
+
+    monkeypatch.setattr(compose, "write_descriptor", pause_first_write)
+    failures, runtimes = [], []
+
+    def provision():
+        try:
+            runtimes.append(manager.provision({"environment_id": "calendar", "agents": [
+                {"type": "scripted", "runtime": "external"},
+                {"type": "scripted", "runtime": "external"}]}, scripted=True))
+        except BaseException as error:
+            failures.append(error)
+
+    def cancel():
+        try:
+            compose.cancel_active_episodes()
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            cancellation_progress.set()
+
+    publisher = threading.Thread(target=provision, daemon=True)
+    canceller = threading.Thread(target=cancel, name="cancel-descriptors", daemon=True)
+    publisher.start()
+    assert first_written.wait(5)
+    canceller.start()
+    publisher.join(5)
+    canceller.join(5)
+    assert not publisher.is_alive() and not canceller.is_alive()
+    assert not list(tmp_path.glob("seat-*/*.json")), "descriptor publication raced past episode cleanup"
+    assert not failures
+    assert manager.cancelled and not manager.episodes
+    assert len(runtimes) == 1 and runtimes[0].closed
+
+
+@pytest.mark.parametrize("signal_exit", [False, True])
+def test_reentrant_cancellation_owns_descriptor_before_writer_returns(tmp_path, monkeypatch, signal_exit):
+    from a2a_engine.remote import compose
+
+    manager = descriptor_manager(tmp_path, monkeypatch)
+    original_write = compose.write_descriptor
+
+    def cancel_after_publication(*args, **kwargs):
+        path = original_write(*args, **kwargs)
+        assert path.is_file()
+        compose.cancel_active_episodes()
+        if signal_exit:
+            raise SystemExit(143)
+        return path
+
+    monkeypatch.setattr(compose, "write_descriptor", cancel_after_publication)
+    with pytest.raises(SystemExit if signal_exit else RuntimeError,
+                       match="143" if signal_exit else "runtime launch cancelled"):
+        manager.provision({"environment_id": "calendar", "agents": [
+            {"type": "scripted", "runtime": "external"}]}, scripted=True)
+    assert not list(tmp_path.glob("seat-*/*.json"))
+    assert manager.cancelled and not manager.episodes

@@ -42,6 +42,31 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0; }
 .onboarding-heading { margin-bottom: 28px; }
 .onboarding-heading .button { flex: 0 0 auto; }
+.onboarding-actions { display: flex; flex-wrap: wrap; gap: 8px; min-width: 230px; }
+.onboarding-actions p { flex-basis: 100%; font-size: 11px; margin: 0; }
+.installation-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.installation-tabs [aria-selected="true"] { background: var(--sunk); border-color: var(--accent); color: var(--accent); }
+.installation-intro { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+.installation-prompts { border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+.installation-prompt { display: grid; gap: 16px; grid-template-columns: minmax(125px, .7fr) minmax(0, 2.2fr) auto; padding: 18px; }
+.installation-prompt + .installation-prompt { border-top: 1px solid var(--rule); }
+.installation-prompt-heading h3 { font-family: var(--font-head); font-size: 16px; font-weight: 500; margin: 0; }
+.installation-prompt-heading p { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
+.installation-prompt-text { font-size: 13px; margin: 0; overflow-wrap: anywhere; }
+.installation-prompt-text strong { font-weight: 500; }
+.installation-copy { align-self: start; display: flex; flex-direction: column; gap: 5px; }
+.installation-copy-button { align-items: center; display: inline-flex; gap: 6px; justify-content: center; }
+.installation-copy-status { color: var(--muted); font-size: 10px; max-width: 12ch; }
+.installation-copy-fallback { background: var(--sunk); border: 1px solid var(--rule); border-radius: 4px; font-family: var(--font-data); font-size: 11px; max-width: 100%; min-width: 0; padding: 8px; resize: vertical; width: 240px; }
+.installation-prompt:has(.installation-copy-fallback) { grid-template-columns: minmax(125px, .7fr) minmax(0, 2.2fr); }
+.installation-prompt .installation-copy:has(.installation-copy-fallback) { grid-column: 1 / -1; }
+.installation-prompt .installation-copy-fallback { width: 100%; }
+.installation-command-block { background: var(--sunk); border: 1px solid var(--rule); border-radius: 5px; padding: 16px; }
+.installation-command-block pre { font-family: var(--font-data); font-size: 12px; line-height: 1.7; margin: 0 0 12px; overflow-x: auto; }
+.installation-command-block .installation-copy { align-items: flex-start; }
+.installation-command-block .installation-copy-status { max-width: none; }
+.installation-note { color: var(--muted); font-size: 12px; margin: 12px 0; }
+.installation-resources { border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 18px; padding-top: 12px; }
 .card { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 14px; overflow: hidden; }
 .section-card { padding: 15px 16px 4px; }
 .section-heading { align-items: baseline; display: flex; gap: 16px; justify-content: space-between; margin: 0 0 11px; }
@@ -237,6 +262,11 @@ h2 { font-family: var(--font-head); font-size: 18px; font-weight: 500; margin: 0
   .section-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .onboarding-heading { margin-bottom: 22px; }
   .onboarding-card { padding: 15px; }
+  .onboarding-actions { min-width: 0; }
+  .installation-prompt, .installation-prompt:has(.installation-copy-fallback) { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px; }
+  .installation-copy-status { max-width: none; }
+  .installation-prompt .installation-copy:has(.installation-copy-fallback) { grid-column: auto; }
+  .installation-command-block { padding: 12px; }
   .vocabulary-path li { gap: 2px 8px; grid-template-columns: 2.25rem minmax(0, 1fr); padding: 11px 0; }
   .vocabulary-path li > span:last-child { grid-column: 2; }
   .data-table { min-width: 560px; }

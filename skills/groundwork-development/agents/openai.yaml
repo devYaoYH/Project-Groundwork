@@ -1,0 +1,4 @@
+interface:
+  display_name: "Groundwork Development"
+  short_description: "Set up Groundwork locally and implement new games"
+  default_prompt: "Use $groundwork-development to set up this Groundwork checkout and verify a scripted local experiment."
