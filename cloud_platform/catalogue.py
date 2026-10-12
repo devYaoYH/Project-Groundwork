@@ -1,13 +1,10 @@
-"""Local release metadata, discovered at build time and read without catalogue SQL.
-
-The JSON document is portable to a hosted catalogue publisher. Local developers
-need only installed game entry points and the existing Compose build workflow.
-"""
+"""Build-time release metadata with local-file and hosted Firestore adapters."""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import tempfile
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -101,23 +98,54 @@ class LocalCatalogueStore:
         return stored
 
 
-class LocalCatalogue(ControlPlane):
-    """Reuse the control plane's pure read/validation methods, without a database.
+class FirestoreCatalogueStore:
+    """Immutable snapshots in a separate collection, read by content hash.
 
-    SQL-backed methods are deliberately unavailable. Experiment compilation and
-    episode execution continue to use their separate private SQLite snapshots.
+    Keep the manifest as JSON: declarations may contain nested arrays that
+    Firestore cannot represent as native array values. No query scans are needed.
     """
 
-    def __init__(self, workspace, data_dir, manifest_path=None):
+    def __init__(self, repository):
+        if repository.backend != "gcp":
+            raise ValueError("Firestore catalogue requires the gcp repository")
+        self.repo = repository
+
+    def publish(self, manifest):
+        validate_manifest(manifest)
+        payload = encoded(manifest)
+        # Leave room for field names and metadata under Firestore's 1 MiB limit.
+        if len(payload) > 900_000:
+            raise ValueError("Catalogue exceeds the 900 KB snapshot limit; split before publishing")
+        digest = hashlib.sha256(payload).hexdigest()
+        self.repo.create("catalogues", digest, {"catalogue_sha256": digest,
+            "manifest_json": payload.decode(), "registered_at": datetime.now(UTC).isoformat()})
+        # Both the winner and duplicate publisher verify the persisted bytes.
+        return self.load(digest)
+
+    def load(self, digest):
+        if not re.fullmatch(r"[0-9a-f]{64}", digest or ""):
+            raise ValueError("Hosted catalogue requires a complete PLATFORM_CATALOGUE_SHA256 pin")
+        stored = self.repo.get("catalogues", digest)
+        if stored is None:
+            raise ValueError("Pinned Firestore catalogue is missing; publish it before deployment")
+        manifest = json.loads(stored["manifest_json"])
+        if stored.get("catalogue_sha256") != digest or hashlib.sha256(encoded(manifest)).hexdigest() != digest:
+            raise ValueError("Persisted catalogue checksum mismatch")
+        validate_manifest(manifest)
+        return {"catalogue_sha256": digest, "manifest": manifest, "registered_at": stored["registered_at"]}
+
+
+class PublishedCatalogue(ControlPlane):
+    """Reuse pure read/validation methods without constructing a SQL control plane.
+
+    Experiment compilation and execution keep their private SQLite snapshots.
+    """
+
+    def __init__(self, workspace, document, *, source_ref="local-workspace", launcher="local"):
         self.workspace = Path(workspace).resolve()
-        if manifest_path:
-            manifest = json.loads(Path(manifest_path).read_bytes())
-        else:
-            # Direct Python development has no image build step. Discover once
-            # on first use; a process restart refreshes newly installed games.
-            manifest = installed_manifest(self.workspace)
-        self.document = LocalCatalogueStore(data_dir).publish(manifest)
+        self.document = document
         self.manifest = self.document["manifest"]
+        validate_manifest(self.manifest)
         self._entries = {entry["environment_id"]: entry for entry in self.manifest["environments"]}
         self._declarations = {identifier: declaration_from_document(entry["declaration"])
                               for identifier, entry in self._entries.items()}
@@ -128,7 +156,7 @@ class LocalCatalogue(ControlPlane):
                 version=declaration.version, declaration_sha256=declaration.content_sha256(),
                 item_bank_sha256=declaration.item_policy.item_bank_sha256 if declaration.item_policy else None,
                 oracle_version=declaration.oracle_version, package=self._entries[identifier].get("package"),
-                source_ref="local-workspace", metadata={"launcher": "local", "entrypoint": identifier,
+                source_ref=source_ref, metadata={"launcher": launcher, "entrypoint": identifier,
                     "source_url": declaration.source_url, "blurb": declaration.blurb},
                 created_at=self.document["registered_at"])
             self._releases[release.id] = release
@@ -172,3 +200,19 @@ class LocalCatalogue(ControlPlane):
         if release.environment_id != environment_id:
             raise ValueError(f"Release {release.id!r} belongs to another environment")
         return release
+
+
+class LocalCatalogue(PublishedCatalogue):
+    def __init__(self, workspace, data_dir, manifest_path=None):
+        if manifest_path:
+            manifest = json.loads(Path(manifest_path).read_bytes())
+        else:
+            # Direct Python development discovers newly installed games once.
+            manifest = installed_manifest(workspace)
+        super().__init__(workspace, LocalCatalogueStore(data_dir).publish(manifest))
+
+
+class FirestoreCatalogue(PublishedCatalogue):
+    def __init__(self, workspace, repository, digest, *, source_ref):
+        super().__init__(workspace, FirestoreCatalogueStore(repository).load(digest),
+                         source_ref=source_ref, launcher="cloud-run")

@@ -227,10 +227,13 @@ def main():
     parser.add_argument("--runtime-image", required=True)
     parser.add_argument("--runtime-source-sha", required=True)
     parser.add_argument("--oauth-client-id", default="")
+    parser.add_argument("--catalogue-sha256", required=True)
     parser.add_argument("--initialize-public", action="store_true")
     args = parser.parse_args()
     if not args.oauth_client_id.endswith(".apps.googleusercontent.com") or not SOURCE.fullmatch(args.source_sha):
         raise ValueError("Hosted release requires a Google web client and complete source SHA")
+    if not re.fullmatch(r"[0-9a-f]{64}", args.catalogue_sha256):
+        raise ValueError("Hosted release requires a published catalogue content hash")
     project, region = args.project, args.region
     worker_image = resolve_image(project, args.image)
     current_runtime = resolve_image(project, args.runtime_image)
@@ -260,6 +263,7 @@ def main():
     api_env = {"PLATFORM_BACKEND": "gcp", "GOOGLE_CLOUD_PROJECT": project, "PLATFORM_REGION": region,
         "PLATFORM_BUCKET": f"{project}-groundwork-artifacts", "PLATFORM_SOURCE_SHA": args.source_sha,
         "PLATFORM_IMAGE_DIGEST": worker_digest, "PLATFORM_WORKER_IMAGE": worker_image,
+        "PLATFORM_CATALOGUE_SHA256": args.catalogue_sha256,
         "PLATFORM_WORKER_SOURCE_SHA": args.source_sha, "PLATFORM_WORKER_IMAGE_DIGEST": worker_digest,
         "PLATFORM_WORKER_CONTRACT_VERSION": "1", "PLATFORM_RUNTIME_CATALOG_KEY": catalog_key,
         "PLATFORM_RUNTIME_IMAGE": current_runtime, "PLATFORM_RUNTIME_DIGEST": image_digest(current_runtime),
@@ -278,7 +282,7 @@ def main():
         arguments.append("--allow-unauthenticated")
     command(arguments)
     print(json.dumps({"service_url": public_url, "source_sha": args.source_sha, "image": worker_image,
-        "digest": worker_digest, "runtime_image": current_runtime, "runtime_source_sha": current_binding["runtime_source_sha"],
+        "digest": worker_digest, "catalogue_sha256": args.catalogue_sha256, "runtime_image": current_runtime, "runtime_source_sha": current_binding["runtime_source_sha"],
         "runtime_catalog_key": catalog_key, "runtime_count": len(runtimes), "job": current_binding["job_name"]}, indent=2))
 
 

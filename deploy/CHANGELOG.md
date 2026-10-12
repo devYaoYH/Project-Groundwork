@@ -1,5 +1,20 @@
 # Platform deployment changelog
 
+## Hosted Firestore catalogue — 2026-10-11
+
+- Publish build-generated environment declarations and checked-in template paths
+  to the shared `groundwork_catalogues` Firestore collection before API rollout.
+  Pin each revision to an immutable content hash, read it once per process, and
+  reuse the SQL-free catalogue adapter for hosted catalogue routes.
+- Preserve local file-backed Compose staging, per-owner experiment counts and
+  private compiler/evidence snapshots. Missing or corrupt hosted snapshots fail
+  explicitly; requests cannot silently rebuild a temporary catalogue database.
+- Add a create/get-only build publisher role and document the one-time bootstrap
+  prerequisite. Publication verifies read-back and rejects snapshots above 900 KB.
+  Old snapshots remain available for rollback. This PR stages code and tests; it
+  does not change live GCP permissions or claim a hosted deployment.
+
+
 ## Catalog publication with scoped storage access — 2026-10-11
 
 - Publish runtime bindings through an exact-object GCS JSON API upload with
@@ -8,12 +23,14 @@
 - Accept an existing catalog only when its bytes match the expected content
   hash. Upload or verification failures stop publication before API rollout.
 
+
 ## First runtime publication lookup — 2026-10-11
 
 - Recognize the exact `gcloud artifacts docker images describe` diagnostic
   `Image not found.` when the first immutable runtime tag has not been published.
   Build the missing runtime while continuing to reject permission, network and
   other lookup failures before any publication or API rollout.
+
 
 ## Independent runtime and worker pins — 2026-10-11
 
