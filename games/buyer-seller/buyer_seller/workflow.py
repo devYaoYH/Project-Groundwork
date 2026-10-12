@@ -44,7 +44,7 @@ def select_buyer(state, context):
     return context.game.buyer
 
 
-def inventory_deadline_guard(state: GameState):
+def next_round(state: GameState):
     return {}
 
 
@@ -76,25 +76,22 @@ async def bargaining_adapter(actor, operation, observation, state, context):
     return {"offer_action" if actor is context.game.seller else "response_action": action}
 
 
-def normalize_offer(state: GameState, runtime: Runtime[GameContext]):
+async def publish_offer(state: GameState, runtime: Runtime[GameContext]):
     price = float(state["offer_action"]["price"])
     violation = bool(runtime.context.game.config.enforce_monotonic_offers and
                      state["last_price"] is not None and price > state["last_price"])
     if violation:
         price = state["last_price"]
-    return {"price": round(price, 2), "violation": violation}
-
-
-async def emit_offer(state: GameState, runtime: Runtime[GameContext]):
+    price = round(price, 2)
     runtime.context.game.events.append("offer", data={
         "round": state["round"], "speaker": "seller",
-        "text": state["offer_action"].get("text") or f"I offer one unit at {state['price']:.2f}.",
-        "price": state["price"], "monotonic_violation": state["violation"],
+        "text": state["offer_action"].get("text") or f"I offer one unit at {price:.2f}.",
+        "price": price, "monotonic_violation": violation,
     })
-    return {}
+    return {"price": price, "violation": violation}
 
 
-async def emit_response(state: GameState, runtime: Runtime[GameContext]):
+async def record_response(state: GameState, runtime: Runtime[GameContext]):
     accepted = bool(state["response_action"]["accept"])
     runtime.context.game.events.append("response", data={
         "round": state["round"], "speaker": "buyer",
@@ -122,7 +119,7 @@ async def trade_one_unit(state: GameState, runtime: Runtime[GameContext]):
             "seller_utility": state["seller_utility"] + seller_surplus}
 
 
-def advance_round(state: GameState):
+def close_round(state: GameState):
     return {"history": [*state["history"], {"round": state["round"], "price": state["price"],
                                           "accepted": state["accepted"]}],
             "last_price": state["price"], "round": state["round"] + 1}
@@ -139,22 +136,21 @@ async def finalize(state: GameState, runtime: Runtime[GameContext]):
 
 def build_program():
     builder = StateGraph(GameState, context_schema=GameContext)
-    for node in (inventory_deadline_guard, start_round, normalize_offer, emit_offer,
-                 emit_response, trade_one_unit, advance_round, finalize):
+    for node in (next_round, start_round, publish_offer, record_response,
+                 trade_one_unit, close_round, finalize):
         builder.add_node(node.__name__, node)
     builder.add_node("seller_call", AgentStep(select_seller, "act", seller_observation, bargaining_adapter))
     builder.add_node("buyer_call", AgentStep(select_buyer, "act", buyer_observation, bargaining_adapter))
-    builder.add_edge(START, "inventory_deadline_guard")
-    builder.add_conditional_edges("inventory_deadline_guard", can_continue,
+    builder.add_edge(START, "next_round")
+    builder.add_conditional_edges("next_round", can_continue,
                                  {"continue": "start_round", "finished": "finalize"})
     builder.add_edge("start_round", "seller_call")
-    builder.add_edge("seller_call", "normalize_offer")
-    builder.add_edge("normalize_offer", "emit_offer")
-    builder.add_edge("emit_offer", "buyer_call")
-    builder.add_edge("buyer_call", "emit_response")
-    builder.add_conditional_edges("emit_response", accepted_offer,
-                                 {"accepted": "trade_one_unit", "rejected": "advance_round"})
-    builder.add_edge("trade_one_unit", "advance_round")
-    builder.add_edge("advance_round", "inventory_deadline_guard")
+    builder.add_edge("seller_call", "publish_offer")
+    builder.add_edge("publish_offer", "buyer_call")
+    builder.add_edge("buyer_call", "record_response")
+    builder.add_conditional_edges("record_response", accepted_offer,
+                                 {"accepted": "trade_one_unit", "rejected": "close_round"})
+    builder.add_edge("trade_one_unit", "close_round")
+    builder.add_edge("close_round", "next_round")
     builder.add_edge("finalize", END)
     return GraphProgram(builder)

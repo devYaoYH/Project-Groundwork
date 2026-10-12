@@ -82,9 +82,9 @@ def test_export_is_deterministic_and_never_executes_domain_or_runtime(monkeypatc
         raise AssertionError("export executed game code")
     for module, names in ((workflow, ["can_continue", "accepted_offer", "seller_observation",
                                       "buyer_observation", "select_seller", "select_buyer",
-                                      "trade_one_unit", "normalize_offer", "bargaining_adapter",
-                                      "inventory_deadline_guard", "start_round", "emit_offer", "emit_response",
-                                      "advance_round", "finalize"]),
+                                      "trade_one_unit", "publish_offer", "bargaining_adapter",
+                                      "next_round", "start_round", "record_response",
+                                      "close_round", "finalize"]),
                           (game.BuyerSellerGame, ["__init__", "_build_agents", "setup", "registrations", "_seller_observation", "_buyer_observation"]),
                           (game, ["make_llm_client"]), (remote.RemoteBargainingAgent, ["__init__"]),
                           (runtime_strategy.BuyerSellerStrategy, ["__init__"]),
@@ -97,8 +97,8 @@ def test_export_is_deterministic_and_never_executes_domain_or_runtime(monkeypatc
     assert first["status"] == "available"
     graph = first["workflow"]["graphs"][0]
     assert {e.get("route_key") for e in graph["edges"] if e["conditional"]} == {"continue", "finished", "accepted", "rejected"}
-    assert len(graph["nodes"]) == 12
-    assert len(graph["edges"]) == 13
+    assert len(graph["nodes"]) == 11
+    assert len(graph["edges"]) == 12
     assert {node["actor_selector"] for node in graph["nodes"] if node["kind"] == "agent_call"} == {
         "buyer_seller.workflow.select_seller", "buyer_seller.workflow.select_buyer"}
 
