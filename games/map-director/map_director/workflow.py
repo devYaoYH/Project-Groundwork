@@ -111,10 +111,21 @@ def record_drawing(state, runtime):
         },
     )
     route, submitted, feedback = game.validate_action(action, state)
+    summary = (
+        f"Drawing rejected. {feedback}"
+        if feedback
+        else f"{'Submitted' if submitted else 'Saved'} a route with {len(route)} points."
+    )
     game.events.append(
         "drawing",
         data={
+            "speaker": "follower",
             "speaker_id": "follower",
+            "text": summary,
+            "content": [
+                {"type": "text", "text": summary},
+                game.drawing_image(state["round_index"], route),
+            ],
             "round": state["round_index"] + 1,
             "route": route,
             "submitted": submitted,
@@ -149,6 +160,20 @@ def close_round(state, runtime):
         item_id=game.tasks[state["round_index"]]["item_id"],
         route=state["route"],
         turns_used=state["turn"],
+    )
+    summary = (
+        f"Final follower route: {'submitted' if state['submitted'] else 'unsubmitted'}, "
+        f"{len(state['route'])} points. "
+        f"{'Success' if outcome['success'] else 'Unsuccessful'}."
+    )
+    outcome.update(
+        speaker="follower",
+        visibility="private",
+        text=summary,
+        content=[
+            {"type": "text", "text": summary},
+            game.drawing_image(state["round_index"], state["route"]),
+        ],
     )
     game.events.append("round_end", data=outcome)
     return {

@@ -13,7 +13,7 @@ from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.modalities import validate_config
 from .agents import MapDirectorAgent, ScriptedMapAgent, GIVER_SYSTEM, FOLLOWER_SYSTEM
 from .declaration import DECLARATION, BANK
-from .maps import render_map, local
+from .maps import render_map, local, world
 
 
 class MapDirectorConfig(EpisodeConfigBase):
@@ -149,24 +149,7 @@ class MapDirectorEnvironment:
         )
         image = task["giver_image"] if role == "giver" else task["follower_image"]
         if role == "follower" and state["route"]:
-            route = [
-                [
-                    (p[i] - task["follower_frame"]["offset"][i])
-                    / task["follower_frame"]["scale"]
-                    for i in range(2)
-                ]
-                for p in state["route"]
-            ]
-            image = self.store.put(
-                render_map(
-                    task["follower_landmarks"],
-                    task["follower_frame"],
-                    route,
-                    draft=True,
-                ),
-                "image/png",
-            ).model_dump(exclude_none=True)
-            self.assets[image["sha256"]] = image
+            image = self.drawing_image(state["round_index"], state["route"])
         content = [{"type": "text", "text": text}, image]
         self.events.append(
             "observation",
@@ -178,6 +161,26 @@ class MapDirectorEnvironment:
             },
         )
         return {**public, "content": inline_media(content, self.store.root)}
+
+    def drawing_image(self, round_index, route):
+        """Persist the committed follower drawing for observation or replay.
+
+        Actions use the follower's local axes. The renderer takes world points,
+        so undo the local transform before drawing on the follower's map.
+        This artifact enters evaluator evidence, never the giver's observation.
+        """
+        task = self.tasks[round_index]
+        image = self.store.put(
+            render_map(
+                task["follower_landmarks"],
+                task["follower_frame"],
+                [world(point, task["follower_frame"]) for point in route],
+                draft=True,
+            ),
+            "image/png",
+        ).model_dump(exclude_none=True)
+        self.assets[image["sha256"]] = image
+        return image
 
     def validate_action(self, action, state):
         route = state["route"]
