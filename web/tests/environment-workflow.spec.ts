@@ -1,4 +1,25 @@
 import { expect, test, type Locator } from "@playwright/test";
+import type { WorkflowDocument, WorkflowGraph } from "../lib/workflow";
+
+async function expectSubgraphSummaries(canvas: Locator, outline: Locator, doc: WorkflowDocument, graph: WorkflowGraph) {
+  for (const node of graph.nodes.filter((node) => node.subgraph && (node.kind === "subgraph" || node.kind === "batch"))) {
+    const reachable = new Set<string>(), pending = [node.subgraph!];
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (reachable.has(id)) continue;
+      reachable.add(id);
+      const child = doc.graphs.find((entry) => entry.id === id)!;
+      pending.push(...child.nodes.flatMap((entry) => entry.subgraph ? [entry.subgraph] : []));
+    }
+    const descendants = doc.graphs.filter((entry) => reachable.has(entry.id)).flatMap((entry) => entry.nodes);
+    const count = descendants.filter((entry) => entry.kind === "agent_call").length;
+    const fanOut = node.kind === "batch" || descendants.some((entry) => entry.kind === "batch");
+    const label = `${count} agent call${count === 1 ? "" : "s"}${fanOut ? " \u00b7 fan-out" : ""}`;
+    await expect(canvas.locator(`.react-flow__node[data-id="${node.id}"] small`)).toHaveText(label);
+    const row = outline.getByRole("button", { name: node.id, exact: true }).locator("..");
+    await expect(row.getByText(label, { exact: true })).toBeVisible();
+  }
+}
 
 async function expectClearRoutes(canvas: Locator) {
   const failures = await canvas.evaluate((element) => {
@@ -29,6 +50,7 @@ async function expectClearRoutes(canvas: Locator) {
       for (let i = 0; i < tokens.length; i += 3) {
         const point = new DOMPoint(Number(tokens[i + 1]), Number(tokens[i + 2])).matrixTransform(matrix);
         if (tokens[i] === "L" && previous) {
+          if (Math.abs(point.x - previous.x) >= .1 && Math.abs(point.y - previous.y) >= .1) failures.push(`${path.id} is not orthogonal`);
           for (const { id, box } of nodes) {
             const crosses = Math.abs(point.x - previous.x) < .1
               ? point.x > box.left + .5 && point.x < box.right - .5 && Math.max(point.y, previous.y) > box.top + .5 && Math.min(point.y, previous.y) < box.bottom - .5
@@ -152,6 +174,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
       await expect(canvas.locator('.react-flow__node')).toHaveCount(graph.nodes.length);
       await expect(canvas.locator('.react-flow__edge')).toHaveCount(graph.edges.length);
       await expectClearRoutes(canvas);
+      await expectSubgraphSummaries(canvas, outline, workflow, graph);
       for (const node of graph.nodes) {
         await outline.getByRole('button', { name: node.id, exact: true }).focus();
         await page.keyboard.press('Enter');
@@ -264,6 +287,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
     await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
     await expect(canvas.locator('.react-flow__edge')).toHaveCount(root.edges.length);
     await expectClearRoutes(canvas);
+    await expectSubgraphSummaries(canvas, outline, workflow, root);
     await expect(canvas.getByText('unavailable', { exact: true })).toHaveCount(0);
     for (const route of ['eligible', 'suppressed', 'success', 'depth_exceeded', 'no_feasible_slot']) {
       await expect(canvas.getByText(route, { exact: true }).first()).toBeVisible();
@@ -283,6 +307,7 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
       await expect(canvas.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
       await expect(canvas.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
       await expectClearRoutes(canvas);
+      await expectSubgraphSummaries(canvas, outline, workflow, graph);
       await expect(section.getByText(/not a complete episode/)).toHaveCount(0);
       for (const node of graph.nodes) {
         const button = outline.getByRole("button", { name: node.id, exact: true });

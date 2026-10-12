@@ -23,6 +23,27 @@ export type WorkflowDocument = {
 };
 export type WorkflowResponse = { status: "available" | "partial" | "unavailable" | "invalid"; reason?: string; workflow?: WorkflowDocument };
 
+export type SubgraphSummary = { agentCalls: number; fanOut: boolean };
+
+export function subgraphSummary(doc: WorkflowDocument, graphId: string): SubgraphSummary {
+  const summary = { agentCalls: 0, fanOut: false }, visited = new Set<string>();
+  function visit(id: string) {
+    if (visited.has(id)) return;
+    visited.add(id);
+    for (const node of doc.graphs.find((graph) => graph.id === id)?.nodes ?? []) {
+      if (node.kind === "agent_call") summary.agentCalls++;
+      if (node.kind === "batch") summary.fanOut = true;
+      if (node.subgraph) visit(node.subgraph);
+    }
+  }
+  visit(graphId);
+  return summary;
+}
+
+export function summaryLabel(summary: SubgraphSummary): string {
+  return `${summary.agentCalls} agent call${summary.agentCalls === 1 ? "" : "s"}${summary.fanOut ? " \u00b7 fan-out" : ""}`;
+}
+
 export function branchTargets(graph: WorkflowGraph, id: string) {
   return graph.edges.filter((edge) => edge.source === id);
 }

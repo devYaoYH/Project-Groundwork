@@ -1,7 +1,64 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
-import { backEdges, branchTargets, layoutInput, portId, routePath, type WorkflowGraph } from "./workflow.ts";
+import { backEdges, branchTargets, layoutInput, portId, routePath, subgraphSummary, summaryLabel, type WorkflowDocument, type WorkflowGraph } from "./workflow.ts";
+
+const document: WorkflowDocument = {
+  schema_version: 1, environment_id: "test", basis: "executable_langgraph", structure_digest: "test",
+  root_graph: "root", diagnostics: [], graphs: [
+    { id: "root", edges: [], nodes: [
+      { id: "direct", symbol: "direct", kind: "agent_call" },
+      { id: "round", symbol: "round", kind: "subgraph", subgraph: "root/round" },
+      { id: "reflection", symbol: "reflection", kind: "subgraph", subgraph: "root/reflection" },
+    ] },
+    { id: "root/round", edges: [], nodes: [
+      { id: "a", symbol: "a", kind: "agent_call" },
+      { id: "decision", symbol: "decision", kind: "subgraph", subgraph: "root/round/decision" },
+    ] },
+    { id: "root/round/decision", edges: [], nodes: [{ id: "b", symbol: "b", kind: "agent_call" }] },
+    { id: "root/reflection", edges: [], nodes: [
+      { id: "launch", symbol: "launch", kind: "domain" },
+      { id: "batch", symbol: "batch", kind: "batch", subgraph: "root/reflection/batch" },
+      { id: "join", symbol: "join", kind: "domain" },
+    ] },
+    { id: "root/reflection/batch", edges: [], nodes: [{ id: "call", symbol: "call", kind: "agent_call" }] },
+    { id: "unreachable", edges: [], nodes: [{ id: "call", symbol: "call", kind: "agent_call" }] },
+  ],
+};
+
+test("subgraph summary counts only reachable agent nodes at every depth, including batch children", () => {
+  const before = structuredClone(document);
+  assert.deepEqual(subgraphSummary(document, "root"), { agentCalls: 4, fanOut: true });
+  assert.deepEqual(subgraphSummary(document, "root/round"), { agentCalls: 2, fanOut: false });
+  assert.deepEqual(subgraphSummary(document, "root/reflection"), { agentCalls: 1, fanOut: true });
+  assert.deepEqual(subgraphSummary(document, "root/reflection/batch"), { agentCalls: 1, fanOut: false });
+  assert.deepEqual(document, before);
+});
+
+test("subgraph summary guards revisits, shared descendants and cyclic child links", () => {
+  const doc = structuredClone(document);
+  doc.graphs[0].nodes.push({ id: "shared", symbol: "shared", kind: "subgraph", subgraph: "root/round/decision" });
+  doc.graphs[2].nodes.push({ id: "cycle", symbol: "cycle", kind: "subgraph", subgraph: "root" });
+  assert.deepEqual(subgraphSummary(doc, "root"), { agentCalls: 4, fanOut: true });
+  assert.deepEqual(subgraphSummary(doc, "root/round"), { agentCalls: 4, fanOut: true });
+});
+
+test("subgraph summary tolerates missing children and empty graphs", () => {
+  const doc = structuredClone(document);
+  doc.graphs.push({ id: "empty", nodes: [], edges: [] });
+  doc.graphs[0].nodes.push({ id: "missing", symbol: "missing", kind: "subgraph", subgraph: "missing" });
+  assert.deepEqual(subgraphSummary(doc, "empty"), { agentCalls: 0, fanOut: false });
+  assert.deepEqual(subgraphSummary(doc, "missing"), { agentCalls: 0, fanOut: false });
+  assert.deepEqual(subgraphSummary(doc, "root"), { agentCalls: 4, fanOut: true });
+});
+
+test("summary labels pluralize agent calls and advertise fan-out", () => {
+  assert.equal(summaryLabel({ agentCalls: 0, fanOut: false }), "0 agent calls");
+  assert.equal(summaryLabel({ agentCalls: 1, fanOut: false }), "1 agent call");
+  assert.equal(summaryLabel({ agentCalls: 7, fanOut: false }), "7 agent calls");
+  assert.equal(summaryLabel({ agentCalls: 1, fanOut: true }), "1 agent call \u00b7 fan-out");
+  assert.equal(summaryLabel({ agentCalls: 7, fanOut: true }), "7 agent calls \u00b7 fan-out");
+});
 
 const graph: WorkflowGraph = {
   id: "root", nodes: ["__start__", "check", "call", "end"].map((id) => ({ id, symbol: id, kind: "domain" })),
