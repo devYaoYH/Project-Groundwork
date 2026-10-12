@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cloud_platform.storage import ACTIVE, ArtifactStore, Repository
+from cloud_platform.runtime_bridge import LocalProcess, RuntimeBridge
 
 
 def now():
@@ -125,6 +126,10 @@ class Worker:
         self.artifacts = artifacts or ArtifactStore()
         self.workspace = Path(workspace or os.getenv("PLATFORM_WORKSPACE", "/workspace")).resolve()
         self.stopping = threading.Event()
+        execution_dir = os.getenv("PLATFORM_EXECUTION_DIR")
+        if self.artifacts.backend == "gcp" and not execution_dir:
+            raise ValueError("Hosted workers require a separate pinned runtime and PLATFORM_EXECUTION_DIR")
+        self.bridge = RuntimeBridge(execution_dir, self.artifacts) if execution_dir else None
 
     def stop(self, *_):
         self.stopping.set()
@@ -172,11 +177,19 @@ class Worker:
             thread.join(timeout=1)
 
     def _execute(self, launch):
-        from local_stack.control_plane import ControlPlane
+        from cloud_platform.frozen import open_frozen_control
 
+        if launch.get("worker_contract_version", 1) != 1:
+            raise ValueError("Unsupported worker execution contract")
+        for key, variable, fallback in (("worker_image_digest", "PLATFORM_WORKER_IMAGE_DIGEST", "PLATFORM_IMAGE_DIGEST"),
+                                        ("worker_source_sha", "PLATFORM_WORKER_SOURCE_SHA", "PLATFORM_SOURCE_SHA")):
+            expected = launch.get(key)
+            actual = os.getenv(variable) or os.getenv(fallback)
+            if expected and expected not in {"local", "test-source"} and actual != expected:
+                raise ValueError(f"Worker provenance mismatch for {key}")
         identifier = launch["id"]
         prefix = f"launches/{identifier}"
-        with tempfile.TemporaryDirectory(prefix="groundwork-launch-") as directory:
+        with tempfile.TemporaryDirectory(prefix="groundwork-launch-", dir=self.bridge.root if self.bridge else None) as directory:
             root = Path(directory)
             database = root / "trace.sqlite"
             database.write_bytes(self.artifacts.get(launch["snapshot_key"]))
@@ -187,12 +200,7 @@ class Worker:
             # Construction normally reconciles all launches as abandoned.
             # This snapshot has been explicitly admitted, so materialize the
             # control plane without that local-server restart side effect.
-            control = ControlPlane.__new__(ControlPlane)
-            control.path = database
-            control.trace_database = database
-            control.workspace = self.workspace
-            control.results_dir = results
-            control._init_db()
+            control = open_frozen_control(database, workspace=self.workspace, results_dir=results)
             with control._session() as db:
                 db.execute("UPDATE launches SET trace_database=?, execution_path=? WHERE id=?", (str(database), str(plan), identifier))
             command = [sys.executable, "-m", "expt_runner.run_experiment", str(plan),
@@ -218,8 +226,12 @@ class Worker:
             with log_path.open("w") as log:
                 live = _LiveDetailPublisher(self, control, identifier, log_path)
                 live.publish()
-                process = subprocess.Popen(command, cwd=self.workspace, env=env, stdout=log,
-                                           stderr=subprocess.STDOUT, start_new_session=True)
+                if self.bridge:
+                    process = self.bridge.start(command, env=env, log_path=log_path, run_dir=root, launch_id=identifier,
+                        runtime_identity={"source_sha": launch.get("runtime_source_sha", launch.get("source_sha")),
+                                          "image_digest": launch.get("runtime_image_digest", launch.get("image_digest"))})
+                else:
+                    process = LocalProcess(command, cwd=self.workspace, env=env, stdout=log, stderr=subprocess.STDOUT)
                 cancelled = False
                 timed_out = False
                 deadline = time.monotonic() + 3600
@@ -234,18 +246,16 @@ class Worker:
                         timed_out = time.monotonic() >= deadline
                         if timed_out or self.stopping.is_set() or record.get("status") in {"CANCELLING", "INTERRUPTED"} or record.get("cancel_requested"):
                             cancelled = record.get("status") == "CANCELLING" or bool(record.get("cancel_requested"))
-                            os.killpg(process.pid, signal.SIGTERM)
-                            try:
-                                process.wait(timeout=10)
-                            except subprocess.TimeoutExpired:
-                                os.killpg(process.pid, signal.SIGKILL)
+                            process.cancel()
                             break
                         self.stopping.wait(1)
                     code = process.wait()
                 finally:
-                    if process.poll() is None:
-                        os.killpg(process.pid, signal.SIGKILL)
-                        process.wait()
+                    try:
+                        if process.poll() is None:
+                            process.cancel()
+                    finally:
+                        process.close()
             live.consume_logs(final=True)
             if cancelled:
                 with control._session() as db:
@@ -255,6 +265,8 @@ class Worker:
             live.publish()
             if timed_out:
                 detail["launch"].update(status="FAILED", error="launch exceeded its 3600-second duration limit")
+            if process.error:
+                detail["launch"].update(status="FAILED", error=process.error)
             if self.stopping.is_set() and not cancelled:
                 detail["launch"].update(status="INTERRUPTED", error="worker stopped before completion")
             # SQLite backup includes committed WAL content in a standalone
@@ -315,7 +327,11 @@ def main(argv=None):
     if args.launch_id:
         # Duplicate Cloud Run execution returns successfully without spending
         # model tokens twice. Platform failures exit nonzero; Job retries=0.
-        worker.run_once(args.launch_id)
+        try:
+            worker.run_once(args.launch_id)
+        finally:
+            if worker.bridge:
+                worker.bridge.shutdown()
         return 0
     while not worker.stopping.is_set():
         try:

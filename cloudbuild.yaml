@@ -1,4 +1,35 @@
 steps:
+  - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    id: resolve-runtime
+    entrypoint: bash
+    args: ['deploy/run_python.sh', 'deploy/prepare_runtime.py', '--project', '$PROJECT_ID', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}', '--source-sha', '${_RUNTIME_SOURCE_SHA}']
+  - name: gcr.io/cloud-builders/docker
+    id: build-runtime
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if ! test -e .platform-build/runtime-existing; then
+          docker build -f Dockerfile.runtime -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' .
+        fi
+  - name: gcr.io/cloud-builders/docker
+    id: runtime-tests
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if ! test -e .platform-build/runtime-existing; then
+          docker run --rm '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' python -m expt_runner.run_experiment experiments/all_games_smoke.yaml --smoke-test --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
+        fi
+  - name: gcr.io/cloud-builders/docker
+    id: push-runtime
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if ! test -e .platform-build/runtime-existing; then
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}'
+        fi
   - name: gcr.io/cloud-builders/docker
     id: build
     args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
@@ -11,16 +42,20 @@ steps:
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: publish
     entrypoint: bash
-    args: ['deploy/run_python.sh', 'deploy/release.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '--source-sha', '${_SOURCE_SHA}', '--oauth-client-id', '${_GOOGLE_OAUTH_CLIENT_ID}']
+    args:
+      - -c
+      - |
+        bash deploy/run_python.sh deploy/release.py --project '$PROJECT_ID' --region '${_REGION}' --image '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}' --source-sha '${_SOURCE_SHA}' --runtime-image "$$(cat .platform-build/runtime-image)" --runtime-source-sha '${_RUNTIME_SOURCE_SHA}' --oauth-client-id '${_GOOGLE_OAUTH_CLIENT_ID}'
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: verify-hosted
     entrypoint: bash
-    args: ['deploy/run_python.sh', 'deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}']
+    args: ['deploy/run_python.sh', 'deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}', '--verify-runtime-bindings']
 substitutions:
   _REGION: us-central1
   _SOURCE_SHA: ''
+  _RUNTIME_SOURCE_SHA: ''
   _GOOGLE_OAUTH_CLIENT_ID: ''
 serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com
 options:
   logging: CLOUD_LOGGING_ONLY
-timeout: 1800s
+timeout: 2400s

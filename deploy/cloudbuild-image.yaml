@@ -1,14 +1,75 @@
-# Build-only bootstrap path; owner initializes the public service policy once.
-steps:
-  - name: gcr.io/cloud-builders/docker
-    args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
-  - name: gcr.io/cloud-builders/docker
-    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', 'tests/platform', '-q']
-images: ['${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
+# Build both immutable images; administrator initializes public service once.
 substitutions:
   _REGION: us-central1
   _SOURCE_SHA: ''
+  _RUNTIME_SOURCE_SHA: ''
 serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com
 options:
   logging: CLOUD_LOGGING_ONLY
-timeout: 1800s
+timeout: 2400s
+steps:
+- name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+  id: resolve-runtime
+  entrypoint: bash
+  args:
+  - deploy/run_python.sh
+  - deploy/prepare_runtime.py
+  - --project
+  - $PROJECT_ID
+  - --image
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}
+  - --source-sha
+  - ${_RUNTIME_SOURCE_SHA}
+- name: gcr.io/cloud-builders/docker
+  id: build-runtime
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    if ! test -e .platform-build/runtime-existing; then
+      docker build -f Dockerfile.runtime -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' .
+    fi
+- name: gcr.io/cloud-builders/docker
+  id: runtime-tests
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    if ! test -e .platform-build/runtime-existing; then
+      docker run --rm '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' python -m expt_runner.run_experiment experiments/all_games_smoke.yaml --smoke-test --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
+    fi
+- name: gcr.io/cloud-builders/docker
+  id: push-runtime
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    if ! test -e .platform-build/runtime-existing; then
+      docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}'
+    fi
+- name: gcr.io/cloud-builders/docker
+  id: build
+  args:
+  - build
+  - -f
+  - Dockerfile.platform
+  - -t
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}
+  - .
+- name: gcr.io/cloud-builders/docker
+  id: platform-tests
+  args:
+  - run
+  - --rm
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}
+  - python
+  - -m
+  - pytest
+  - cloud_platform/tests
+  - tests/platform
+  - -q
+- name: gcr.io/cloud-builders/docker
+  id: push
+  args:
+  - push
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}

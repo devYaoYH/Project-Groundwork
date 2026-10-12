@@ -47,7 +47,13 @@ export function DesignEditor() {
       setExperiment(detail.experiment);
       setText(detail.experiment.design_text ?? "");
       setSavedText(detail.experiment.design_text ?? "");
-      setRelease(await getEnvironment(detail.experiment.environment_id));
+      if (detail.experiment.locked_at) {
+        const cells = detail.cells ?? [];
+        setServerResult({ valid: true, errors: [], plan: { cells,
+          episodes_planned: cells.reduce((total, cell) => total + cell.episodes_planned, 0), preview_episode_config: null } });
+      } else {
+        setRelease(await getEnvironment(detail.experiment.environment_id));
+      }
     }).catch((reason: Error) => setMessage(reason.message));
   }, [id]);
 
@@ -61,7 +67,7 @@ export function DesignEditor() {
   }, [text]);
 
   useEffect(() => {
-    if (!experiment || !settledText) return;
+    if (!experiment || experiment.locked_at || !settledText) return;
     let cancelled = false;
     validateDesign(experiment.release_id, settledText).then((result) => {
       if (!cancelled) setServerResult(result);
@@ -74,10 +80,10 @@ export function DesignEditor() {
   }, [experiment, settledText]);
 
   const clientErrors = useMemo(
-    () => release ? validateClientDesign(parseClientDesign(settledText), release) : [],
-    [release, settledText],
+    () => release && !experiment?.locked_at ? validateClientDesign(parseClientDesign(settledText), release) : [],
+    [release, settledText, experiment?.locked_at],
   );
-  const pending = text !== settledText;
+  const pending = !experiment?.locked_at && text !== settledText;
   const dirty = text !== savedText;
   const errors = [...clientErrors, ...(serverResult?.errors ?? [])];
   const plan = serverResult?.plan;
@@ -175,7 +181,7 @@ export function DesignEditor() {
   }
 
   if (!id) return <p className="notice notice-error">Choose an experiment from the library.</p>;
-  if (!experiment || !release) return <p className="empty-state">Loading design...</p>;
+  if (!experiment || !release && !locked) return <p className="empty-state">Loading design...</p>;
   return (
     <>
       <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: experiment.name, href: `/experiment/?id=${encodeURIComponent(experiment.id)}` }, { label: "design" }]} />
@@ -194,18 +200,18 @@ export function DesignEditor() {
             <div className="section-heading">
               <div>
                 <h2>Checks</h2>
-                <p>Client checks use the pinned parameter projection; the server remains authoritative. Checks run once typing pauses.</p>
+                <p>{locked ? "This design and episode plan were validated when locked. Launches reuse that frozen plan." : "Client checks use the pinned parameter projection; the server remains authoritative. Checks run once typing pauses."}</p>
               </div>
               <button onClick={() => setSettledText(text)} disabled={locked || !pending}>{pending ? "Validate now" : "Up to date"}</button>
             </div>
             {pending ? <p className="notice notice-muted">Waiting for you to finish typing...</p>
               : errors.length ? <div className="check-list">{errors.map((error, index) => <p className="notice notice-error" key={`${error.path}-${index}`}><code>{error.path}</code> {error.message}</p>)}</div>
-              : <p className="notice notice-good">Design is consistent with this release.</p>}
+              : <p className="notice notice-good">{locked ? "Locked plan retained from the experiment's runtime." : "Design is consistent with this release."}</p>}
           </section>
         </div>
         <div className="design-column">
           <section className="card section-card"><div className="section-heading"><h2>Compiles to</h2><p>One cell per combination of factored levels.</p></div><div className="metric-grid"><div className="metric"><span>cells</span><strong>{plan?.cells.length ?? "-"}</strong></div><div className="metric"><span>episodes</span><strong>{plan?.episodes_planned ?? "-"}</strong></div></div>{plan?.preview_episode_config ? <ConfigDisclosure value={JSON.stringify(plan.preview_episode_config, null, 2)} /> : null}</section>
-          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>{isPlatform ? "Lock the preregistration before any launch, including smoke and dry run." : "Smoke and dry-run inspect a draft. Live execution requires its lock."}</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !serverResult?.valid || requiresLock}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !serverResult?.valid || requiresLock}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
+          <section className="card launch-card"><div className="section-heading"><h2>Launch</h2><p>{isPlatform ? "Lock the preregistration before any launch, including smoke and dry run." : "Smoke and dry-run inspect a draft. Live execution requires its lock."}</p></div><div className="launch-actions"><button onClick={() => launch("dry_run")} disabled={busy || !locked && !serverResult?.valid || requiresLock}>Dry run</button><button onClick={() => launch("smoke")} disabled={busy || !locked && !serverResult?.valid || requiresLock}>Smoke</button><button className="button button-primary" onClick={saveAndLock} disabled={busy || !canLock}>{locked ? "Locked" : "Lock preregistration"}</button><button className="button button-primary" onClick={() => launch("live")} disabled={busy || !locked}>Launch live</button></div></section>
         </div>
       </section>
     </>

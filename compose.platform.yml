@@ -13,6 +13,9 @@ services:
       SESSION_SECRET: local-development-only-change-for-real-google-login
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       PLATFORM_STATIC_DIR: /opt/groundwork-web
+      PLATFORM_RUNTIME_IMAGE: ${PLATFORM_RUNTIME_IMAGE:-groundwork-runtime:local}
+      PLATFORM_RUNTIME_DIGEST: local
+      PLATFORM_RUNTIME_SOURCE_SHA: local
     ports:
       - "127.0.0.1:${PLATFORM_PORT:-8080}:8080"
     volumes:
@@ -29,6 +32,41 @@ services:
       PLATFORM_BACKEND: local
       PLATFORM_DATA_DIR: /data
       PLATFORM_WORKSPACE: /workspace
+      PLATFORM_EXECUTION_DIR: /execution
+      PLATFORM_WORKER_CONTRACT_VERSION: "1"
+      PLATFORM_WORKER_SOURCE_SHA: local
+      PLATFORM_WORKER_IMAGE_DIGEST: local
+      PLATFORM_RUNTIME_IMAGE: ${PLATFORM_RUNTIME_IMAGE:-groundwork-runtime:local}
+      PLATFORM_RUNTIME_DIGEST: local
+      PLATFORM_RUNTIME_SOURCE_SHA: local
+    volumes:
+      - platform-data:/data
+      - platform-execution:/execution
+    depends_on:
+      api:
+        condition: service_healthy
+  runtime:
+    image: ${PLATFORM_RUNTIME_IMAGE:-groundwork-runtime:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    network_mode: "service:worker"
+    command:
+      - python
+      - -c
+      - |
+        import os, pathlib, sys, time
+        script = pathlib.Path('/execution/runtime_supervisor.py')
+        deadline = time.monotonic() + 120
+        while not script.is_file():
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Worker did not publish its runtime bridge within 120 seconds')
+            time.sleep(.2)
+        os.execv(sys.executable, [sys.executable, str(script), '--execution-dir', '/execution', '--loop'])
+    environment:
+      PLATFORM_EXECUTION_DIR: /execution
+      PLATFORM_RUNTIME_WORKSPACE: /workspace
+      PYTHONUNBUFFERED: "1"
       A2A_RUNTIME_MODE: loopback
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -36,9 +74,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
     volumes:
-      - platform-data:/data
+      - platform-execution:/execution
     depends_on:
-      api:
-        condition: service_healthy
+      worker:
+        condition: service_started
+        restart: true
 volumes:
   platform-data:
+  platform-execution:

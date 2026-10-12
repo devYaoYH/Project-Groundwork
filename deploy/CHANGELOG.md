@@ -1,5 +1,36 @@
 # Platform deployment changelog
 
+## Independent runtime and worker pins — 2026-10-11
+
+- Keep each experiment's runtime image, source SHA and frozen plan immutable while
+  resolving the current worker infrastructure for every new launch. Locked older
+  experiments receive worker fixes and live logs without a scientific-design fork.
+- Run the current worker and pinned episode runtime in two containers within one
+  Cloud Run Job. Shared execution files carry plans, output and completion state;
+  the worker handles logging, artifact publication and cancellation.
+- Record runtime and worker source SHAs and image digests, plus the worker contract
+  version, separately on launches and exports. Preserve legacy `source_sha` and
+  `image_digest` as runtime aliases. Historical launches retain their original
+  provenance; missing worker pins are not inferred or retroactively filled.
+- During deployment, publish immutable private runtime/worker bindings and create
+  `groundwork-run-<runtimeDigest12>-<workerDigest12>` Jobs for current and supported
+  legacy runtimes. Reject images predating the supported platform execution contract.
+  No separate migration command is required.
+- Show the two image pins in launch inspection and describe missing live logs as
+  a historical launch limitation. Both containers remain trusted code with the
+  same Job identity, network and execution volume; this is not an IAM isolation
+  boundary for untrusted images.
+- Read locked designs and cell counts from their frozen snapshots. Reopening or
+  launching them does not validate against the current environment catalog or run
+  newer scientific metadata backfills; draft validation remains unchanged.
+- Reuse the existing runtime image for infrastructure-only commits by resolving
+  the latest scientific-input commit in CI. Worker updates do not advance the
+  default experiment runtime. Paired Jobs share a 512 MiB memory budget and accept
+  only registered v1 execution-contract runtimes.
+
+This entry describes implementation on the separation branch. Hosted publication
+and a successful execution through the new binding are verified separately.
+
 ## Local developer catalogue
 
 - Generate release metadata automatically from installed game packages during
@@ -23,9 +54,9 @@
   backing storage allow reconnection to any control-service instance.
 - Keep ownership checks on both initial reads and streams. Session expiry stops
   a live stream; provisional progress cannot make a launch evidence-complete.
-- Earlier experiments retain their pinned worker release. Fork their design to
-  use the new live-log worker; existing results and execution provenance remain
-  available under their original release.
+- Historical launches retain the worker release they used. Their persisted logs,
+  results and execution provenance remain available; new executions use the
+  independent worker binding described above.
 - The production deployment workflow now triggers on `main`; the temporary
   verification-branch push trigger has been removed for the merge checkpoint.
 - Dropped Python 3.11 support: CI runs one Python 3.12 test job, and shipped

@@ -47,11 +47,27 @@ def main():
              "--project", project, "--location", region,
              "--member", f"serviceAccount:{accounts['build']}",
              "--role", "roles/artifactregistry.writer"], capture=True)
+    runtime_repository = "groundwork-runtime"
+    if not exists(["artifacts", "repositories", "describe", runtime_repository, "--project", project, "--location", region]):
+        command(["artifacts", "repositories", "create", runtime_repository, "--project", project,
+                 "--location", region, "--repository-format=docker", "--immutable-tags", "--quiet"])
+    else:
+        command(["artifacts", "repositories", "update", runtime_repository, "--project", project,
+                 "--location", region, "--immutable-tags", "--quiet"])
+    command(["artifacts", "repositories", "add-iam-policy-binding", runtime_repository,
+             "--project", project, "--location", region, "--member", f"serviceAccount:{accounts['build']}",
+             "--role", "roles/artifactregistry.writer"], capture=True)
     artifact_bucket, source_bucket = f"{project}-groundwork-artifacts", f"{project}-groundwork-build-source"
     bucket(project, artifact_bucket, region)
     bucket(project, source_bucket, region)
     for name in ("api", "worker"):
         bucket_grant(project, artifact_bucket, f"serviceAccount:{accounts[name]}", "roles/storage.objectAdmin")
+    # The build can publish/read catalogs, but cannot read experiment evidence.
+    binding_prefix = f"projects/_/buckets/{artifact_bucket}/objects/platform/runtime-bindings/"
+    for role in ("roles/storage.objectCreator", "roles/storage.objectViewer"):
+        command(["storage", "buckets", "add-iam-policy-binding", f"gs://{artifact_bucket}",
+                 "--project", project, "--member", f"serviceAccount:{accounts['build']}", "--role", role,
+                 "--condition", f"expression=resource.name.startsWith('{binding_prefix}'),title=groundwork-runtime-catalog"], capture=True)
     bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.objectAdmin")
     # builds submit checks source bucket metadata before uploading; object roles
     # do not include storage.buckets.get. Scope the extra read to this bucket.

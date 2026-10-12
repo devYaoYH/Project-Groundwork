@@ -1,7 +1,7 @@
 name: Platform release
 on:
   pull_request:
-    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'web/lib/environments.ts', 'web/lib/environment-ids.json', '.github/workflows/platform.yml']
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml']
   push:
     branches: [main]
   workflow_dispatch:
@@ -24,6 +24,13 @@ jobs:
       - run: uv run python scripts/export_environment_ids.py
       - run: uv run python -m pytest cloud_platform/tests tests/platform -q
       - run: docker compose -f compose.platform.yml config --quiet
+      - name: Verify the paired local worker and science runtime
+        run: |
+          docker compose -f compose.platform.yml up --build --detach --wait
+          uv run python deploy/verify_local.py --url http://localhost:8080
+      - name: Stop the verification stack
+        if: always()
+        run: docker compose -f compose.platform.yml down
   deploy:
     if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
     needs: validate
@@ -33,6 +40,14 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Identify the immutable scientific source
+        id: runtime
+        run: |
+          runtime_source_sha="$(git log -1 --format=%H -- Dockerfile.runtime scripts/install_workspace.py a2a-engine a2a-agent a2a-judge expt-runner games experiments)"
+          test -n "$runtime_source_sha"
+          echo "source_sha=$runtime_source_sha" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -43,9 +58,10 @@ jobs:
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
           GCP_REGION: ${{ vars.GCP_REGION }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+          RUNTIME_SOURCE_SHA: ${{ steps.runtime.outputs.source_sha }}
         run: >-
           gcloud builds submit . --project "$GCP_PROJECT" --region "$GCP_REGION"
           --config cloudbuild.yaml
           --service-account "projects/$GCP_PROJECT/serviceAccounts/groundwork-build@$GCP_PROJECT.iam.gserviceaccount.com"
           --gcs-source-staging-dir "gs://$GCP_PROJECT-groundwork-build-source/source"
-          --substitutions "_REGION=$GCP_REGION,_SOURCE_SHA=$GITHUB_SHA,_GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
+          --substitutions "_REGION=$GCP_REGION,_SOURCE_SHA=$GITHUB_SHA,_RUNTIME_SOURCE_SHA=$RUNTIME_SOURCE_SHA,_GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"

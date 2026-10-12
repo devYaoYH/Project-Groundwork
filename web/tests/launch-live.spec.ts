@@ -12,7 +12,8 @@ test("live launch logs reconnect, deduplicate and finish without full-detail pol
   await page.route("**/api/launches/live-test", route => {
     detailReads += 1;
     return route.fulfill({ json: { launch: { id: "live-test", experiment_id: "experiment", status: "RUNNING", mode: "smoke", max_parallelism: 1,
-      created_at: "2026-10-11T00:00:00Z", started_at: "2026-10-11T00:00:00Z", ended_at: null, live_logs: true },
+      created_at: "2026-10-11T00:00:00Z", started_at: "2026-10-11T00:00:00Z", ended_at: null, live_logs: true,
+      runtime_source_sha: "pinned-runtime-source", runtime_image_digest: "sha256:pinned-runtime", worker_source_sha: "current-worker-source", worker_image_digest: "sha256:current-worker", worker_contract_version: 1 },
       attempts: [attempt], progress, provisional: true, runner_logs: [log(1, "first persisted line")],
     } });
   });
@@ -39,6 +40,9 @@ test("live launch logs reconnect, deduplicate and finish without full-detail pol
   await expect(runner.getByRole("alert")).toHaveCount(0);
   await expect(page.getByText("Open episode", { exact: true })).toBeVisible();
   await expect(page.getByText("Earlier output is omitted here.", { exact: false })).toBeVisible();
+  await page.getByText("Runtime and worker provenance", { exact: true }).click();
+  await expect(page.getByText("pinned-runtime-source", { exact: true })).toBeVisible();
+  await expect(page.getByText("current-worker-source", { exact: true })).toBeVisible();
   expect((await output.textContent())?.match(/incremental line/g)).toHaveLength(1);
   expect(cursors).toEqual(["1", "1", "2"]);
   expect(detailReads).toBe(1);
@@ -47,14 +51,19 @@ test("live launch logs reconnect, deduplicate and finish without full-detail pol
   expect(detailReads).toBe(1);
 });
 
-test("earlier release launches explain why live logs are unavailable", async ({ page }) => {
+test("historical launches retain their worker limitation and runtime provenance", async ({ page }) => {
   await page.route("**/auth/config", route => route.fulfill({ json: { google_client_id: "", dev_auth: true, csrf_token: "legacy-csrf" } }));
   await page.route("**/auth/me", route => route.fulfill({ json: { user: { owner_id: "local:alice", display_name: "Alice", email: "alice@localhost" } } }));
   await page.route("**/api/launches/legacy-test", route => route.fulfill({ json: {
-    launch: { id: "legacy-test", experiment_id: "experiment", status: "RUNNING", mode: "smoke", max_parallelism: 1, live_logs: false },
+    launch: { id: "legacy-test", experiment_id: "experiment", status: "RUNNING", mode: "smoke", max_parallelism: 1, live_logs: false,
+      source_sha: "historical-runtime-source", image_digest: "sha256:historical-runtime" },
     attempts: [], runner_logs: [], progress: { planned: 1, completed: 0, failed: 0, by_cell: [] },
   } }));
   await page.route("**/api/launches/legacy-test/events?*", route => route.fulfill({ body: 'event: launch.status\ndata: {"status":"RUNNING"}\n\n', contentType: "text/event-stream" }));
   await page.goto("/launch/?id=legacy-test");
-  await expect(page.getByText("This experiment uses an earlier release;", { exact: false })).toContainText("Fork the design to use live logs.");
+  await expect(page.getByText("This launch used an earlier worker;", { exact: false })).toContainText("New launches use the current worker without changing the experiment runtime.");
+  await page.getByText("Runtime and worker provenance", { exact: true }).click();
+  await expect(page.getByText("historical-runtime-source", { exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Worker", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Fork the design to use live logs.", { exact: true })).toHaveCount(0);
 });

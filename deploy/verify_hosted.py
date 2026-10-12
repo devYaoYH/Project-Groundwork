@@ -5,11 +5,71 @@ mutations. Real Google login, owner isolation, execution and exports are separat
 authenticated end-to-end checks, not claims made by this script.
 """
 import argparse
+import hashlib
 import json
+import re
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+
+def verify_runtime_bindings(project, region, source_sha):
+    """Inspect persisted catalogs/Job definitions without executing any Job."""
+    try:
+        from .common import command
+        from .release import BOOTSTRAP, DIGEST, SOURCE, environment, image_digest, task_spec
+    except ImportError:
+        from common import command
+        from release import BOOTSTRAP, DIGEST, SOURCE, environment, image_digest, task_spec
+    service = json.loads(command(["run", "services", "describe", "groundwork-control",
+        "--project", project, "--region", region, "--format=json"], capture=True))
+    api = service["spec"]["template"]["spec"]["containers"][0]
+    values = environment(api)
+    worker_image = api["image"]
+    worker_digest = image_digest(worker_image)
+    assert values.get("PLATFORM_SOURCE_SHA") == source_sha, "API worker source differs from this release"
+    assert values.get("PLATFORM_IMAGE_DIGEST") == worker_digest, "API worker digest is incorrect"
+    key = values.get("PLATFORM_RUNTIME_CATALOG_KEY", "")
+    assert key.startswith("platform/runtime-bindings/") and ".." not in key, "runtime catalog key is invalid"
+    raw = command(["storage", "cat", f"gs://{project}-groundwork-artifacts/{key}"], capture=True)
+    if re.fullmatch(r"[0-9a-f]{64}\.json", key.rsplit("/", 1)[-1]):
+        assert hashlib.sha256(raw.encode()).hexdigest() + ".json" == key.rsplit("/", 1)[-1], "catalog content hash differs"
+    catalog = json.loads(raw)
+    assert catalog.get("schema_version") == 1, "unknown catalog schema"
+    assert catalog.get("worker") == {"source_sha": source_sha, "image_digest": worker_digest, "image": worker_image}, "catalog worker provenance differs"
+    runtimes = catalog.get("runtimes")
+    assert isinstance(runtimes, dict) and runtimes, "catalog has no supported runtimes"
+    current = runtimes.get(values.get("PLATFORM_RUNTIME_DIGEST"))
+    assert current and current["runtime_image"] == values.get("PLATFORM_RUNTIME_IMAGE"), "current science image has no binding"
+    assert current["runtime_source_sha"] == values.get("PLATFORM_RUNTIME_SOURCE_SHA"), "current science source differs"
+    for digest, binding in runtimes.items():
+        assert DIGEST.fullmatch(digest) and image_digest(binding["runtime_image"]) == digest, "runtime digest mismatch"
+        assert SOURCE.fullmatch(binding["runtime_source_sha"]) and binding.get("contract_version") == 1, "runtime contract is unsupported"
+        name = binding["job_name"]
+        assert re.fullmatch(r"groundwork-run-[0-9a-f]{12}-[0-9a-f]{12}", name), "Job binding name is invalid"
+        job = json.loads(command(["run", "jobs", "describe", name, "--project", project,
+            "--region", region, "--format=json"], capture=True))
+        task = task_spec(job)
+        containers = {value.get("name"): value for value in task["containers"]}
+        assert set(containers) == {"worker", "runtime"}, "paired Job requires exactly worker and runtime containers"
+        worker, science = containers["worker"], containers["runtime"]
+        assert worker["image"] == worker_image and science["image"] == binding["runtime_image"], "Job images differ from catalog"
+        assert worker.get("command") == ["python"] and worker.get("args") == ["-m", "cloud_platform.worker"], "Job worker command is incorrect"
+        assert science.get("command") == ["python"] and science.get("args") == ["-c", BOOTSTRAP], "Job runtime bootstrap differs from this infrastructure release"
+        worker_env, runtime_env = environment(worker), environment(science)
+        assert worker_env.get("PLATFORM_EXECUTION_DIR") == runtime_env.get("PLATFORM_EXECUTION_DIR") == "/execution", "bridge path differs"
+        assert worker_env.get("PLATFORM_WORKER_CONTRACT_VERSION") == "1", "worker contract differs"
+        assert worker_env.get("PLATFORM_SOURCE_SHA") == source_sha and worker_env.get("PLATFORM_IMAGE_DIGEST") == worker_digest, "Job worker provenance differs"
+        assert runtime_env.get("PLATFORM_RUNTIME_SOURCE_SHA") == binding["runtime_source_sha"] and runtime_env.get("PLATFORM_RUNTIME_DIGEST") == digest, "Job science provenance differs"
+        assert not any(entry["name"].endswith("_API_KEY") for entry in worker.get("env", [])), "provider credentials were mounted in the worker"
+        assert all({"name": "execution", "mountPath": "/execution"} in value.get("volumeMounts", []) for value in containers.values()), "execution volume is not shared"
+        volumes = {volume["name"]: volume for volume in task.get("volumes", [])}
+        assert volumes.get("execution", {}).get("emptyDir", {}).get("medium") == "Memory", "execution volume is not in-memory"
+        assert int(task.get("maxRetries", -1)) == 0 and int(task.get("timeoutSeconds", 0)) == 3600, "Job retry/duration limits differ"
+    return {"persisted_catalog": "passed", "paired_job_count": len(runtimes), "worker_source_sha": source_sha,
+            "worker_image_digest": worker_digest, "current_runtime_digest": values["PLATFORM_RUNTIME_DIGEST"],
+            "jobs_executed": 0}
 
 
 def response(base, path, method="GET", body=None):
@@ -74,9 +134,14 @@ if __name__ == "__main__":
     target.add_argument("--project")
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--verify-runtime-bindings", action="store_true")
     args = parser.parse_args()
+    if args.verify_runtime_bindings and not args.project:
+        parser.error("Runtime binding verification requires --project")
     url = args.url
     if args.project:
         from common import service_url
         url = service_url(args.project, args.region)
     verify(url, args.source_sha)
+    if args.verify_runtime_bindings:
+        print(json.dumps({"runtime_bindings": verify_runtime_bindings(args.project, args.region, args.source_sha)}, indent=2))
