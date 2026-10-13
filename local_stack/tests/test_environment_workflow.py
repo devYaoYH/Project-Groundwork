@@ -63,7 +63,7 @@ def test_real_workflow_http_status_and_no_source_reader(tmp_path):
         status, negotiation = get('/api/environments/negotiation/workflow')
         assert status == 200 and negotiation['status'] == 'available'
         graphs = negotiation['workflow']['graphs']
-        assert len(graphs) == 5
+        assert len(graphs) == 7
         assert {'bypass_decided', 'retry', 'both_decided', 'cap', 'stopped'} <= {edge.get('route_key') for graph in graphs for edge in graph['edges']}
         assert not any(key in json.dumps(negotiation) for key in ('/Users/', 'api_key', 'resource_supply', 'positions'))
         assert get("/api/environments/missing/workflow")[0] == 404

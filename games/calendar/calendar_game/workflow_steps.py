@@ -96,7 +96,9 @@ class EpisodeContext:
 
 
 def meeting_destination(state, runtime: Runtime):
-    return "next" if state["round_num"] < len(runtime.context.scenario["meetings"]) else "done"
+    if state["round_num"] < len(runtime.context.scenario["meetings"]):
+        return "next"
+    return "reflect" if environment_reflection_enabled(state, runtime) == "reflect" else "done"
 
 
 async def start_meeting(state, runtime: Runtime):
@@ -111,14 +113,6 @@ async def notify_round(actor, operation, observation, state, context):
     actor.start_round(context.scheduling.meeting, state["round_num"],
                       incurred_penalty=context.scheduling.displacement_cost[actor.agent_id])
     return {}
-
-
-async def voluntary_mode(state):
-    return {"mode": "VOLUNTARY"}
-
-
-async def participant_mode(state):
-    return {"mode": "DECISION"}
 
 
 async def resolve_meeting(state, runtime: Runtime):
@@ -275,17 +269,12 @@ async def invoke_talk(actor, operation, observation, state, context):
     return {"result": actor.turn(state["turn_index"], context.game.config.max_turns_per_round)}
 
 
-async def record_talk(state, runtime: Runtime):
+async def deliver_talk(state, runtime: Runtime):
     ctx = runtime.context
     agent_id = state["actor_order"][state["cursor"]]
     ctx.total_client_calls[agent_id] += 1
     ctx.game._append_event("turn_end", synthetic=True, data=event_data(state, ctx, "CHEAP_TALK", **result_data(state["result"])))
-    return {"round_turn_agent_ids": state["round_turn_agent_ids"] | {agent_id}}
-
-
-async def process_delivery(state, runtime: Runtime):
-    ctx = runtime.context
-    agent_id = state["actor_order"][state["cursor"]]
+    round_turn_agent_ids = state["round_turn_agent_ids"] | {agent_id}
     queued = set(state["already_queued"])
     active = state["has_activity"]
     for tool in ctx.game._worker_attempts(agent_id, state["result"].tool_calls):
@@ -295,7 +284,8 @@ async def process_delivery(state, runtime: Runtime):
         elif ctx.deliver(tool=tool, agent_id=agent_id, meeting=ctx.meeting, round_num=ctx.round_num,
                          turn_index=state["turn_index"], already_queued=queued):
             active = True
-    return {"already_queued": queued, "has_activity": active, "cursor": state["cursor"] + 1}
+    return {"round_turn_agent_ids": round_turn_agent_ids,
+            "already_queued": queued, "has_activity": active, "cursor": state["cursor"] + 1}
 
 
 def talk_pass_destination(state):
@@ -312,6 +302,16 @@ async def initialize_decisions(state, runtime: Runtime):
     return {"protocol": ctx.enter_phase(mode, ctx.round_num), "cursor": 0, "attempt": 0,
             "actor_order": sorted(state["already_queued"] - set(ctx.meeting["participants"])) if mode == "VOLUNTARY" else ctx.speaker_order,
             "staged_decisions": {}, "decision_phase_failed": False}
+
+
+async def begin_voluntary(state, runtime: Runtime):
+    updates = await initialize_decisions({**state, "mode": "VOLUNTARY"}, runtime)
+    return {"mode": "VOLUNTARY", **updates}
+
+
+async def begin_participant(state, runtime: Runtime):
+    updates = await initialize_decisions({**state, "mode": "DECISION"}, runtime)
+    return {"mode": "DECISION", **updates}
 
 
 def decision_inbox(agent, context):
@@ -340,22 +340,18 @@ async def prepare_decision(state, runtime: Runtime):
     return {"attempt": 0}
 
 
-def decision_kind(state):
-    return state["mode"]
-
-
 async def invoke_decision(actor, operation, observation, state, context):
     require_agent_step()
     result = actor.voluntary_decide(context.meeting) if operation == "voluntary_decide" else actor.decide(context.meeting)
     return {"result": result}
 
 
-async def record_decision(state, runtime: Runtime):
+async def record_decision_actions(state, runtime: Runtime):
     ctx = runtime.context
     ctx.total_client_calls[state["actor_order"][state["cursor"]]] += 1
     extra = {} if state["mode"] == "VOLUNTARY" else {"retry_count": state["result"].retry_count, "status": "pending"}
     ctx.game._append_event("decide_end", synthetic=True, data=event_data(state, ctx, state["mode"], **result_data(state["result"]), **extra))
-    return {}
+    return await filter_actions(state, runtime)
 
 
 async def filter_actions(state, runtime: Runtime):
@@ -449,7 +445,7 @@ async def invoke_retry(actor, operation, observation, state, context):
     return {"result": actor.client.retry_decide(state["attempt"], context.game.config.decision_retries, state["conflict"])}
 
 
-async def record_retry(state, runtime: Runtime):
+async def record_retry_actions(state, runtime: Runtime):
     ctx = runtime.context
     agent = select_ordered_actor(state, ctx)
     ctx.total_client_calls[agent.agent_id] += 1
@@ -457,7 +453,7 @@ async def record_retry(state, runtime: Runtime):
         ctx.game._append_event("decide_end", synthetic=True, data=event_data(state, ctx, "DECISION_RETRY",
             parent_phase=state["mode"], attempt=state["attempt"], **result_data(state["result"]),
             retry_count=state["result"].retry_count, status="pending"))
-    return {}
+    return await filter_actions(state, runtime)
 
 
 async def exhaust_decision(state, runtime: Runtime):
@@ -474,8 +470,6 @@ async def advance_actor(state):
 
 
 def transaction_destination(state, runtime: Runtime):
-    if state["mode"] == "VOLUNTARY":
-        return "voluntary_done"
     return "commit" if (not state["decision_phase_failed"] and not state["blocked_slot_violations"]
                         and len(state["staged_decisions"]) == len(runtime.context.speaker_order)) else "rollback"
 
@@ -523,6 +517,16 @@ async def launch_reflections(state, runtime: Runtime):
     return {"calls": calls}
 
 
+async def launch_round_reflections(state, runtime: Runtime):
+    await prepare_round_reflection(state, runtime)
+    return await launch_reflections(state, runtime)
+
+
+async def launch_environment_reflections(state, runtime: Runtime):
+    await prepare_environment_reflection(state, runtime)
+    return await launch_reflections(state, runtime)
+
+
 def reflection_calls(state, context):
     return state["calls"]
 
@@ -554,10 +558,6 @@ async def invoke_reflection(actor, operation, observation, state, context):
     return {"result": result}
 
 
-async def join_reflections(state):
-    return {}
-
-
 async def collect_reflections(state, runtime: Runtime):
     ctx = runtime.context
     estimates, counts = [], {}
@@ -581,3 +581,9 @@ async def collect_reflections(state, runtime: Runtime):
             "agent_id": agent_id, "target_agent_id": target, "num_slots": ctx.game.config.num_slots,
             "reflection_scope": scope, **data})
     return {"reflection_estimates": estimates, "reflection_call_counts": counts}
+
+
+async def join_and_record_reflections(state, runtime: Runtime):
+    updates = await collect_reflections(state, runtime)
+    await accumulate_reflections({**state, **updates}, runtime)
+    return updates

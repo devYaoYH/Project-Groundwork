@@ -130,7 +130,7 @@ def test_calendar_producer_marks_only_invocation_wrappers():
         assert "synthetic" not in event.data
 
 
-@pytest.mark.parametrize("function", ["prepare_retry", "record_retry"])
+@pytest.mark.parametrize("function", ["prepare_retry", "record_retry_actions"])
 def test_remote_retry_producer_marks_envelope(function, monkeypatch):
     import calendar_game.workflow_steps as steps
     from a2a_engine.tracing import EventLog
@@ -138,14 +138,22 @@ def test_remote_retry_producer_marks_envelope(function, monkeypatch):
     agent = SimpleNamespace(agent_id=0, calendar=Calendar(4))
     log = EventLog()
     game = SimpleNamespace(_remote_clients={0: object()}, config=SimpleNamespace(decision_retries=2),
-                           _append_event=log.append, _prompt_calendar_for_agent=lambda *args: "calendar")
-    context = SimpleNamespace(game=game, total_client_calls={0: 0}, round_num=1)
-    state = {"attempt": 0, "mode": "DECISION", "conflict": "conflict", "result": SimpleNamespace(retry_count=1)}
+                           _append_event=log.append, _prompt_calendar_for_agent=lambda *args: "calendar",
+                           topology=SimpleNamespace(legacy=False),
+                           _worker_attempts=lambda agent_id, calls: calls,
+                           _decision_actions=lambda calls, *args, **kwargs: calls)
+    context = SimpleNamespace(game=game, total_client_calls={0: 0}, round_num=1, meeting={})
+    state = {"attempt": 0, "mode": "DECISION", "conflict": "conflict",
+             "actor_order": [0], "cursor": 0, "already_queued": set(), "turn_index": 0,
+             "result": SimpleNamespace(retry_count=1, tool_calls=[])}
     monkeypatch.setattr(steps, "select_ordered_actor", lambda *args: agent)
     monkeypatch.setattr(steps, "decision_inbox", lambda *args: {})
     monkeypatch.setattr(steps, "event_data", lambda *args, **kwargs: kwargs)
     monkeypatch.setattr(steps, "result_data", lambda *args: {})
-    asyncio.run(getattr(steps, function)(state, SimpleNamespace(context=context)))
+    updates = asyncio.run(getattr(steps, function)(state, SimpleNamespace(context=context)))
+    if function == "record_retry_actions":
+        assert updates == {"actions": [], "already_queued": set()}
+        assert context.total_client_calls[0] == 1
     assert log.all()[0].synthetic is True
     assert "synthetic" not in log.all()[0].data
 
@@ -194,22 +202,64 @@ def test_export_is_complete_and_has_actual_retry_and_batch_boundaries_without_ex
     assert first["status"] == "available"
     body = first["workflow"]
     assert body["diagnostics"] == []
-    assert len(body["graphs"]) == 8
+    assert len(body["graphs"]) == 9
+    assert {g["id"]: (len(g["nodes"]), len(g["edges"])) for g in body["graphs"]} == {
+        "root": (6, 7),
+        "root/meeting": (16, 20),
+        "root/meeting/cheap_talk": (12, 15),
+        "root/meeting/voluntary_decisions": (14, 18),
+        "root/meeting/participant_decisions": (17, 22),
+        "root/meeting/round_reflection": (5, 4),
+        "root/meeting/round_reflection/bounded_fan_out": (3, 2),
+        "root/environment_reflection": (5, 4),
+        "root/environment_reflection/bounded_fan_out": (3, 2),
+    }
+    assert sum(len(g["nodes"]) for g in body["graphs"]) == 81
     root = next(g for g in body["graphs"] if g["id"] == "root")
-    routes = {e.get("route_key") for e in root["edges"]}
-    assert routes >= {"next", "done", "eligible", "suppressed", "success", "depth_exceeded", "no_feasible_slot", "reflect", "skip"}
-    assert not routes & {"ready", "unavailable"}
-    operations = {n.get("operation") for n in root["nodes"]}
-    assert "start_round" in operations
+    assert {n["id"] for n in root["nodes"]} == {
+        "__start__", "next_meeting", "meeting", "environment_reflection", "finalize", "__end__",
+    }
+    assert {e.get("route_key") for e in root["edges"]} - {None} == {"next", "reflect", "done"}
+    meeting = next(g for g in body["graphs"] if g["id"] == "root/meeting")
+    assert {e.get("route_key") for e in meeting["edges"]} - {None} == {
+        "invoke", "finished", "eligible", "suppressed", "success", "depth_exceeded", "no_feasible_slot", "reflect", "skip",
+    }
+    assert {n.get("operation") for n in meeting["nodes"]} - {None} == {"start_round"}
+    operations = {n.get("operation") for g in body["graphs"] for n in g["nodes"]}
     assert not operations & {"register", "episode_end"}
     assert not {n["id"] for n in root["nodes"]} & {"initialize", "external_readiness", "stopped_trace"}
-    decision = next(g for g in body["graphs"] if g["id"] == "root/participant_decisions")
-    assert {e.get("route_key") for e in decision["edges"]} >= {"retry", "stage", "apply", "exhausted", "commit", "rollback"}
+    assert not {n["id"] for n in root["nodes"]} & {
+        "voluntary_mode", "participant_mode", "prepare_round_reflection", "collect_round_reflections",
+        "prepare_environment_reflection", "collect_environment_reflections",
+    }
+    talk = next(g for g in body["graphs"] if g["id"] == "root/meeting/cheap_talk")
+    assert {e.get("route_key") for e in talk["edges"] if e["source"] == "deliver_talk"} == {"active", "contacted"}
+    voluntary = next(g for g in body["graphs"] if g["id"] == "root/meeting/voluntary_decisions")
+    assert {e.get("route_key") for e in voluntary["edges"]} - {None} == {
+        "invoke", "finished", "validate", "skip", "apply", "retry", "exhausted",
+    }
+    assert "apply_voluntary" in {n["id"] for n in voluntary["nodes"]}
+    assert not {n["id"] for n in voluntary["nodes"]} & {
+        "participant_call", "stage_participant", "transaction", "commit_participants", "rollback_participants",
+    }
+    decision = next(g for g in body["graphs"] if g["id"] == "root/meeting/participant_decisions")
+    assert {e.get("route_key") for e in decision["edges"]} - {None} == {
+        "invoke", "finished", "validate", "skip", "stage", "retry", "exhausted", "commit", "rollback",
+    }
+    assert {n["id"] for n in decision["nodes"]} >= {"stage_participant", "transaction", "commit_participants", "rollback_participants"}
+    assert not {n["id"] for n in decision["nodes"]} & {"voluntary_call", "apply_voluntary"}
+    for child in (voluntary, decision):
+        assert {n.get("operation") for n in child["nodes"]} - {None} == {
+            "voluntary_decide" if child is voluntary else "decide", "retry_decide",
+        }
+        for source in ("record_decision_actions", "record_retry_actions"):
+            assert {e.get("route_key") for e in child["edges"] if e["source"] == source} == {"validate", "skip"}
     assert not any(node["kind"] == "batch" for node in decision["nodes"])
-    reflection = next(g for g in body["graphs"] if g["id"] == "root/round_reflections")
+    reflection = next(g for g in body["graphs"] if g["id"] == "root/meeting/round_reflection")
     batch = next(node for node in reflection["nodes"] if node["kind"] == "batch")
     assert batch["serial_key_selector"] == "calendar_game.workflow_steps.remote_reporter_serial_key"
-    assert {n["id"] for n in reflection["nodes"]} >= {"launch_reflections", "join_reflections", "collect_in_call_order"}
+    for child in (reflection, next(g for g in body["graphs"] if g["id"] == "root/environment_reflection")):
+        assert {n["id"] for n in child["nodes"]} == {"__start__", "launch", "bounded_fan_out", "join_in_call_order", "__end__"}
     body_call = next(g for g in body["graphs"] if g["id"] == batch["subgraph"])
     assert next(n for n in body_call["nodes"] if n["kind"] == "agent_call")["actor_selector"].endswith("select_reporter_target")
     assert len(json.dumps(first)) < 80000

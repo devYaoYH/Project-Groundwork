@@ -72,6 +72,12 @@ def no_observation(state, context):
     return {}
 
 
+def for_seat(observe, label):
+    def observe_seat(state, context):
+        return observe({**state, 'actor': label}, context)
+    return observe_seat
+
+
 def actor_observation(state, context):
     label = state['actor']
     suffix = label[-1]
@@ -150,7 +156,7 @@ async def choose_b(state: GameState):
     return {'actor': 'agent_b'}
 
 
-async def check(state: GameState):
+async def next_round(state: GameState):
     return {}
 
 
@@ -201,6 +207,11 @@ def talk_destination(state: GameState, runtime: Runtime[GameContext]):
 
 def unresolved(state: GameState):
     return 'invoke' if state['alloc_' + state['actor'][-1]] is None else 'bypass_decided'
+
+
+def pass_destination(state: GameState, runtime: Runtime[GameContext]):
+    destination = talk_destination(state, runtime)
+    return unresolved(state) if destination == 'continue' else destination
 
 
 async def prepare_talk(state: GameState, runtime: Runtime[GameContext]):
@@ -286,11 +297,11 @@ async def start_decision(state: GameState, runtime: Runtime[GameContext]):
     engine = runtime.context.engine
     if not engine.config.enable_cheap_talk or state['alloc_a'] is None or state['alloc_b'] is None:
         await engine._emit('phase_start', {'round': state['round_number'], 'phase': 'decision'})
-    return {}
+    return {'actor': 'agent_a', 'feedback': state['project_update_a'] or ''}
 
 
-async def project_feedback(state: GameState):
-    return {'feedback': state['project_update_' + state['actor'][-1]] or ''}
+async def project_b(state: GameState):
+    return {'actor': 'agent_b', 'feedback': state['project_update_b'] or ''}
 
 
 def project_destination(state: GameState, runtime: Runtime[GameContext]):
@@ -371,11 +382,7 @@ async def complete_round(state: GameState, runtime: Runtime[GameContext]):
     result = await runtime.context.engine._complete_round(*(state[key] for key in
         ('round_number', 'alloc_a', 'alloc_b', 'transcript', 'total_demanded', 'overdrawn',
          'reward_a', 'reward_b', 'proj_details_a', 'proj_details_b')))
-    return {'result': result}
-
-
-async def advance_round(state: GameState):
-    return {'round_number': state['round_number'] + 1}
+    return {'result': result, 'round_number': state['round_number'] + 1}
 
 
 async def build_summary(state: GameState, runtime: Runtime[GameContext]):
@@ -424,35 +431,30 @@ def chain(builder, *names):
 
 def cheap_talk_program():
     builder = graph()
-    domain(builder, start_talk, check, choose_a, choose_b, prepare_talk, parse_talk, record_talk, advance_turn)
-    builder.add_node('a_call', AgentStep(select_a, 'cheap_talk', actor_observation, invoke))
-    builder.add_node('b_call', AgentStep(select_b, 'cheap_talk', actor_observation, invoke))
+    domain(builder, start_talk, choose_b, prepare_talk, parse_talk, record_talk, advance_turn)
+    builder.add_node('next_pass', choose_a)
+    builder.add_node('talk_call', AgentStep(select_deciding_actor, 'cheap_talk', actor_observation, invoke))
     builder.add_node('error_feedback', AgentStep(select_deciding_actor, 'error_feedback', actor_observation, invoke))
-    chain(builder, START, 'start_talk', 'check')
-    builder.add_conditional_edges('check', talk_destination, {'continue': 'choose_a', 'both_decided': END, 'cap': END})
-    for name in ('choose_a', 'choose_b'):
-        builder.add_conditional_edges(name, unresolved, {'invoke': 'prepare_talk', 'bypass_decided': 'choose_b' if name == 'choose_a' else 'advance_turn'})
-    builder.add_conditional_edges('prepare_talk', lambda_actor, {'agent_a': 'a_call', 'agent_b': 'b_call'})
-    builder.add_edge('a_call', 'parse_talk')
-    builder.add_edge('b_call', 'parse_talk')
+    chain(builder, START, 'start_talk', 'next_pass')
+    builder.add_conditional_edges('next_pass', pass_destination, {
+        'both_decided': END, 'cap': END, 'invoke': 'prepare_talk', 'bypass_decided': 'choose_b'})
+    builder.add_conditional_edges('choose_b', unresolved, {'invoke': 'prepare_talk', 'bypass_decided': 'advance_turn'})
+    chain(builder, 'prepare_talk', 'talk_call', 'parse_talk')
     builder.add_conditional_edges('parse_talk', needs_feedback, {'feedback': 'error_feedback', 'record': 'record_talk'})
     chain(builder, 'error_feedback', 'record_talk')
     builder.add_conditional_edges('record_talk', after_talk, {'both_decided': END, 'next_b': 'choose_b', 'advance': 'advance_turn'})
-    chain(builder, 'advance_turn', 'check')
+    chain(builder, 'advance_turn', 'next_pass')
     return GraphProgram(builder)
 
 
-def lambda_actor(state: GameState):
-    return state['actor']
-
-
-def decision_program():
+def decision_program(chooser):
     builder = graph()
-    domain(builder, check, prepare_decision, validate_decision, record_invalid, exhaust_decision, record_decision)
+    domain(builder, prepare_decision, validate_decision, record_invalid, exhaust_decision, record_decision)
+    builder.add_node('begin', chooser)
     builder.add_node('allocation_call', AgentStep(select_deciding_actor, 'decide_allocation', actor_observation, invoke))
     builder.add_node('error_feedback', AgentStep(select_deciding_actor, 'error_feedback', actor_observation, invoke))
-    chain(builder, START, 'check')
-    builder.add_conditional_edges('check', unresolved, {'invoke': 'prepare_decision', 'bypass_decided': END})
+    chain(builder, START, 'begin')
+    builder.add_conditional_edges('begin', unresolved, {'invoke': 'prepare_decision', 'bypass_decided': END})
     chain(builder, 'prepare_decision', 'allocation_call', 'validate_decision')
     builder.add_conditional_edges('validate_decision', validation_destination, {'valid': 'record_decision', 'invalid': 'record_invalid'})
     chain(builder, 'record_invalid', 'error_feedback')
@@ -463,59 +465,69 @@ def decision_program():
 
 def round_program():
     builder = graph()
-    domain(builder, prepare_round, check, start_decision, choose_a, choose_b, resolve_round, complete_round)
+    domain(builder, prepare_round, start_decision, project_b, resolve_round, complete_round)
     builder.add_node('cheap_talk', cheap_talk_program().compiled)
-    builder.add_node('decision_a', decision_program().compiled)
-    builder.add_node('decision_b', decision_program().compiled)
-    builder.add_node('project_a', project_feedback)
-    builder.add_node('project_b', project_feedback)
+    builder.add_node('decision_a', decision_program(choose_a).compiled)
+    builder.add_node('decision_b', decision_program(choose_b).compiled)
     for suffix, selector in (('a', select_a), ('b', select_b)):
         builder.add_node('update_' + suffix, AgentStep(selector, 'project_update', actor_observation, invoke))
-        builder.add_node('notify_' + suffix, AgentStep(selector, 'notify_round_result', notification_observation, invoke))
+        builder.add_node('notify_' + suffix, AgentStep(selector, 'notify_round_result',
+            for_seat(notification_observation, 'agent_' + suffix), invoke))
     chain(builder, START, 'prepare_round')
     builder.add_conditional_edges('prepare_round', talk_enabled, {'enabled': 'cheap_talk', 'disabled': 'start_decision'})
-    chain(builder, 'cheap_talk', 'start_decision', 'choose_a', 'project_a')
-    builder.add_conditional_edges('project_a', project_destination, {'update': 'update_a', 'bypass': 'choose_b'})
-    chain(builder, 'update_a', 'choose_b', 'project_b')
-    builder.add_conditional_edges('project_b', project_destination, {'update': 'update_b', 'bypass': 'check'})
-    chain(builder, 'update_b', 'check')
-    builder.add_node('decide_a', choose_a)
-    builder.add_node('decide_b', choose_b)
-    chain(builder, 'check', 'decide_a', 'decision_a', 'decide_b', 'decision_b', 'resolve_round')
-    builder.add_node('result_a', choose_a)
-    builder.add_node('result_b', choose_b)
-    chain(builder, 'resolve_round', 'result_a', 'notify_a', 'result_b', 'notify_b', 'complete_round', END)
+    chain(builder, 'cheap_talk', 'start_decision')
+    builder.add_conditional_edges('start_decision', project_destination, {'update': 'update_a', 'bypass': 'project_b'})
+    chain(builder, 'update_a', 'project_b')
+    builder.add_conditional_edges('project_b', project_destination, {'update': 'update_b', 'bypass': 'decision_a'})
+    chain(builder, 'update_b', 'decision_a', 'decision_b', 'resolve_round', 'notify_a', 'notify_b', 'complete_round', END)
+    return GraphProgram(builder)
+
+
+def reset_program():
+    builder = graph()
+    for suffix, selector, chooser in (('a', select_a, choose_a), ('b', select_b, choose_b)):
+        builder.add_node('reset_guard_' + suffix, chooser)
+        builder.add_node('reset_' + suffix, AgentStep(selector, 'reset_context', no_observation, invoke))
+        builder.add_node('record_reset_' + suffix, record_reset)
+    chain(builder, START, 'reset_guard_a')
+    for suffix, target in (('a', 'reset_guard_b'), ('b', END)):
+        builder.add_conditional_edges('reset_guard_' + suffix, reset_destination, {'reset': 'reset_' + suffix, 'bypass': target})
+        chain(builder, 'reset_' + suffix, 'record_reset_' + suffix, target)
+    return GraphProgram(builder)
+
+
+def reflections_program():
+    builder = graph()
+    for suffix, selector, chooser in (('a', select_a, choose_a), ('b', select_b, choose_b)):
+        builder.add_node('reflect_guard_' + suffix, chooser)
+        builder.add_node('reflect_' + suffix, AgentStep(selector, 'reflect', reflection_observation, invoke))
+    chain(builder, START, 'reflect_guard_a')
+    for suffix, target in (('a', 'reflect_guard_b'), ('b', END)):
+        builder.add_conditional_edges('reflect_guard_' + suffix, reflection_destination, {'reflect': 'reflect_' + suffix, 'bypass': target})
+        chain(builder, 'reflect_' + suffix, target)
     return GraphProgram(builder)
 
 
 def build_program():
     builder = graph()
-    domain(builder, check, stopped, choose_a, choose_b, advance_round, build_summary, complete_game)
+    domain(builder, next_round, stopped, complete_game)
+    builder.add_node('summarize', build_summary)
+    builder.add_node('reset_contexts', reset_program().compiled)
     builder.add_node('round', round_program().compiled)
-    for suffix, selector, chooser in (('a', select_a, choose_a), ('b', select_b, choose_b)):
-        builder.add_node('initialize_' + suffix, AgentStep(selector, 'initialize_session', actor_observation, invoke))
-        builder.add_node('reset_guard_' + suffix, chooser)
-        builder.add_node('reset_' + suffix, AgentStep(selector, 'reset_context', no_observation, invoke))
-        builder.add_node('record_reset_' + suffix, record_reset)
-        builder.add_node('reflect_guard_' + suffix, chooser)
-        builder.add_node('reflect_' + suffix, AgentStep(selector, 'reflect', reflection_observation, invoke))
-    chain(builder, START, 'choose_a', 'initialize_a', 'choose_b', 'initialize_b', 'check')
-    builder.add_conditional_edges('check', round_destination, {'continue': 'reset_guard_a', 'stopped': 'stopped', 'exhausted': 'build_summary'})
-    chain(builder, 'stopped', 'build_summary')
-    for suffix, target in (('a', 'reset_guard_b'), ('b', 'round')):
-        builder.add_conditional_edges('reset_guard_' + suffix, reset_destination, {'reset': 'reset_' + suffix, 'bypass': target})
-        chain(builder, 'reset_' + suffix, 'record_reset_' + suffix, target)
-    chain(builder, 'round', 'advance_round', 'check')
-    chain(builder, 'build_summary', 'reflect_guard_a')
-    for suffix, target in (('a', 'reflect_guard_b'), ('b', 'complete_game')):
-        builder.add_conditional_edges('reflect_guard_' + suffix, reflection_destination, {'reflect': 'reflect_' + suffix, 'bypass': target})
-        chain(builder, 'reflect_' + suffix, target)
+    builder.add_node('reflections', reflections_program().compiled)
+    for suffix, selector in (('a', select_a), ('b', select_b)):
+        builder.add_node('open_session_' + suffix, AgentStep(selector, 'initialize_session',
+            for_seat(actor_observation, 'agent_' + suffix), invoke))
+    chain(builder, START, 'open_session_a', 'open_session_b', 'next_round')
+    builder.add_conditional_edges('next_round', round_destination, {'continue': 'reset_contexts', 'stopped': 'stopped', 'exhausted': 'summarize'})
+    chain(builder, 'reset_contexts', 'round', 'next_round')
+    chain(builder, 'stopped', 'summarize', 'reflections', 'complete_game')
     chain(builder, 'complete_game', END)
     return GraphProgram(builder)
 
 
 def execution_limit(config):
-    # Nested graphs share the superstep budget. Two actors take at most eight
-    # scheduling/validation steps each per talk pass; decisions have three calls.
+    # Upper bound inherited by each nested graph's local loop. Two actors take
+    # at most eight steps each per talk pass; decisions have three calls.
     turns = config.cheap_talk_turns if config.cheap_talk_turns > 0 else 1000
     return max(100, 100 + max(0, config.num_rounds) * (100 + 20 * turns if config.enable_cheap_talk else 100))

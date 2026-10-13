@@ -142,7 +142,8 @@ def test_export_never_executes_backend_or_selectors(monkeypatch):
         monkeypatch.setattr(target, forbidden)
     # Preserve callable symbols for structural introspection.
     from types import FunctionType
-    builders = {'graph', 'domain', 'chain', 'cheap_talk_program', 'decision_program', 'round_program', 'build_program'}
+    builders = {'graph', 'domain', 'chain', 'for_seat', 'cheap_talk_program', 'decision_program',
+                'round_program', 'reset_program', 'reflections_program', 'build_program'}
     functions = [(name, fn) for name, fn in vars(workflow).items()
                  if isinstance(fn, FunctionType) and fn.__module__ == workflow.__name__ and name not in builders]
     for name, original in functions:
@@ -152,9 +153,42 @@ def test_export_never_executes_backend_or_selectors(monkeypatch):
         monkeypatch.setattr(workflow, name, fail)
     output = environment_workflow('negotiation')
     assert output['status'] == 'available'
+    assert output['workflow']['diagnostics'] == []
     assert output == environment_workflow('negotiation')
     graphs = output['workflow']['graphs']
-    assert len(graphs) == 5
+    assert len(graphs) == 7
+    assert {graph['id']: (len(graph['nodes']), len(graph['edges'])) for graph in graphs} == {
+        'root': (11, 12),
+        'root/reset_contexts': (8, 9),
+        'root/reflections': (6, 7),
+        'root/round': (14, 16),
+        'root/round/cheap_talk': (11, 17),
+        'root/round/decision_a': (10, 12),
+        'root/round/decision_b': (10, 12),
+    }
+    assert sum(len(graph['nodes']) for graph in graphs) == 70
+    by_id = {graph['id']: graph for graph in graphs}
+    root_nodes = {node['id'] for node in by_id['root']['nodes']}
+    assert root_nodes == {'__start__', '__end__', 'open_session_a', 'open_session_b',
+                          'next_round', 'reset_contexts', 'round', 'stopped', 'summarize',
+                          'reflections', 'complete_game'}
+    assert {(edge['source'], edge['target'], edge.get('route_key')) for edge in by_id['root']['edges']} == {
+        ('__start__', 'open_session_a', None), ('open_session_a', 'open_session_b', None),
+        ('open_session_b', 'next_round', None), ('next_round', 'reset_contexts', 'continue'),
+        ('next_round', 'stopped', 'stopped'), ('next_round', 'summarize', 'exhausted'),
+        ('reset_contexts', 'round', None), ('round', 'next_round', None),
+        ('stopped', 'summarize', None), ('summarize', 'reflections', None),
+        ('reflections', 'complete_game', None), ('complete_game', '__end__', None),
+    }
+    round_nodes = {node['id'] for node in by_id['root/round']['nodes']}
+    assert not {'choose_a', 'choose_b', 'check', 'decide_a', 'decide_b', 'result_a', 'result_b', 'project_a'} & round_nodes
+    talk_nodes = {node['id'] for node in by_id['root/round/cheap_talk']['nodes']}
+    assert {'next_pass', 'talk_call', 'choose_b'} <= talk_nodes
+    assert not {'check', 'choose_a', 'a_call', 'b_call'} & talk_nodes
+    for suffix in ('a', 'b'):
+        decision_nodes = {node['id'] for node in by_id[f'root/round/decision_{suffix}']['nodes']}
+        assert {'begin', 'prepare_decision'} <= decision_nodes
+        assert 'check' not in decision_nodes
     assert not {'initialize', 'register_a', 'register_b', 'end_a', 'end_b'} & {node['id'] for node in graphs[0]['nodes']}
     assert not {'register', 'episode_end'} & {node.get('operation') for graph in graphs for node in graph['nodes']}
     for graph in graphs:
@@ -214,3 +248,76 @@ def test_negotiation_gateway_rejects_hidden_or_mismatched_invocations(violation)
             await step({}, SimpleNamespace(context=context))
     with pytest.raises(RuntimeError, match='AgentStep'):
         asyncio.run(run())
+
+
+@pytest.mark.parametrize('actor', ['agent_a', 'agent_b'])
+def test_fixed_seat_notification_observation_does_not_mutate_actor(actor):
+    from types import SimpleNamespace
+    state = {'actor': actor, 'round_num_a': 1, 'round_num_b': 2,
+             'alloc_a': {'wood': 1}, 'alloc_b': {'stone': 2},
+             'reward_a': 10, 'reward_b': 20, 'overdrawn': False,
+             'proj_details_a': {'a': 1}, 'proj_details_b': {'b': 2}}
+    original = deepcopy(state)
+    context = SimpleNamespace(engine=SimpleNamespace(config=SimpleNamespace(visible_opponent_reward=False)))
+    for label in ('agent_a', 'agent_b'):
+        observe = workflow.for_seat(workflow.notification_observation, label)
+        assert observe(state, context) == workflow.notification_observation({**state, 'actor': label}, context)
+        assert state == original
+
+
+@pytest.mark.parametrize('actor', [None, 'agent_a', 'agent_b'])
+def test_fixed_seat_session_observation_does_not_require_or_mutate_actor(actor):
+    engine = GameEngine(GameConfig(), ControlledAgent(), ControlledAgent())
+    context = workflow.GameContext(engine)
+    state = {'round_number': 1, 'reflections': {}}
+    if actor is not None:
+        state['actor'] = actor
+    original = deepcopy(state)
+    for label in ('agent_a', 'agent_b'):
+        observe = workflow.for_seat(workflow.actor_observation, label)
+        assert observe(state, context) == workflow.actor_observation({**state, 'actor': label}, context)
+        assert state == original
+
+
+@pytest.mark.parametrize('enable_talk', [False, True])
+@pytest.mark.parametrize('first_speaker', [0, 1])
+def test_fixed_seat_round_preserves_notification_order_and_standalone_state(enable_talk, first_speaker):
+    cfg = GameConfig(episode_uid='fixed-seat', num_rounds=3, cheap_talk_turns=1,
+                     enable_cheap_talk=enable_talk, first_speaker=first_speaker,
+                     mode=GameMode.SHIFTING, agent_shifting=[True, False], rotate_projects=True)
+
+    async def run(engine_cls):
+        notifications, events = [], []
+
+        class OrderedAgent(ControlledAgent):
+            def notify_round_result(self, *args, **kwargs):
+                notifications.append(self.label)
+                super().notify_round_result(*args, **kwargs)
+
+        agents = [OrderedAgent(['{"wood": 1}'], ({'wood': 1},)),
+                  OrderedAgent(['{"stone": 2}'], ({'stone': 2},))]
+        for agent, label in zip(agents, ('agent_a', 'agent_b')):
+            agent.label = label
+        engine = engine_cls(deepcopy(cfg), *agents)
+
+        async def emit(kind, data):
+            events.append((kind, deepcopy(data)))
+
+        engine.on_event(emit)
+        if engine_cls is GameEngine:
+            state = await workflow.round_program().ainvoke(
+                {'round_number': 2, 'actor': 'agent_a'}, context=workflow.GameContext(engine),
+                config={'recursion_limit': workflow.execution_limit(cfg)})
+            assert state['actor'] == 'agent_b'
+            assert state['round_number'] == 3
+            assert state['result'].round_number == 2
+            result = state['result']
+        else:
+            result = await engine.run_round(2)
+        assert notifications == ['agent_a', 'agent_b']
+        assert all(not any(call[0] == 'reset' for call in agent.calls) for agent in agents)
+        assert engine.results == [result]
+        return result, events, [agent.calls for agent in agents], [
+            engine.agent_a_state.memory, engine.agent_b_state.memory]
+
+    assert asyncio.run(run(GameEngine)) == asyncio.run(run(LegacyEngine))
