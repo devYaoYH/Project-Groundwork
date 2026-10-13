@@ -1,0 +1,201 @@
+schema_version: 1
+id: map_director.tiny
+release: v2
+description: Repeated map grounding with independent landmark jitter and diverse valid
+  routes through ordered passages.
+engine:
+  environment_id: map_director
+  defaults:
+    num_agents: 2
+    num_rounds: 2
+    max_turns: 6
+    task_version: v2
+    item_id: jitter_4_seed_17
+inputs:
+- id: maps
+  path: ../map_director/items/maps_v2.jsonl
+  sha256: 333c9714dc4d666b522254ce1f97f84fb919726e9d54b81fac126c70d05eddc9
+- id: asset.0f13b1a2dbfd4d350687252388b7d97bdbc44c31db4671a59592f8ba6d992cf6
+  path: ../map_director/items/assets/0f13b1a2dbfd4d350687252388b7d97bdbc44c31db4671a59592f8ba6d992cf6
+  sha256: 0f13b1a2dbfd4d350687252388b7d97bdbc44c31db4671a59592f8ba6d992cf6
+- id: asset.1c07ff19378abc9bf26f29d123aceaf8e7c9b386c4f5238b9ccba64f2bd10467
+  path: ../map_director/items/assets/1c07ff19378abc9bf26f29d123aceaf8e7c9b386c4f5238b9ccba64f2bd10467
+  sha256: 1c07ff19378abc9bf26f29d123aceaf8e7c9b386c4f5238b9ccba64f2bd10467
+- id: asset.26159940b4809a18ac600da0a77ea048f9d3597d36cf36d294e27b8d407c8bff
+  path: ../map_director/items/assets/26159940b4809a18ac600da0a77ea048f9d3597d36cf36d294e27b8d407c8bff
+  sha256: 26159940b4809a18ac600da0a77ea048f9d3597d36cf36d294e27b8d407c8bff
+- id: asset.3cec8a0808cd7ec4379f773d891d73022e9437a2e8cc308995975ff952467e8e
+  path: ../map_director/items/assets/3cec8a0808cd7ec4379f773d891d73022e9437a2e8cc308995975ff952467e8e
+  sha256: 3cec8a0808cd7ec4379f773d891d73022e9437a2e8cc308995975ff952467e8e
+- id: asset.4113a0851ed82916b1778accce388bfc09ee28fbe8079c668b5bb876fe45d8de
+  path: ../map_director/items/assets/4113a0851ed82916b1778accce388bfc09ee28fbe8079c668b5bb876fe45d8de
+  sha256: 4113a0851ed82916b1778accce388bfc09ee28fbe8079c668b5bb876fe45d8de
+- id: asset.54d7f9b7b521a755d20996dfd48068a89b5d14917e26503c1a25eb44c1e272f9
+  path: ../map_director/items/assets/54d7f9b7b521a755d20996dfd48068a89b5d14917e26503c1a25eb44c1e272f9
+  sha256: 54d7f9b7b521a755d20996dfd48068a89b5d14917e26503c1a25eb44c1e272f9
+- id: asset.560bb98b1627b0f0d79c05e77f9b878fdadcd8b1fb2b567a486fe2f0ca490557
+  path: ../map_director/items/assets/560bb98b1627b0f0d79c05e77f9b878fdadcd8b1fb2b567a486fe2f0ca490557
+  sha256: 560bb98b1627b0f0d79c05e77f9b878fdadcd8b1fb2b567a486fe2f0ca490557
+- id: asset.799cf49a68587c1161b4d2563d4bd5e81f5a2736150d60b63b3d272d4432942f
+  path: ../map_director/items/assets/799cf49a68587c1161b4d2563d4bd5e81f5a2736150d60b63b3d272d4432942f
+  sha256: 799cf49a68587c1161b4d2563d4bd5e81f5a2736150d60b63b3d272d4432942f
+- id: asset.80a8ae9887b99b5ced6606aef49a0e233d0bc59944abc26a70eec72c4fc17f71
+  path: ../map_director/items/assets/80a8ae9887b99b5ced6606aef49a0e233d0bc59944abc26a70eec72c4fc17f71
+  sha256: 80a8ae9887b99b5ced6606aef49a0e233d0bc59944abc26a70eec72c4fc17f71
+- id: asset.a642736b49212b728c78cbb76b20fb5c682f4bbe89602285064a41cff8cf3dcd
+  path: ../map_director/items/assets/a642736b49212b728c78cbb76b20fb5c682f4bbe89602285064a41cff8cf3dcd
+  sha256: a642736b49212b728c78cbb76b20fb5c682f4bbe89602285064a41cff8cf3dcd
+- id: asset.b122118bbd42dff50eeaeacb466b4c14db076ce58f68532df1d8934e3caff31e
+  path: ../map_director/items/assets/b122118bbd42dff50eeaeacb466b4c14db076ce58f68532df1d8934e3caff31e
+  sha256: b122118bbd42dff50eeaeacb466b4c14db076ce58f68532df1d8934e3caff31e
+- id: asset.c38fa497a133477617f63c33dd3320ff9ab471c8493e902a889c24616bfd592d
+  path: ../map_director/items/assets/c38fa497a133477617f63c33dd3320ff9ab471c8493e902a889c24616bfd592d
+  sha256: c38fa497a133477617f63c33dd3320ff9ab471c8493e902a889c24616bfd592d
+- id: asset.c51818ae9a9c864a46a8aae9e9950264aabc627a94f0d81b731b1a891d1daef0
+  path: ../map_director/items/assets/c51818ae9a9c864a46a8aae9e9950264aabc627a94f0d81b731b1a891d1daef0
+  sha256: c51818ae9a9c864a46a8aae9e9950264aabc627a94f0d81b731b1a891d1daef0
+- id: asset.d69c9fddaf15d6f07e75b81778aa4fa13a74c384dc6fe1c07572a8ef340060ce
+  path: ../map_director/items/assets/d69c9fddaf15d6f07e75b81778aa4fa13a74c384dc6fe1c07572a8ef340060ce
+  sha256: d69c9fddaf15d6f07e75b81778aa4fa13a74c384dc6fe1c07572a8ef340060ce
+- id: asset.dfe857c3c9b3f77e74437b18b93c761ee17e9a0d9df9b8a694c6853062dd2b1f
+  path: ../map_director/items/assets/dfe857c3c9b3f77e74437b18b93c761ee17e9a0d9df9b8a694c6853062dd2b1f
+  sha256: dfe857c3c9b3f77e74437b18b93c761ee17e9a0d9df9b8a694c6853062dd2b1f
+- id: asset.e3c46fe2f8e1d3cfa99d7cf9e0030012b3458d8abc349397949e02acbc624819
+  path: ../map_director/items/assets/e3c46fe2f8e1d3cfa99d7cf9e0030012b3458d8abc349397949e02acbc624819
+  sha256: e3c46fe2f8e1d3cfa99d7cf9e0030012b3458d8abc349397949e02acbc624819
+roles:
+- required_modalities:
+  - image
+  - text
+  id: giver
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+- required_modalities:
+  - image
+  - text
+  id: follower
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+resources: []
+metrics:
+- name: success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: route_error
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: turns_used
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: success_rate
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: gates_passed
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+measures:
+- name: success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: route_error
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: turns_used
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: minimize
+- name: success_rate
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: gates_passed
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+adapter_bindings:
+  model: engine.llm
+  communication: local.in_process
+  resources: {}
+environment_id: map_director
+version: v2
+blurb: Repeated map grounding with independent landmark jitter and diverse valid routes
+  through ordered passages.
+source_url: https://groups.inf.ed.ac.uk/maptask/maptask-description.html
+parameters:
+- name: discrepancy
+  type: categorical
+  fixed: false
+  source: item
+- name: num_rounds
+  type: integer
+  domain:
+  - 2.0
+  - 2.0
+  fixed: true
+  source: design
+- name: max_turns
+  type: integer
+  domain:
+  - 1.0
+  - 20.0
+  fixed: false
+  source: design
+- name: jitter_radius
+  type: continuous
+  fixed: false
+  source: item
+- name: noise_seed
+  type: integer
+  fixed: false
+  source: item
+item_policy:
+  mode: enumerate
+  bank_path: ../map_director/items/maps_v2.jsonl
+  item_bank_sha256: f556cb2eade3d6c5c39aadf28f4a641d92d0654015eacbd1ecf865f5f45e1d10
+oracle_version: ordered-gates-corridor-v2
+required_modalities:
+- image
+- text

@@ -1,0 +1,38 @@
+schema_version: 1
+name: map_director_v2_example
+description: 'Two-round Map Director V2: independently jittered landmarks and ordered
+  passages with multiple valid routes.'
+release: ../environments/map_director_tiny_v2.yaml
+agents:
+- role: giver
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 8192
+  capabilities: &id001
+    input:
+    - text
+    - image
+    evidence: https://openrouter.ai/deepseek/deepseek-v4.1-flash
+  config:
+    api_base: https://openrouter.ai/api/v1
+- role: follower
+  type: llm
+  model: deepseek/deepseek-v4.1-flash
+  api_format: openai
+  temperature: 0.1
+  max_tokens: 8192
+  capabilities: *id001
+  config:
+    api_base: https://openrouter.ai/api/v1
+episodes:
+- label: jitter_4_seed_17
+  count: 1
+  seeds:
+  - 17
+storage:
+  backend: sqlite
+  path: ./results/map_director_v2_example.db
+observability:
+  capture_content: true

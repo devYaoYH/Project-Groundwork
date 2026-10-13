@@ -23,7 +23,7 @@ class RuntimeContext:
         self.environment.registry.unregister(self.episode)
 
 
-def remote_game(tmp_path, *, missing=False):
+def remote_game(tmp_path, *, missing=False, task_version="v1", item_id="discrepant_pair"):
     invocations = []
     policies = []
     with ExitStack() as stack:
@@ -56,6 +56,7 @@ def remote_game(tmp_path, *, missing=False):
             )
         context = RuntimeContext(environment, io, episode)
         config = {
+            "task_version": task_version, "item_id": item_id,
             "asset_root": str(tmp_path / "remote-assets"),
             "agents": [{"type": "scripted", "runtime": "external"}] * 2,
             "turn_timeout_s": 10,
@@ -66,11 +67,12 @@ def remote_game(tmp_path, *, missing=False):
         return trace, invocations, policies
 
 
-def test_v2_two_round_private_image_transport_and_parity(tmp_path):
+@pytest.mark.parametrize("task_version,item_id", [("v1", "discrepant_pair"), ("v2", "jitter_4_seed_17"), ("v2", "jitter_8_seed_41")])
+def test_v2_two_round_private_image_transport_and_parity(tmp_path, task_version, item_id):
     expected = MapDirectorEnvironment(
-        {"asset_root": str(tmp_path / "local-assets")}, dry_run=True
+        {"asset_root": str(tmp_path / "local-assets"), "task_version": task_version, "item_id": item_id}, dry_run=True
     ).run()
-    actual, invocations, policies = remote_game(tmp_path)
+    actual, invocations, policies = remote_game(tmp_path, task_version=task_version, item_id=item_id)
     assert actual.final_state == expected.final_state
     assert actual.metrics == expected.metrics
     assert [(e.type, e.data) for e in actual.events] == [
@@ -82,9 +84,10 @@ def test_v2_two_round_private_image_transport_and_parity(tmp_path):
     assert [i.observation["round"] for i in actions] == [1, 1, 2, 2]
     assert all(i.protocol_version == "a2a-turns/2" for i in actions)
     registrations = [i for i in invocations if i.kind == "register"]
+    version = {"task_version": "v2"} if task_version == "v2" else {}
     assert [i.observation for i in registrations] == [
-        {"role": "giver"},
-        {"role": "follower"},
+        {"role": "giver", **version},
+        {"role": "follower", **version},
     ]
     assert policies[0].agent is not policies[1].agent
     assert [o["round"] for o in policies[0].agent.observations] == [1, 2]

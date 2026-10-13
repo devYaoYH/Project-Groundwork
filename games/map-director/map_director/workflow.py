@@ -152,7 +152,10 @@ def exchange_destination(state, runtime):
 
 def close_round(state, runtime):
     game = runtime.context.game
-    outcome = score(
+    oracle = score
+    if game.config.task_version == "v2":
+        from .maps_v2 import score as oracle
+    outcome = oracle(
         state["route"], game.tasks[state["round_index"]], submitted=state["submitted"]
     )
     outcome.update(

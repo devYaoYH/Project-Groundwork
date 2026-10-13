@@ -5,7 +5,7 @@ from a2a_engine.content import contains_image, provider_messages
 from a2a_engine.items import ItemBank
 from a2a_engine.workflow import export_program
 from map_director.environment import MapDirectorEnvironment, MapDirectorConfig
-from map_director.declaration import BANK, DECLARATION
+from map_director.declaration import BANK, DECLARATION_V1 as DECLARATION
 from map_director.maps import local, score
 from map_director.agents import MapDirectorAgent
 

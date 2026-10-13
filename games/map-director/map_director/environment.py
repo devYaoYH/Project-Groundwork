@@ -6,18 +6,22 @@ import math
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Literal
 from pydantic import Field, model_validator
 from a2a_engine import EpisodeConfigBase, EpisodeTrace, EventLog, register_environment
 from a2a_engine.content import AssetStore, inline_media
 from a2a_engine.llm.factory import make_llm_client
 from a2a_engine.modalities import validate_config
-from .agents import MapDirectorAgent, ScriptedMapAgent, GIVER_SYSTEM, FOLLOWER_SYSTEM
-from .declaration import DECLARATION, BANK
+from .agents import MapDirectorAgent, ScriptedMapAgent, system_prompts
+from .declaration import DECLARATION, BANK, bank_for
 from .maps import render_map, local, world
 
 
 class MapDirectorConfig(EpisodeConfigBase):
     environment_id: str = "map_director"
+    task_version: Literal["v1", "v2"] = "v1"
+    jitter_radius: float | None = None
+    noise_seed: int | None = None
     num_agents: int = 2
     num_rounds: int = Field(default=2, ge=2, le=2)
     max_turns: int = Field(default=6, ge=1, le=20)
@@ -29,23 +33,35 @@ class MapDirectorConfig(EpisodeConfigBase):
     image_assets: list[dict] = Field(default_factory=list)
     item_bank_sha256: str = BANK.item_bank_sha256
 
+    @model_validator(mode="before")
+    @classmethod
+    def select_version_defaults(cls, values):
+        return resolve_config(values) if isinstance(values, dict) else values
+
     @model_validator(mode="after")
     def roster_size(self):
         if self.num_agents != 2:
             raise ValueError("Map Director requires exactly two seats")
-        if self.item_bank_sha256 != BANK.item_bank_sha256:
+        if self.item_bank_sha256 != bank_for(self.task_version).item_bank_sha256:
             raise ValueError("map bank digest mismatch")
         return self
 
 
 def resolve_config(config):
     result = dict(config)
+    bank = bank_for(result.get("task_version", "v1"))
     supplied_digest = result.get("item_bank_sha256")
-    if supplied_digest and supplied_digest != BANK.item_bank_sha256:
+    if supplied_digest and supplied_digest != bank.item_bank_sha256:
         raise ValueError("map bank digest mismatch")
-    item = BANK.get(result.get("item_id", "discrepant_pair"))
+    default_item = "jitter_4_seed_17" if result.get("task_version") == "v2" else "discrepant_pair"
+    item = bank.get(result.get("item_id", default_item))
+    if result.get("task_version") == "v2":
+        for key in ("jitter_radius", "noise_seed"):
+            if result.get(key) is not None and result[key] != item.params[key]:
+                raise ValueError(f"{key} does not match the pinned map item")
+            result[key] = item.params[key]
     result.update(
-        item_bank_sha256=BANK.item_bank_sha256, discrepancy=item.params["discrepancy"]
+        item_id=item.item_id, item_bank_sha256=bank.item_bank_sha256, discrepancy=item.params["discrepancy"]
     )
     return result
 
@@ -67,18 +83,20 @@ class MapDirectorEnvironment:
         )
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
-        self.tasks = BANK.get(self.config.item_id).raw["tasks"]
+        self.bank = bank_for(self.config.task_version)
+        self.tasks = self.bank.get(self.config.item_id).raw["tasks"]
+        self.system_prompts = system_prompts(self.config.task_version)
         # Compiled designs point initial images at the immutable bank.
         # Runtime overlays belong in the evidence store, not the installed package.
-        if self.config.asset_root is None or Path(self.config.asset_root).resolve() == BANK.asset_store.root:
+        if self.config.asset_root is None or Path(self.config.asset_root).resolve() == self.bank.asset_store.root:
             # Installed packages and Compose workspaces can be read-only. Keep
             # generated observations available until the evidence store copies them.
             self.config.asset_root = tempfile.mkdtemp(prefix="groundwork-map-director-assets-")
         self.store = AssetStore(self.config.asset_root)
-        for image in BANK.assets:
-            self.store.put(BANK.asset_store.read(image), image.mime_type)
+        for image in self.bank.assets:
+            self.store.put(self.bank.asset_store.read(image), image.mime_type)
         self.assets = {
-            image.sha256: image.model_dump(exclude_none=True) for image in BANK.assets
+            image.sha256: image.model_dump(exclude_none=True) for image in self.bank.assets
         }
         from a2a_engine.remote.lobby import open_episode
 
@@ -106,13 +124,13 @@ class MapDirectorEnvironment:
                         self.runtime, seat, timeout_s=self.config.turn_timeout_s
                     )
                 elif dry_run or spec.get("type") == "scripted":
-                    agent = ScriptedMapAgent(role)
+                    agent = ScriptedMapAgent(role, task_version=self.config.task_version)
                 else:
                     spec.update(
                         asset_root=str(self.store.root),
                         required_modalities=["text", "image"],
                     )
-                    agent = MapDirectorAgent(make_llm_client(spec), role=role)
+                    agent = MapDirectorAgent(make_llm_client(spec), role=role, system_prompt=self.system_prompts[role])
                 setattr(self, role, agent)
         except BaseException:
             if self._owns_episode:
@@ -176,6 +194,7 @@ class MapDirectorEnvironment:
                 task["follower_frame"],
                 [world(point, task["follower_frame"]) for point in route],
                 draft=True,
+                direction_arrows=self.config.task_version == "v2",
             ),
             "image/png",
         ).model_dump(exclude_none=True)
@@ -226,12 +245,15 @@ class MapDirectorEnvironment:
                 data={
                     "num_rounds": self.config.num_rounds,
                     "max_turns": self.config.max_turns,
-                    "item_bank_sha256": BANK.item_bank_sha256,
+                    "item_bank_sha256": self.bank.item_bank_sha256,
+                    **({"task_version": "v2", "noise_seed": self.config.noise_seed,
+                        "jitter_radius": self.config.jitter_radius} if self.config.task_version == "v2" else {}),
                 },
             )
+            version = {"task_version": "v2"} if self.config.task_version == "v2" else {}
             registrations = {
-                0: Registration({"role": "giver"}, GIVER_SYSTEM),
-                1: Registration({"role": "follower"}, FOLLOWER_SYSTEM),
+                seat: Registration({"role": role, **version}, self.system_prompts[role])
+                for seat, role in enumerate(("giver", "follower"))
             }
             with self.episode.started(
                 registrations,
@@ -260,17 +282,20 @@ class MapDirectorEnvironment:
         self.events.append(
             "game_end", data={"success_rate": rate, "rounds_completed": len(outcomes)}
         )
+        metrics = {
+            "success": [x["success"] for x in outcomes],
+            "route_error": [x["route_error"] for x in outcomes],
+            "turns_used": [x["turns_used"] for x in outcomes],
+            "success_rate": rate,
+        }
+        if self.config.task_version == "v2":
+            metrics["gates_passed"] = [x["gates_passed"] for x in outcomes]
         return EpisodeTrace(
             episode_uid=str(uuid.uuid4()),
             config=self.config,
             events=self.events.all(),
             final_state={"rounds": outcomes, "item_id": self.config.item_id},
-            metrics={
-                "success": [x["success"] for x in outcomes],
-                "route_error": [x["route_error"] for x in outcomes],
-                "turns_used": [x["turns_used"] for x in outcomes],
-                "success_rate": rate,
-            },
+            metrics=metrics,
         )
 
 

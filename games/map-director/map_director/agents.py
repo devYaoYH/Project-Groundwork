@@ -11,10 +11,10 @@ FOLLOWER_SYSTEM = """You are the follower in a repeated Map Director task. Your 
 class MapDirectorAgent(LLMAgent):
     supported_input_modalities = {"text", "image"}
 
-    def __init__(self, client, *, role):
+    def __init__(self, client, *, role, system_prompt=None):
         super().__init__(
             client,
-            system_prompt=GIVER_SYSTEM if role == "giver" else FOLLOWER_SYSTEM,
+            system_prompt=system_prompt or (GIVER_SYSTEM if role == "giver" else FOLLOWER_SYSTEM),
             name=role,
         )
         self.role = role
@@ -56,12 +56,16 @@ class ScriptedMapAgent:
         "evidence": "deterministic-map-fixture-v1",
     }
 
-    def __init__(self, role):
+    def __init__(self, role, *, task_version="v1"):
+        self.task_version = task_version
         self.name = role
         self.observations = []
 
     async def act(self, observation, tools):
         self.observations.append(observation)
+        if self.task_version == "v2":
+            from .scripted_v2 import act
+            return act(self.name, observation)
         if self.name == "giver":
             # Read the visible red first leg, rather than consulting a bank key.
             import base64
@@ -84,3 +88,15 @@ class ScriptedMapAgent:
             "route": [[25, 35], a, [85, 95], [85, 155], [145, 155]],
             "submit": True,
         }
+
+
+V2_RULES = """ Your maps have independently shifted landmarks: no single affine alignment recovers all corresponding positions. Reconstruct the route relative to YOUR map's landmarks, not a globally transformed grid. The route passes through ordered gaps BETWEEN landmark pairs, rather than visiting each landmark center. Modest variation within the intended route corridor is allowed. Infer and discuss the passages and their order from the giver's red route. START and FINISH remain named landmarks; the start and end positions are relative to those markers on each map."""
+
+
+def system_prompts(version):
+    if version == "v2":
+        giver = GIVER_SYSTEM.replace("Describe the physical route", "Describe the landmark-relative route")
+        follower = FOLLOWER_SYSTEM.replace("Use shared anchors and alignment to recover the physical route.",
+                                           "Use ordered passages between named landmarks to recover a route on your own map.")
+        return {"giver": giver + V2_RULES, "follower": follower + V2_RULES}
+    return {"giver": GIVER_SYSTEM, "follower": FOLLOWER_SYSTEM}

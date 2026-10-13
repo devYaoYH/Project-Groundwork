@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from a2a_engine.llm.api import LLMClient
-from .agents import MapDirectorAgent, ScriptedMapAgent
+from .agents import MapDirectorAgent, ScriptedMapAgent, system_prompts
 
 
 class DeadlineClient:
@@ -37,10 +37,11 @@ class MapDirectorStrategy:
     async def calls(self, invocation):
         if invocation.kind == "register":
             role = invocation.observation["role"]
+            version = invocation.observation.get("task_version", "v1")
             self.agent = (
-                MapDirectorAgent(self.bounded_client, role=role)
+                MapDirectorAgent(self.bounded_client, role=role, system_prompt=system_prompts(version)[role])
                 if self.client
-                else ScriptedMapAgent(role)
+                else ScriptedMapAgent(role, task_version=version)
             )
             return []
         if invocation.kind != "turn":
