@@ -1,0 +1,12 @@
+environment_id: hidden_profile
+num_agents: 4
+seed: 7
+agents:
+- type: scripted
+  role: participant
+- type: scripted
+  role: participant
+- type: scripted
+  role: participant
+- type: scripted
+  role: participant

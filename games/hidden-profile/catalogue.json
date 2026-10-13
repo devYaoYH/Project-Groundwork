@@ -1,0 +1,10 @@
+{
+  "id": "hidden-profile",
+  "name": "Hidden Profiles",
+  "blurb": "Four participants pool private evidence across repeated group decisions.",
+  "status": "active",
+  "repo": "games/hidden-profile",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

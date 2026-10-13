@@ -1,0 +1,27 @@
+schema_version: 1
+name: hidden_profile_smoke
+description: Same four seats pool two distinct private profiles in one episode.
+release: ../environments/hidden_profile_tiny_v1.yaml
+agents:
+- role: participant
+  type: scripted
+  model: scripted
+- role: participant
+  type: scripted
+  model: scripted
+- role: participant
+  type: scripted
+  model: scripted
+- role: participant
+  type: scripted
+  model: scripted
+episodes:
+- label: two_rounds
+  count: 1
+  seeds:
+  - 1
+storage:
+  backend: sqlite
+  path: ./results/hidden_profile_smoke.db
+observability:
+  capture_content: true
