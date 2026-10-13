@@ -1,0 +1,27 @@
+- id: hidden_profile
+  config:
+    environment_id: hidden_profile
+    num_agents: 4
+    num_rounds: 2
+    seat_roles:
+    - participant
+    - participant
+    - participant
+    - participant
+    agents:
+    - type: scripted
+      role: participant
+      capabilities: &id001
+        input:
+        - text
+        - image
+        evidence: groundwork:scripted-visual-v1
+    - type: scripted
+      role: participant
+      capabilities: *id001
+    - type: scripted
+      role: participant
+      capabilities: *id001
+    - type: scripted
+      role: participant
+      capabilities: *id001

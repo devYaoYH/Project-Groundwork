@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../../../web/tests/support/playwright";
 
 for (const environment of ["hidden_profile"]) for (const width of [390, 1280]) {
   test(`${environment} preserves common chat and final outputs at ${width}px`, async ({ page, request }) => {
