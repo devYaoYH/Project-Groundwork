@@ -549,7 +549,7 @@ def test_environment_surface_exposes_declarations_items_and_oracle_results(tmp_p
 
     environments = control.environment_summaries()
     assert {environment["environment_id"] for environment in environments} == {
-        "buyer_seller", "calendar", "negotiation", "word_guess",
+        "buyer_seller", "calendar", "negotiation", "word_guess", "tangram_reference",
     }
 
     detail = control.environment_detail("calendar")

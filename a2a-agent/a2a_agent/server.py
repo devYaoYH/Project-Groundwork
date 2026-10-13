@@ -170,7 +170,7 @@ def main():
     parser.add_argument("--join-descriptor", help="Owner-only runner provisioning descriptor (never log its contents)")
     parser.add_argument("--join-link", action="store_true", help="Read private link from A2A_JOIN_LINK or stdin (not argv)")
     parser.add_argument("--harness", default="scripted", choices=["scripted", "structured_output"])
-    parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess", "buyer_seller", "negotiation"])
+    parser.add_argument("--environment-id", default="calendar", choices=["calendar", "word_guess", "buyer_seller", "negotiation", "tangram_reference"])
     parser.add_argument("--model-config", help="Nonsecret model configuration JSON file")
     parser.add_argument("--port", type=int, default=0, help="Loopback callback port (default: ephemeral)")
     args, unknown = parser.parse_known_args()
@@ -200,7 +200,7 @@ def main():
             parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
-    if args.environment_id not in {"calendar", "word_guess", "buyer_seller", "negotiation"}:
+    if args.environment_id not in {"calendar", "word_guess", "buyer_seller", "negotiation", "tangram_reference"}:
         parser.error("unsupported provisioning environment")
     if args.environment_id == 'negotiation':
         from negotiation_game.runtime_strategy import NegotiationStrategy
@@ -238,11 +238,13 @@ def main():
             policy = StructuredOutputStrategy(make_llm_client({"temperature": 0.0, **config}))
         except (OSError, ValueError, TypeError):
             parser.error("structured_output requires nonsecret model configuration")
-    if args.environment_id in {"word_guess", "buyer_seller"}:
+    if args.environment_id in {"word_guess", "buyer_seller", "tangram_reference"}:
         if args.environment_id == "word_guess":
             from word_guess.runtime_strategy import WordGuessStrategy as Strategy
-        else:
+        elif args.environment_id == "buyer_seller":
             from buyer_seller.runtime_strategy import BuyerSellerStrategy as Strategy
+        else:
+            from tangram_reference.runtime_strategy import TangramReferenceStrategy as Strategy
         client = policy.model if policy is not None else None
         runtime = AgentRuntimeV2()
         with LoopbackServer(runtime.app, port=args.port) as server:

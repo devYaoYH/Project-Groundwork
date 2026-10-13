@@ -15,7 +15,7 @@ def fail(*args, **kwargs):
 
 
 def main():
-    expected = {"calendar", "word_guess", "buyer_seller", "negotiation"}
+    expected = {"calendar", "word_guess", "buyer_seller", "negotiation", "tangram_reference"}
     assert set(installed_environments()) == expected
     for name in sorted(expected):
         cls = get_environment_spec(name).cls
@@ -29,10 +29,10 @@ def main():
             assert first["workflow"]["diagnostics"] == []
             assert len(json.dumps(first)) < 100000
     for module in ("a2a_agent.service", "a2a_agent.strategies", "word_guess.runtime_strategy",
-                   "buyer_seller.runtime_strategy", "negotiation_game.runtime_strategy",
+                   "buyer_seller.runtime_strategy", "negotiation_game.runtime_strategy", "tangram_reference.runtime_strategy",
                    "a2a_engine.remote.compose", "calendar_game.workflow_steps"):
         assert "site-packages" in str(Path(inspect.getfile(importlib.import_module(module))))
-    print("All four installed wheels export deterministic available workflows without execution")
+    print("All five installed wheels export deterministic available workflows without execution")
 
 
 if __name__ == "__main__":

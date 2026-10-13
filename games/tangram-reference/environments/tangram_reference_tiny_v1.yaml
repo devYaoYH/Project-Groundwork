@@ -1,0 +1,113 @@
+schema_version: 1
+id: tangram_reference.tiny
+release: v1
+description: Repeated private visual reference and convention formation with seven-piece
+  tangrams.
+engine:
+  environment_id: tangram_reference
+  defaults:
+    num_agents: 2
+    num_rounds: 6
+    max_exchanges: 6
+inputs:
+- id: sessions
+  path: ../tangram_reference/items/sessions_v1.jsonl
+  sha256: 834cf98af6bc53019986552d19805581ba3883c1d7e3ce5179a9e23da130c110
+roles:
+- required_modalities:
+  - image
+  - text
+  id: director
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+- required_modalities:
+  - image
+  - text
+  id: matcher
+  count: 1
+  accepts:
+  - llm
+  - scripted
+  scripted_bindings: {}
+  description: ''
+resources: []
+metrics:
+- name: accuracy
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: round_success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: messages
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: minimize
+measures:
+- name: accuracy
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: round_success
+  producer: environment
+  grain: sequence
+  index_label: round
+  scope: episode
+  unit: joint
+  direction: maximize
+- name: messages
+  producer: environment
+  grain: episode
+  scope: episode
+  unit: joint
+  direction: minimize
+adapter_bindings:
+  model: engine.llm
+  communication: local.in_process
+  resources: {}
+environment_id: tangram_reference
+version: v1
+blurb: Repeated private visual reference and convention formation with seven-piece
+  tangrams.
+source_url: ''
+parameters:
+- name: inventory_size
+  type: integer
+  fixed: false
+  source: item
+- name: num_rounds
+  type: integer
+  fixed: false
+  source: design
+  domain:
+  - 2.0
+  - 6.0
+- name: max_exchanges
+  type: integer
+  fixed: false
+  source: design
+  domain:
+  - 1.0
+  - 20.0
+item_policy:
+  mode: enumerate
+  bank_path: ../tangram_reference/items/sessions_v1.jsonl
+  item_bank_sha256: fa6b7bf6792ce9151b0a7f968daa26a50ba00b303c77a2f49442475b560e2faf
+oracle_version: exact-slot-order-v1
+required_modalities:
+- image
+- text
