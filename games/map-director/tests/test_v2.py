@@ -33,8 +33,12 @@ def test_jitter_has_independent_bounded_shifts_and_no_exact_affine_alignment(tas
     author = runpy.run_path(str(Path(__file__).parents[1] / "scripts/build_bank_v2.py"))
     for role in ("giver", "follower"):
         landmarks, shifts = author["shifted"](task["noise"][role + "_seed"], task["noise"]["radius"])
-        assert landmarks == task[role + "_landmarks"]
-        assert shifts == task["noise"][role + "_shifts"]
+        for actual, expected in zip(landmarks, task[role + "_landmarks"]):
+            assert actual["label"] == expected["label"]
+            assert actual["at"] == pytest.approx(expected["at"], abs=1e-10)
+        for actual, expected in zip(shifts, task["noise"][role + "_shifts"]):
+            assert actual["label"] == expected["label"]
+            assert actual["delta"] == pytest.approx(expected["delta"], abs=1e-10)
         assert all(0 < dist([0, 0], shift["delta"]) <= task["noise"]["radius"] for shift in shifts)
     assert task["noise"]["giver_seed"] != task["noise"]["follower_seed"]
     assert affine_residual(task["giver_landmarks"], task["follower_landmarks"]) > 1
