@@ -236,42 +236,45 @@ def test_remote_staging_requires_exactly_one_action():
     assert outcome.status == "rejected" and second is None
 
 
-@pytest.mark.asyncio
-async def test_remote_strategy_persistent_registration_history():
-    from types import SimpleNamespace
-    from map_director.runtime_strategy import MapDirectorStrategy
+def test_remote_strategy_persistent_registration_history():
+    import asyncio
 
-    class FakeClient:
-        capabilities = {"input": ["text", "image"], "evidence": "test-image-contract"}
+    async def scenario():
+        from types import SimpleNamespace
+        from map_director.runtime_strategy import MapDirectorStrategy
 
-        def __init__(self):
-            self.messages = []
+        class FakeClient:
+            capabilities = {"input": ["text", "image"], "evidence": "test-image-contract"}
 
-        def oneshot(self, messages):
-            self.messages.append(messages)
-            return '{"text":"new route"}'
+            def __init__(self):
+                self.messages = []
 
-    client = FakeClient()
-    strategy = MapDirectorStrategy(client=client)
-    await strategy.calls(
-        SimpleNamespace(kind="register", observation={"role": "giver"})
-    )
-    image = BANK.get("discrepant_pair").raw["tasks"][0]["giver_image"]
-    for round_no in [1, 2]:
-        calls = await strategy.calls(
-            SimpleNamespace(
-                kind="turn",
-                observation={
-                    "round": round_no,
-                    "content": [{"type": "text", "text": f"Round {round_no}"}, image],
-                },
-            )
+            def oneshot(self, messages):
+                self.messages.append(messages)
+                return '{"text":"new route"}'
+
+        client = FakeClient()
+        strategy = MapDirectorStrategy(client=client)
+        await strategy.calls(
+            SimpleNamespace(kind="register", observation={"role": "giver"})
         )
-        assert calls == [("env", "submit_action", {"text": "new route"})]
-    assert len(client.messages[1]) == 4
-    assert client.messages[1][1]["content"][0]["text"] == "Round 1"
-    assert contains_image(client.messages[1][3]["content"])
+        image = BANK.get("discrepant_pair").raw["tasks"][0]["giver_image"]
+        for round_no in [1, 2]:
+            calls = await strategy.calls(
+                SimpleNamespace(
+                    kind="turn",
+                    observation={
+                        "round": round_no,
+                        "content": [{"type": "text", "text": f"Round {round_no}"}, image],
+                    },
+                )
+            )
+            assert calls == [("env", "submit_action", {"text": "new route"})]
+        assert len(client.messages[1]) == 4
+        assert client.messages[1][1]["content"][0]["text"] == "Round 1"
+        assert contains_image(client.messages[1][3]["content"])
 
+    asyncio.run(scenario())
 
 def test_compiler_selects_and_runs_each_pinned_bank_row(tmp_path):
     from a2a_engine.compiler import compile as compile_design
