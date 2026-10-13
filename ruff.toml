@@ -3,6 +3,8 @@
 target-version = "py312"
 line-length = 100
 include = [
+  "a2a-engine/a2a_engine/remote/seats.py",
+  "a2a-engine/tests/test_remote_seats.py",
   "a2a-agent/a2a_agent/seat_plugins.py",
   "a2a-agent/a2a_agent/server.py",
   "a2a-agent/a2a_agent/service.py",

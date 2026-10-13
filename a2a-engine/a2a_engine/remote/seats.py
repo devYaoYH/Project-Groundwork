@@ -1,16 +1,16 @@
 """Private, nonserializable attempt-scoped external seat context."""
 
-import secrets
 import json
 import math
 import os
+import secrets
 import subprocess
 import sys
-from pathlib import Path
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 def validate_runtime(spec: dict) -> str:
@@ -20,13 +20,16 @@ def validate_runtime(spec: dict) -> str:
     if not isinstance(runtime, str) or runtime not in {"in_process", "local_process", "external"}:
         raise ValueError(f"unknown runtime: {runtime}")
     harness = spec.get("harness")
-    if harness is not None and (not isinstance(harness, str) or harness not in {"scripted", "structured_output"}):
+    if harness is not None and (
+        not isinstance(harness, str) or harness not in {"scripted", "structured_output"}
+    ):
         raise ValueError(f"unsupported harness: {harness}")
     return runtime
 
 
 def validate_runtimes(config, *, scripted=False):
     from a2a_engine.modalities import validate_config
+
     validate_config(config)
     specs = config.get("agents", [])
     for spec in specs:
@@ -35,19 +38,31 @@ def validate_runtimes(config, *, scripted=False):
             raise ValueError("human is not yet supported by calendar")
         if runtime != "in_process":
             from a2a_engine.workflow_runtime import runtime_capability
+
             if runtime_capability(config.get("environment_id", "calendar")) is None:
                 raise ValueError("remote runtimes are unsupported by this environment")
         if runtime == "local_process" and not scripted:
-            heuristic = config.get('environment_id') == 'negotiation' and spec.get('type') == 'heuristic'
-            harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
+            heuristic = spec.get("type") == "heuristic"
+            harness = spec.get("harness") or (
+                "scripted" if spec.get("type") == "scripted" or heuristic else "structured_output"
+            )
             if harness == "scripted" and spec.get("type", "llm") != "scripted" and not heuristic:
                 raise ValueError("local_process scripted harness requires type: scripted")
-            if harness == "structured_output" and (spec.get("type", "llm") != "llm" or not spec.get("model")):
+            if harness == "structured_output" and (
+                spec.get("type", "llm") != "llm" or not spec.get("model")
+            ):
                 raise ValueError("structured_output requires type: llm and a model")
             if spec.get("api_key"):
-                raise ValueError("local_process credentials must come from provider environment variables")
+                raise ValueError(
+                    "local_process credentials must come from provider environment variables"
+                )
     timeout = config.get("join_timeout_s", 10)
-    if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout <= 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (float, int))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
         raise ValueError("join_timeout_s must be finite and positive")
     return specs
 
@@ -56,27 +71,54 @@ class LocalProcessLauncher:
     def __init__(self, join_url, ticket, spec=None, *, environment_id="calendar"):
         # Do not inherit the runner environment: it may contain sibling tickets,
         # signing keys, tracing exporters, or unrelated provider credentials.
-        env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT") if key in os.environ}
+        env = {
+            key: os.environ[key]
+            for key in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT")
+            if key in os.environ
+        }
         env.update(A2A_JOIN_URL=join_url, A2A_JOIN_TICKET=ticket)
         spec = spec or {"type": "scripted"}
-        heuristic = environment_id == 'negotiation' and spec.get('type') == 'heuristic'
-        harness = spec.get("harness") or ("scripted" if spec.get("type") == "scripted" or heuristic else "structured_output")
+        env["A2A_POLICY_KIND"] = spec.get("type", "llm")
+        heuristic = spec.get("type") == "heuristic"
+        harness = spec.get("harness") or (
+            "scripted" if spec.get("type") == "scripted" or heuristic else "structured_output"
+        )
         if harness == "structured_output":
             from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
             from a2a_engine.manifest import redact_config
+
             provider = detect_provider(spec["model"])
             credential = env_var_for_provider(provider)
             required = [credential] if credential else []
             if provider in ADC_PROVIDERS:
                 required += ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]
             env.update({key: os.environ[key] for key in required if key in os.environ})
-            fields = {key: spec[key] for key in ("model", "api_base", "api_format", "temperature", "max_tokens",
-                      "vertex_adc_file", "adc_file", "gcp_project", "gcp_location", "extra", "capabilities") if key in spec}
+            fields = {
+                key: spec[key]
+                for key in (
+                    "model",
+                    "api_base",
+                    "api_format",
+                    "temperature",
+                    "max_tokens",
+                    "vertex_adc_file",
+                    "adc_file",
+                    "gcp_project",
+                    "gcp_location",
+                    "extra",
+                    "capabilities",
+                )
+                if key in spec
+            }
             env["A2A_MODEL_CONFIG"] = json.dumps(redact_config(fields))
         options = ["--environment-id", environment_id] if environment_id != "calendar" else []
-        self.process = subprocess.Popen([sys.executable, "-m", "a2a_agent.server", "--harness", harness,
-                                        *options], env=env,
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.process = subprocess.Popen(
+            [sys.executable, "-m", "a2a_agent.server", "--harness", harness, *options],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def close(self):
         if self.process.poll() is None:
@@ -94,9 +136,14 @@ def descriptor_path(directory, episode, seat):
 
 def write_descriptor(directory, episode, seat, join_url, *, policy=None):
     from .joinlink import encode_join_link
-    descriptor = {"join_url": join_url, "seat": seat.seat,
-                  "environment_id": episode.environment_id,
-                  "expires_at": seat.join_deadline, "join_ticket": seat.ticket}
+
+    descriptor = {
+        "join_url": join_url,
+        "seat": seat.seat,
+        "environment_id": episode.environment_id,
+        "expires_at": seat.join_deadline,
+        "join_ticket": seat.ticket,
+    }
     descriptor["join_link"] = encode_join_link(descriptor)
     if policy is not None:
         descriptor["policy"] = policy

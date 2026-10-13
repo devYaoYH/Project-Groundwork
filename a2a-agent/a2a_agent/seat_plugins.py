@@ -15,6 +15,14 @@ POLICY_FIELDS = {
     "max_tokens",
     "capabilities",
 }
+# Local children retain the provider options accepted by the existing CLI.
+MODEL_CONFIG_FIELDS = POLICY_FIELDS | {
+    "vertex_adc_file",
+    "adc_file",
+    "gcp_project",
+    "gcp_location",
+    "extra",
+}
 
 
 @dataclass(frozen=True)
@@ -25,7 +33,6 @@ class PolicyContext:
         if self.config.get("type", "scripted") != "llm":
             return None
         from a2a_engine.llm.factory import make_llm_client
-        from a2a_engine.remote.compose import MODEL_FIELDS
 
         return make_llm_client(
             {
@@ -33,7 +40,7 @@ class PolicyContext:
                 **{
                     key: value
                     for key, value in self.config.items()
-                    if key in MODEL_FIELDS and key != "type"
+                    if key in MODEL_CONFIG_FIELDS and key != "type"
                 },
             }
         )
@@ -47,7 +54,7 @@ class SeatPlugin:
     runtime_adapter: str = "a2a-turns/2"
 
     def create_policy(self, config):
-        if not isinstance(config, dict) or set(config) - POLICY_FIELDS:
+        if not isinstance(config, dict) or set(config) - MODEL_CONFIG_FIELDS:
             raise ValueError("unsupported agent policy")
         kind = config.get("type", "scripted")
         if kind not in self.supported_policy_kinds:

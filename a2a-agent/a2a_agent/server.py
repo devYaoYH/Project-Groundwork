@@ -254,7 +254,7 @@ def main():
             parser.error("join descriptor must be valid owner-only provisioning in a regular file")
     if not args.join_url or not ticket:
         parser.error("join URL and private A2A_JOIN_TICKET are required")
-    config = {"type": "scripted"}
+    config = {"type": os.environ.get("A2A_POLICY_KIND", "scripted")}
     if args.harness == "structured_output":
         try:
             config = json.loads(os.environ.get("A2A_MODEL_CONFIG", "{}"))

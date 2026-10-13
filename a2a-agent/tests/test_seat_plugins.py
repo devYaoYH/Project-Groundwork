@@ -72,3 +72,21 @@ def test_validation_precedes_factory_execution(config):
 
     with pytest.raises(ValueError):
         registry.SeatPlugin("extension", forbidden).create_policy(config)
+
+
+def test_local_model_options_are_retained_without_provider_execution(monkeypatch):
+    requests = []
+    monkeypatch.setattr(
+        "a2a_engine.llm.factory.make_llm_client", lambda config: requests.append(config)
+    )
+    config = {
+        "type": "llm",
+        "model": "gpt-test",
+        "extra": {"reasoning_effort": "low"},
+        "gcp_project": "test-project",
+        "gcp_location": "test-region",
+    }
+    registry.SeatPlugin("extension", lambda context: context.model_client()).create_policy(config)
+    assert requests == [
+        {"temperature": 0.0, **{key: value for key, value in config.items() if key != "type"}}
+    ]

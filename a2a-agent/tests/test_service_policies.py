@@ -70,3 +70,15 @@ def test_descriptor_rejects_credentials_and_unsupported_strategies(config, tmp_p
         descriptor_policy(
             {"environment_id": "calendar", "policy": config}, tmp_path, NetworkPolicy()
         )
+
+
+def test_descriptor_retains_its_narrower_option_allowlist(tmp_path):
+    with pytest.raises(ValueError, match="unsupported agent policy"):
+        descriptor_policy(
+            {
+                "environment_id": "calendar",
+                "policy": {"type": "llm", "model": "gpt-test", "extra": {}},
+            },
+            tmp_path,
+            NetworkPolicy(),
+        )

@@ -68,18 +68,14 @@ def descriptor_policy(descriptor, directory, network):
         return ProbePolicy(directory, network)
     environment_id = descriptor["environment_id"]
     config = descriptor.get("policy", {"type": "scripted"})
-    if environment_id == "probe":
-        from .seat_plugins import POLICY_FIELDS
+    from .seat_plugins import POLICY_FIELDS, get_seat_plugin
 
-        if (
-            not isinstance(config, dict)
-            or set(config) - POLICY_FIELDS
-            or config.get("type", "scripted") != "scripted"
-        ):
+    if not isinstance(config, dict) or set(config) - POLICY_FIELDS:
+        raise ValueError("unsupported agent policy")
+    if environment_id == "probe":
+        if config.get("type", "scripted") != "scripted":
             raise ValueError("unsupported probe policy")
         return ProbePolicy(directory, network)
-    from .seat_plugins import get_seat_plugin
-
     return get_seat_plugin(environment_id).create_policy(config)
 
 
