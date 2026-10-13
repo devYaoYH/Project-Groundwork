@@ -5,6 +5,7 @@ description = "Map Director environment for a2a-engine."
 requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
+    "a2a-agent",
     "expt-runner",
     "python-dotenv>=1.0",
     "Pillow>=11.0",
@@ -25,5 +26,14 @@ build-backend = "hatchling.build"
 packages = ["map_director"]
 
 [tool.uv.sources]
+a2a-agent = { path = "../../a2a-agent", editable = true }
 a2a-engine = { path = "../../a2a-engine", editable = true }
 expt-runner = { path = "../../expt-runner", editable = true }
+
+[project.entry-points."a2a_agent.seats"]
+map_director = "map_director.seat_plugin:seat_plugin"
+
+[tool.groundwork]
+smoke_config = "tests/smoke.yaml"
+browser_fixtures = "tests/browser/fixtures.yaml"
+site_metadata = "catalogue.json"

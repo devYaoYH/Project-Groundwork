@@ -1,0 +1,18 @@
+environment_id: map_director
+num_rounds: 2
+seed: 6
+agents:
+- type: scripted
+  role: giver
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: groundwork:scripted-visual-v1
+- type: scripted
+  role: follower
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: groundwork:scripted-visual-v1
