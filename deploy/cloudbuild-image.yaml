@@ -36,7 +36,7 @@ steps:
   - -c
   - |
     if ! test -e .platform-build/runtime-existing; then
-      docker run --rm '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' python -m expt_runner.run_experiment experiments/all_games_smoke.yaml --smoke-test --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
+      docker run --rm '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' python scripts/workspace.py smoke --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
     fi
 - name: gcr.io/cloud-builders/docker
   id: push-runtime

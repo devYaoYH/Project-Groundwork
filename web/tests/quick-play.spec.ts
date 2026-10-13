@@ -63,6 +63,13 @@ for (const id of environmentIds.filter(id => id !== "word_guess")) {
     const uid = new URL(page.url()).searchParams.get("uid")!;
     const result = await (await request.get(`/api/episodes/${uid}`)).json();
     expect(result.episode.config.provenance.item_id).toBeTruthy();
+    if (id === "negotiation") {
+      const selected = items.items.find((item: { item_id: string }) => item.item_id === result.episode.config.provenance.item_id);
+      expect(selected).toBeTruthy();
+      expect(result.episode.config.agent_projects).toEqual(selected.params.agent_projects);
+      expect(result.episode.config.oracle_stats).toEqual(selected.oracle_result);
+      expect(result.episode.config.item_bank_sha256).toBe(items.item_bank_sha256);
+    }
     const experiment = await (await request.get(`/api/experiments/${result.episode.config.provenance.experiment_id}`)).json();
     expect(experiment.cells).toHaveLength(1);
     expect(experiment.cells[0].episodes_planned).toBe(1);

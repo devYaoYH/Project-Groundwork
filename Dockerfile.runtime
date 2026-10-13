@@ -8,6 +8,6 @@ COPY a2a-judge/ a2a-judge/
 COPY expt-runner/ expt-runner/
 COPY games/ games/
 COPY experiments/ experiments/
-COPY scripts/install_workspace.py scripts/install_workspace.py
+COPY scripts/install_workspace.py scripts/workspace.py scripts/
 RUN python scripts/install_workspace.py
 CMD ["python", "-m", "expt_runner.run_experiment", "--help"]

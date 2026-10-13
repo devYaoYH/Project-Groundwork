@@ -14,15 +14,15 @@ import json
 import random
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable
 from pathlib import Path
+from typing import Any, Iterable
 
+from .agent_pool import AgentPool
 from .design import Design, DesignValidationError, ParticipantConfig, ValidationIssue
 from .environment import ParameterConfig, ReleaseDeclaration
 from .items import Item, ItemBank
 from .provenance import build_provenance
 from .seeds import derive_seed
-from .agent_pool import AgentPool
 
 
 @dataclass(frozen=True)
@@ -185,7 +185,7 @@ def compile(
                 hook = get_environment_spec(str(declaration.environment_id)).resolve_config
             except KeyError:
                 hook = None
-            if hook is not None and declaration.environment_id == "calendar":
+            if hook is not None:
                 config = hook(config)
             config["provenance"] = build_provenance(
                 config=config,

@@ -15,6 +15,7 @@ the exact scenario is recoverable from the trace alone.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any
 
 log = logging.getLogger("negotiation_game.resolve")
@@ -23,6 +24,29 @@ log = logging.getLogger("negotiation_game.resolve")
 def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     """Expand ``mc_ratio`` into a concrete scenario. Returns a new dict."""
     resolved = dict(config)
+
+    # A compiled design selects a row of the pinned bank. Materialize that
+    # row before locking; its ratio describes the item, not a solver request.
+    if resolved.get("item_id"):
+        if (
+            resolved.get("mc_ratio") is None
+            and resolved.get("agent_projects")
+            and resolved.get("oracle_stats")
+        ):
+            return resolved
+        if resolved.get("scenario_pool_path"):
+            raise ValueError("A pinned item cannot also select a per-round scenario pool")
+        from a2a_engine.items import ItemBank
+
+        from negotiation_game.declaration import _BANK_PATH, DECLARATION
+
+        bank = ItemBank.load(_BANK_PATH, expected_sha256=DECLARATION.item_policy.item_bank_sha256)
+        item = bank.get(str(resolved["item_id"]))
+        resolved.update(deepcopy(item.params))
+        resolved["oracle_stats"] = deepcopy(item.oracle_result)
+        resolved["item_bank_sha256"] = bank.item_bank_sha256
+        resolved.pop("mc_ratio", None)
+        return resolved
 
     # Scenario-pool runs sample projects per round inside the engine, so there is
     # nothing to solve up front — just hand the target ratio to the engine under
@@ -57,6 +81,7 @@ def resolve_config(config: dict[str, Any]) -> dict[str, Any]:
     resolved["requested_mc_ratio"] = mc_ratio
     log.info(
         "Generated scenario: M/C = %.3f (target %.3f)",
-        result["oracle_stats"]["mc_ratio"], mc_ratio,
+        result["oracle_stats"]["mc_ratio"],
+        mc_ratio,
     )
     return resolved

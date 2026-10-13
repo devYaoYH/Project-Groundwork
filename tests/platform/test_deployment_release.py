@@ -12,8 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import yaml
 
-from deploy import prepare_runtime, release
-from deploy import common, verify_hosted
+from deploy import common, prepare_runtime, release, verify_hosted
 
 OLD_SOURCE, NEW_SOURCE = "a" * 40, "b" * 40
 OLD_DIGEST, NEW_DIGEST, WORKER_DIGEST = ("sha256:" + value * 64 for value in ("1", "2", "3"))
@@ -133,13 +132,37 @@ def test_science_history_covers_copied_inputs_and_ci_tests_real_pair():
     dockerfile = (root / "Dockerfile.runtime").read_text()
     assert "cloud_platform" not in dockerfile and "COPY deploy/" not in dockerfile and "COPY web/" not in dockerfile
     workflow = (root / ".github/workflows/platform.yml").read_text()
-    for source in ("Dockerfile.runtime", "scripts/install_workspace.py", "a2a-engine", "a2a-agent", "a2a-judge", "expt-runner", "games", "experiments"):
+    for source in ("Dockerfile.runtime", "scripts/install_workspace.py", "scripts/workspace.py", "a2a-engine", "a2a-agent", "a2a-judge", "expt-runner", "games", "experiments"):
         assert source in workflow.split("git log -1 --format=%H -- ")[1].split(')"')[0]
     assert "docker compose -f compose.platform.yml up --build --detach --wait" in workflow
     assert "deploy/verify_local.py --url http://localhost:8080" in workflow
     build = yaml.safe_load((root / "cloudbuild.yaml").read_text())
     assert "_RUNTIME_SOURCE_SHA" in build["substitutions"]
     assert next(step for step in build["steps"] if step["id"] == "resolve-runtime")
+
+
+@pytest.mark.parametrize("config_path", ["cloudbuild.yaml", "deploy/cloudbuild-image.yaml"])
+def test_runtime_smoke_uses_the_packaged_workspace_command(config_path):
+    root = Path(__file__).resolve().parents[2]
+    build = yaml.safe_load((root / config_path).read_text())
+    step = next(step for step in build["steps"] if step["id"] == "runtime-tests")
+    command = step["args"][-1]
+    assert "python scripts/workspace.py smoke" in command
+    assert "experiments/all_games_smoke.yaml" not in command
+    assert "--max-parallelism 1" in command
+    assert "--storage-path /tmp/science-smoke/a2a.db" in command
+    assert "if ! test -e .platform-build/runtime-existing" in command
+    # The build command must be executable in the narrow scientific image,
+    # whose filesystem deliberately omits the deployment/control/web code.
+    sources = {
+        source
+        for line in (root / "Dockerfile.runtime").read_text().splitlines()
+        if line.startswith("COPY ")
+        for source in line.split()[1:-1]
+    }
+    assert "scripts/workspace.py" in sources
+    assert "scripts/install_workspace.py" in sources
+    assert (root / "scripts/workspace.py").is_file()
 
 
 def test_hosted_verifier_reads_catalog_and_pair_without_executing(monkeypatch):
