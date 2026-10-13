@@ -1,7 +1,7 @@
 {
   "id": "map-director",
   "name": "Map Director",
-  "blurb": "Repeated route grounding over discrepant private maps.",
+  "blurb": "Repeated map grounding with independent landmark jitter and multiple valid routes.",
   "status": "active",
   "repo": "games/map-director",
   "viewer_url": "",
