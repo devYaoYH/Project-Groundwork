@@ -1,0 +1,10 @@
+{
+  "id": "map-director",
+  "name": "Map Director",
+  "blurb": "Repeated route grounding over discrepant private maps.",
+  "status": "active",
+  "repo": "games/map-director",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

@@ -1,0 +1,19 @@
+- id: map_director
+  config:
+    environment_id: map_director
+    num_agents: 2
+    num_rounds: 2
+    seat_roles:
+    - giver
+    - follower
+    agents:
+    - type: scripted
+      role: giver
+      capabilities: &id001
+        input:
+        - text
+        - image
+        evidence: groundwork:scripted-visual-v1
+    - type: scripted
+      role: follower
+      capabilities: *id001
