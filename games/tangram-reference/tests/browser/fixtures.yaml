@@ -1,0 +1,19 @@
+- id: tangram_reference
+  config:
+    environment_id: tangram_reference
+    num_agents: 2
+    num_rounds: 2
+    seat_roles:
+    - director
+    - matcher
+    agents:
+    - type: scripted
+      role: director
+      capabilities: &id001
+        input:
+        - text
+        - image
+        evidence: groundwork:scripted-visual-v1
+    - type: scripted
+      role: matcher
+      capabilities: *id001

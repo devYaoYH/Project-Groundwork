@@ -1,0 +1,10 @@
+{
+  "id": "negotiation",
+  "name": "Resource Negotiation",
+  "blurb": "Two agents negotiate over scarce resources with cheap talk, hidden value functions, and overdraw annulment.",
+  "status": "active",
+  "repo": "games/negotiation",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

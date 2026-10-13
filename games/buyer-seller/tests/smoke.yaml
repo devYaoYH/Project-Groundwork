@@ -1,0 +1,7 @@
+environment_id: buyer_seller
+num_items: 3
+seller_cost: 10
+buyer_value: 40
+max_rounds: 10
+discount_factor: 0.9
+seed: 2

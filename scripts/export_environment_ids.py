@@ -3,6 +3,7 @@
 Run after installing trusted workspace packages. A broken advertised entry point
 fails the image build rather than silently disappearing from the shared catalog.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,8 +23,11 @@ def environment_ids() -> list[str]:
     # ControlPlane.seed_installed_releases offers only installed environments
     # whose spec has a release declaration. Use its environment ID, not the
     # declaration's release ID or Python distribution/directory name.
-    identifiers = sorted(identifier for identifier in installed
-                         if get_environment_spec(identifier).declaration is not None)
+    identifiers = sorted(
+        identifier
+        for identifier in installed
+        if get_environment_spec(identifier).declaration is not None
+    )
     if not identifiers:
         raise RuntimeError("No installed environment has a release declaration")
     for identifier in identifiers:
@@ -34,8 +38,11 @@ def environment_ids() -> list[str]:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path,
-                        default=Path(__file__).resolve().parents[1] / "web/lib/environment-ids.json")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "web/lib/environment-ids.json",
+    )
     args = parser.parse_args()
     identifiers = environment_ids()
     args.output.parent.mkdir(parents=True, exist_ok=True)

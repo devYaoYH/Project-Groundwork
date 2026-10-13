@@ -1,0 +1,6 @@
+environment_id: calendar
+num_agents: 3
+num_slots: 6
+num_meetings: 3
+max_turns_per_round: 4
+seed: 3

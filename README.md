@@ -24,13 +24,12 @@ Project-Groundwork/
   experiments/    cross-environment experiment configs + shared sink definitions
   scripts/        new_game.py scaffold
   games/
-    buyer-seller/ sequential bargaining under asymmetric information
-    calendar/     multi-agent meeting scheduling
-    negotiation/  resource negotiation with cheap talk
-    word-guess/   minimal reference environment
-    tangram-reference/ repeated visual reference with private figure galleries
+    <environment>/ packaged rules, seat plugins, item banks, tests and fixtures
   docs/
 ```
+
+The installed environment catalogue is available at `/environments/`. Each game owns
+its `SPEC.md` and integration metadata in `games/<environment>/pyproject.toml`.
 
 ## Quickstart
 

@@ -548,9 +548,9 @@ def test_environment_surface_exposes_declarations_items_and_oracle_results(tmp_p
     control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
 
     environments = control.environment_summaries()
-    assert {environment["environment_id"] for environment in environments} == {
-        "buyer_seller", "calendar", "negotiation", "word_guess", "tangram_reference",
-    }
+    from scripts.workspace import workspace_manifest
+    expected = {identifier for package in workspace_manifest(workspace)["packages"] for identifier in package["environments"]}
+    assert {environment["environment_id"] for environment in environments} == expected
 
     detail = control.environment_detail("calendar")
     assert detail["parameters"]

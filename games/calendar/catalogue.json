@@ -1,0 +1,10 @@
+{
+  "id": "calendar",
+  "name": "Calendar Scheduling",
+  "blurb": "Multi-agent meeting scheduling under private calendars, with privacy leakage and cost-regret scoring.",
+  "status": "active",
+  "repo": "games/calendar",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

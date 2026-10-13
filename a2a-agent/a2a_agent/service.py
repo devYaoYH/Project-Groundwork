@@ -9,8 +9,9 @@ import time
 from pathlib import Path
 
 from a2a_engine.remote.dispatch import LoopbackServer
+from a2a_engine.remote.joinlink import FIELDS, decode_join_link
 from a2a_engine.remote.network import NetworkPolicy
-from a2a_engine.remote.joinlink import decode_join_link, FIELDS
+
 from .mcp_client import execute
 from .runtime_v2 import AgentRuntimeV2
 from .scripted import ScriptedPolicy
@@ -27,8 +28,11 @@ class ProbePolicy(ScriptedPolicy):
             return super().calls(invocation)
         if invocation.kind != "turn":
             return []
-        await execute(invocation, [("env", "worker_probe", {}), ("env", "record_probe", {"value": "staged"})],
-                      network=self.network)
+        await execute(
+            invocation,
+            [("env", "worker_probe", {}), ("env", "record_probe", {"value": "staged"})],
+            network=self.network,
+        )
         while not (self.directory / "release").exists():
             await asyncio.sleep(0.02)
         return []
@@ -38,8 +42,12 @@ def read_descriptor(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd) as handle:
         info = os.fstat(handle.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16384):
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size > 16384
+        ):
             raise ValueError("unsafe provisioning descriptor")
         payload = handle.read(16385)
         if len(payload.encode()) > 16384:
@@ -58,40 +66,17 @@ def read_descriptor(path):
 def descriptor_policy(descriptor, directory, network):
     if "policy" not in descriptor and descriptor["environment_id"] in {"calendar", "probe"}:
         return ProbePolicy(directory, network)
-    config = descriptor.get("policy", {"type": "scripted"})
-    if not isinstance(config, dict) or set(config) - {"type", "model", "api_base", "api_format", "temperature", "max_tokens", "capabilities"}:
-        raise ValueError("unsupported agent policy")
     environment_id = descriptor["environment_id"]
-    kind = config.get("type", "scripted")
-    if kind not in {"scripted", "heuristic", "llm"} or (kind == "heuristic" and environment_id != "negotiation"):
-        raise ValueError("unsupported agent strategy")
-    model = None
-    if environment_id == "negotiation":
-        from negotiation_game.runtime_strategy import NegotiationStrategy
-        return NegotiationStrategy(config=config if kind == "llm" else None)
-    if kind == "llm":
-        from a2a_engine.llm.factory import make_llm_client
-        from a2a_engine.remote.compose import MODEL_FIELDS
-        if not config.get("model"):
-            raise ValueError("provider strategy requires a model")
-        model = make_llm_client({"temperature": 0.0, **{key: value for key, value in config.items() if key in MODEL_FIELDS and key != "type"}})
-    if environment_id == "calendar":
-        if model is not None:
-            from .strategies import StructuredOutputStrategy
-            return StructuredOutputStrategy(model)
-        return ScriptedPolicy()
-    if environment_id == "word_guess":
-        from word_guess.runtime_strategy import WordGuessStrategy
-        return WordGuessStrategy(client=model)
-    if environment_id == "buyer_seller":
-        from buyer_seller.runtime_strategy import BuyerSellerStrategy
-        return BuyerSellerStrategy(client=model)
-    if environment_id == "tangram_reference":
-        from tangram_reference.runtime_strategy import TangramReferenceStrategy
-        return TangramReferenceStrategy(client=model)
+    config = descriptor.get("policy", {"type": "scripted"})
+    from .seat_plugins import POLICY_FIELDS, get_seat_plugin
+
+    if not isinstance(config, dict) or set(config) - POLICY_FIELDS:
+        raise ValueError("unsupported agent policy")
     if environment_id == "probe":
+        if config.get("type", "scripted") != "scripted":
+            raise ValueError("unsupported probe policy")
         return ProbePolicy(directory, network)
-    raise ValueError("unsupported environment strategy")
+    return get_seat_plugin(environment_id).create_policy(config)
 
 
 async def watch(runtime, directory, callback_url):
@@ -108,8 +93,15 @@ async def watch(runtime, directory, callback_url):
             try:
                 descriptor = read_descriptor(path)
                 policy = descriptor_policy(descriptor, directory, runtime.network)
-                admission = await runtime.join(descriptor["join_url"], callback_url, descriptor["join_ticket"], policy=policy)
-                sessions[path] = (admission.environment_id, admission.episode_id, admission.attempt_id, admission.seat)
+                admission = await runtime.join(
+                    descriptor["join_url"], callback_url, descriptor["join_ticket"], policy=policy
+                )
+                sessions[path] = (
+                    admission.environment_id,
+                    admission.episode_id,
+                    admission.attempt_id,
+                    admission.seat,
+                )
             except Exception:
                 # Never expose admission bodies, ticket-bearing paths, URLs or provider errors.
                 print("Agent provisioning rejected", flush=True)

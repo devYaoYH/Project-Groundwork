@@ -71,7 +71,7 @@
     <div class="games" id="games">
       <noscript>
         Enable JavaScript to list the environments, or read
-        <code>site/games.json</code> directly.
+        <code>games/&lt;environment&gt;/catalogue.json</code> directly.
       </noscript>
     </div>
 
@@ -93,7 +93,7 @@ uv run python run.py experiments/smoke_local.yaml --results-dir ./results</code>
 
   <script>
     // The page is a registry renderer: it owns no environment-specific knowledge.
-    // Adding a environment means adding an entry to games.json.
+    // Build games.json with python scripts/workspace.py export-site.
     const LINKS = [
       ["viewer_url", "Trace viewer"],
       ["leaderboard_url", "Leaderboard"],

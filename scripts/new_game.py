@@ -47,6 +47,9 @@ dev = ["pytest>=8.0"]
 [project.entry-points."a2a_engine.environments"]
 {snake} = "{snake}"
 
+[tool.groundwork]
+smoke_config = "tests/smoke.yaml"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -410,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     fmt = {"snake": snake, "dist": dist, "cls": cls, "title": title}
     files = {
         "pyproject.toml": PYPROJECT,
+        "tests/smoke.yaml": "environment_id: {snake}\nnum_agents: 2\nmax_turns: 3\n",
         "SPEC.md": SPEC,
         "run.py": RUN_PY,
         f"{snake}/__init__.py": INIT,

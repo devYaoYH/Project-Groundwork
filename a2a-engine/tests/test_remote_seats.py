@@ -8,7 +8,6 @@ import time
 
 import httpx
 import pytest
-
 from a2a_engine.remote.seats import LocalProcessLauncher, validate_runtime, validate_runtimes
 from a2a_engine.remote.server import RuntimeManager
 from calendar_game.game import CalendarGame
@@ -16,10 +15,19 @@ from calendar_game.remote import CALENDAR_TOOLS
 
 
 def config(**updates):
-    return {"environment_id": "calendar", "num_agents": 2, "num_slots": 3,
-            "num_meetings": 1, "density": 0, "seed": 1, "enable_reflection": False,
-            "max_turns_per_round": 1, "decision_retries": 0,
-            "agents": [{"type": "scripted", "runtime": "local_process"}, {"type": "scripted"}], **updates}
+    return {
+        "environment_id": "calendar",
+        "num_agents": 2,
+        "num_slots": 3,
+        "num_meetings": 1,
+        "density": 0,
+        "seed": 1,
+        "enable_reflection": False,
+        "max_turns_per_round": 1,
+        "decision_retries": 0,
+        "agents": [{"type": "scripted", "runtime": "local_process"}, {"type": "scripted"}],
+        **updates,
+    }
 
 
 @pytest.mark.parametrize("runtime", ["human", "unknown", 42, None, [], {}])
@@ -35,7 +43,9 @@ def test_join_deadline_validation(timeout):
 
 
 def test_model_harness_requires_a_model_but_smoke_keeps_remote(monkeypatch):
-    cfg = config(agents=[{"type": "llm", "runtime": "local_process", "harness": "structured_output"}])
+    cfg = config(
+        agents=[{"type": "llm", "runtime": "local_process", "harness": "structured_output"}]
+    )
     with pytest.raises(ValueError, match="requires type: llm and a model"):
         validate_runtimes(cfg)
     assert validate_runtimes(cfg, scripted=True)[0]["runtime"] == "local_process"
@@ -43,7 +53,9 @@ def test_model_harness_requires_a_model_but_smoke_keeps_remote(monkeypatch):
     assert validate_runtimes(cfg)[0]["harness"] == "structured_output"
     assert validate_runtimes({**cfg, "environment_id": "word_guess"}, scripted=True)
     assert validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
-    monkeypatch.setattr('a2a_engine.workflow_runtime.runtime_capability', lambda environment_id: None)
+    monkeypatch.setattr(
+        "a2a_engine.workflow_runtime.runtime_capability", lambda environment_id: None
+    )
     with pytest.raises(ValueError, match="unsupported"):
         validate_runtimes({**cfg, "environment_id": "negotiation"}, scripted=True)
 
@@ -59,7 +71,11 @@ def test_real_local_child_direct_game_and_cleanup():
     assert game.runtime_context.closed
     assert all(child.process.poll() is not None for child in game.runtime_context.children)
     assert not game.runtime_manager.io.thread.is_alive()
-    assert trace.release.adapter_bindings == {"communication": "mcp.http", "models": {"0": "remote", "1": "engine.llm"}, "resources": {}}
+    assert trace.release.adapter_bindings == {
+        "communication": "mcp.http",
+        "models": {"0": "remote", "1": "engine.llm"},
+        "resources": {},
+    }
     facts = [event.data for event in trace.events if event.type == "agent_registered"]
     assert facts[0]["runtime"] == "local_process"
     assert facts[0]["protocol_version"] == "a2a-turns/1"
@@ -74,8 +90,11 @@ def test_private_descriptor_and_stale_attempt_isolation(tmp_path):
         descriptor = first.descriptors[0]
         payload = json.loads(descriptor.read_text())
         from a2a_engine.remote.joinlink import decode_join_link
-        assert decode_join_link(payload["join_link"]) == {key: payload[key] for key in
-            ("join_url", "seat", "environment_id", "expires_at", "join_ticket")}
+
+        assert decode_join_link(payload["join_link"]) == {
+            key: payload[key]
+            for key in ("join_url", "seat", "environment_id", "expires_at", "join_ticket")
+        }
         assert descriptor.stat().st_mode & 0o777 == 0o600
         assert payload["seat"] == 0 and payload["expires_at"] > time.time()
         assert payload["join_url"].startswith(manager.io.base_url)
@@ -86,7 +105,11 @@ def test_private_descriptor_and_stale_attempt_isolation(tmp_path):
         assert second.episode.episode_id != first.episode.episode_id
         assert second.episode.attempt_id != first.episode.attempt_id
         assert second.episode.seats[0].ticket != old
-        admission = {"join_ticket": old, "callback_url": "http://127.0.0.1:1", "protocol_versions": ["a2a-turns/1"]}
+        admission = {
+            "join_ticket": old,
+            "callback_url": "http://127.0.0.1:1",
+            "protocol_versions": ["a2a-turns/1"],
+        }
         with httpx.Client(trust_env=False) as client:
             assert client.post(payload["join_url"], json=admission).status_code == 400
             current_url = json.loads(second.descriptors[0].read_text())["join_url"]
@@ -117,6 +140,7 @@ def test_descriptor_refuses_public_directory_and_symlink(tmp_path):
 
 def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch):
     from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+
     episode = EpisodeContext("atomic", [0])
     dump = json.dump
 
@@ -129,7 +153,9 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
         return dump(payload, handle)
 
     monkeypatch.setattr("a2a_engine.remote.seats.json.dump", observed_dump)
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/atomic/join")
+    descriptor = write_descriptor(
+        tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/atomic/join"
+    )
     assert json.loads(descriptor.read_text())["join_ticket"] == episode.seats[0].ticket
     assert descriptor.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob("*.tmp"))
@@ -137,11 +163,16 @@ def test_descriptor_is_published_only_after_complete_write(tmp_path, monkeypatch
 
 def test_duplicate_descriptor_never_overwrites_existing_ticket(tmp_path):
     from a2a_engine.remote.seats import EpisodeContext, write_descriptor
+
     episode = EpisodeContext("duplicate", [0])
-    descriptor = write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/duplicate/join")
+    descriptor = write_descriptor(
+        tmp_path, episode, episode.seats[0], "http://127.0.0.1:1/episodes/duplicate/join"
+    )
     original = descriptor.read_bytes()
     with pytest.raises(FileExistsError):
-        write_descriptor(tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/episodes/duplicate/join")
+        write_descriptor(
+            tmp_path, episode, episode.seats[0], "http://127.0.0.1:2/episodes/duplicate/join"
+        )
     assert descriptor.read_bytes() == original
     assert not list(tmp_path.glob("*.tmp"))
 
@@ -196,6 +227,7 @@ def test_crashed_real_child_fails_attempt_and_is_reaped(monkeypatch):
     monkeypatch.setattr("a2a_engine.remote.seats.LocalProcessLauncher", crash)
     game = CalendarGame(config(join_timeout_s=0.2))
     from a2a_engine.remote.lobby import SeatsUnavailable
+
     with pytest.raises(SeatsUnavailable, match="seat_unavailable"):
         game.run()
     assert [event.type for event in game.events.all()] == ["game_start"]
@@ -242,7 +274,34 @@ def test_descriptor_cli_rejects_unsafe_or_invalid_files_without_logging_contents
             link = tmp_path / "link"
             link.symlink_to(path)
             path = link
-    result = subprocess.run([sys.executable, "-m", "a2a_agent.server", "--join-descriptor", str(path)],
-                            capture_output=True, text=True, timeout=5)
+    result = subprocess.run(
+        [sys.executable, "-m", "a2a_agent.server", "--join-descriptor", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
     assert result.returncode == 2 and "owner-only provisioning" in result.stderr
     assert secret not in result.stderr + result.stdout
+
+
+def test_heuristic_child_policy_kind_is_game_independent(monkeypatch):
+    from types import SimpleNamespace
+
+    from a2a_engine.remote.seats import LocalProcessLauncher
+
+    captured = {}
+
+    def launch(command, **options):
+        captured.update(command=command, **options)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("a2a_engine.remote.seats.subprocess.Popen", launch)
+    LocalProcessLauncher(
+        "http://127.0.0.1:1/join",
+        "private-test-ticket",
+        {"type": "heuristic"},
+        environment_id="future_game",
+    )
+    assert captured["env"]["A2A_POLICY_KIND"] == "heuristic"
+    assert captured["command"][captured["command"].index("--harness") + 1] == "scripted"
+    assert "A2A_MODEL_CONFIG" not in captured["env"]

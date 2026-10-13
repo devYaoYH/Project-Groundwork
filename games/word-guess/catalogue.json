@@ -1,0 +1,10 @@
+{
+  "id": "word-guess",
+  "name": "Word Guess",
+  "blurb": "Minimal two-agent reference environment. The worked example in the add-a-environment guide.",
+  "status": "reference",
+  "repo": "games/word-guess",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

@@ -1,0 +1,22 @@
+# Initial enforcement boundary: shared discovery/dispatch and game-owned plugins.
+# Existing scientific modules retain their formatting until deliberately migrated.
+target-version = "py312"
+line-length = 100
+include = [
+  "a2a-engine/a2a_engine/remote/seats.py",
+  "a2a-engine/tests/test_remote_seats.py",
+  "a2a-agent/a2a_agent/seat_plugins.py",
+  "a2a-agent/a2a_agent/server.py",
+  "a2a-agent/a2a_agent/service.py",
+  "a2a-agent/tests/test_service_policies.py",
+  "a2a-agent/tests/test_seat_plugins.py",
+  "scripts/workspace.py",
+  "scripts/install_workspace.py",
+  "scripts/check_runtime_packages.py",
+  "scripts/export_environment_ids.py",
+  "web/tests/browser_server.py",
+  "games/*/*/seat_plugin.py",
+  "tests/workspace/*.py",
+]
+[lint]
+select = ["E4", "E7", "E9", "F", "I"]

@@ -1,0 +1,4 @@
+environment_id: word_guess
+secret_word: dog
+max_turns: 6
+seed: 1

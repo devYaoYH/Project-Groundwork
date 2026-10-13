@@ -3,10 +3,11 @@
 Called by the image build, so adding a game does not require changing Dockerfiles.
 Only repository-controlled packages that declare the environment entry point ship.
 """
-from pathlib import Path
+
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 
 def packages(root: Path) -> list[Path]:

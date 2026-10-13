@@ -9,6 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx --from ruff==0.15.2 ruff check .
+      - run: uvx --from ruff==0.15.2 ruff format --check .
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -18,6 +26,14 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install pip pytest pytest-asyncio
+      - run: uv run python scripts/install_workspace.py
+      - run: uv run python scripts/export_environment_ids.py
+      - run: uv run python scripts/workspace.py export-site
       - run: npm ci
         working-directory: web
       # The mirrored client validator has no server to catch its mistakes, and
@@ -28,13 +44,6 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.12"
-      - run: uv venv
-      - run: >-
-          uv pip install -e a2a-engine -e a2a-agent -e expt-runner
-          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess -e games/tangram-reference
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: npm run test:browser
@@ -48,16 +57,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv venv
-      - run: >-
-          uv pip install -e a2a-engine -e a2a-agent -e a2a-judge -e expt-runner
-          -e games/buyer-seller -e games/calendar -e games/negotiation -e games/word-guess -e games/tangram-reference
-      - run: >-
-          uv run pytest a2a-engine/tests a2a-agent/tests a2a-judge/tests expt-runner/tests
-          games/buyer-seller/tests games/calendar/calendar_game/tests games/calendar/tests
-          games/negotiation/tests games/word-guess/tests local_stack/tests games/tangram-reference/tests
-        env:
-          PYTHONPATH: games/negotiation
-      - run: uv run a2a-run experiments/all_games_smoke.yaml --smoke-test
+      - run: uv pip install pip pytest pytest-asyncio
+      - run: uv run python scripts/install_workspace.py
+      - run: uv run python scripts/workspace.py test
+      - run: uv run python scripts/workspace.py smoke
       - run: uv run python scripts/export_turn_contract.py --check
       - run: uv run python scripts/export_turn_contract.py --protocol-version a2a-turns/2 --check
       - run: >-
@@ -73,23 +76,9 @@ jobs:
           done
       - run: python scripts/release_check.py
       - run: docker compose config
-      - run: |
-          for package in a2a-engine a2a-agent a2a-judge expt-runner games/buyer-seller games/calendar games/negotiation games/word-guess games/tangram-reference; do
-            uv build "$package" --out-dir dist
-          done
+      - run: uv run python scripts/workspace.py build
       - name: Export from ordinary installed wheels without credentials
-        run: >-
-          uv run --no-project
-          --with ./dist/a2a_engine-0.1.0-py3-none-any.whl
-          --with ./dist/a2a_agent-0.1.0-py3-none-any.whl
-          --with ./dist/a2a_judge-0.1.0-py3-none-any.whl
-          --with ./dist/expt_runner-0.1.0-py3-none-any.whl
-          --with ./dist/buyer_seller-0.1.0-py3-none-any.whl
-          --with ./dist/calendar_environment-0.1.0-py3-none-any.whl
-          --with ./dist/negotiation_environment-0.1.0-py3-none-any.whl
-          --with ./dist/word_guess-0.1.0-py3-none-any.whl
-          --with ./dist/tangram_reference-0.1.0-py3-none-any.whl
-          python scripts/check_runtime_packages.py
+        run: uv run python scripts/workspace.py check-wheels
 
   runtime-containers:
     runs-on: ubuntu-latest
@@ -216,6 +205,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          from pathlib import Path
           from http.client import HTTPConnection
           from urllib.error import HTTPError
           from urllib.request import Request, urlopen
@@ -225,9 +215,11 @@ jobs:
           assert health["ok"] is True
           assert health["episode_count"] >= 5
           environments = json.load(urlopen(f"{base}/api/environments"))["environments"]
-          assert {environment["environment_id"] for environment in environments} == {
-              "buyer_seller", "calendar", "negotiation", "word_guess", "tangram_reference"
-          }
+          import tomllib
+          expected = set()
+          for manifest in Path("games").glob("*/pyproject.toml"):
+              expected.update(tomllib.loads(manifest.read_text()).get("project", {}).get("entry-points", {}).get("a2a_engine.environments", {}))
+          assert {environment["environment_id"] for environment in environments} == expected
           calendar_environment = json.load(urlopen(f"{base}/api/environments/calendar"))
           assert calendar_environment["parameters"]
           assert calendar_environment["measures"]
