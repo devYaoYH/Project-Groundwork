@@ -5,6 +5,7 @@ description = "Multi-agent resource negotiation benchmark for a2a-engine."
 requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
+    "a2a-agent",
     "expt-runner",
     "pydantic>=2.6",
     "pyyaml>=6.0",
@@ -35,5 +36,14 @@ packages = ["negotiation_game", "negotiation_analysis", "negotiation_judge"]
 "data/scenario_pools/run_009/filtered.json" = "negotiation_game/items/filtered.json"
 
 [tool.uv.sources]
+a2a-agent = { path = "../../a2a-agent", editable = true }
 a2a-engine = { path = "../../a2a-engine", editable = true }
 expt-runner = { path = "../../expt-runner", editable = true }
+
+[project.entry-points."a2a_agent.seats"]
+negotiation = "negotiation_game.seat_plugin:seat_plugin"
+
+[tool.groundwork]
+smoke_config = "tests/smoke.yaml"
+browser_fixtures = "tests/browser/fixtures.yaml"
+site_metadata = "catalogue.json"

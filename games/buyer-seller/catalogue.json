@@ -1,0 +1,10 @@
+{
+  "id": "buyer-seller",
+  "name": "Buyer-Seller Bargaining",
+  "blurb": "Sequential multi-item bargaining under asymmetric information, with discounting that makes every extra round of haggling costly.",
+  "status": "active",
+  "repo": "games/buyer-seller",
+  "viewer_url": "",
+  "leaderboard_url": "",
+  "paper_url": ""
+}

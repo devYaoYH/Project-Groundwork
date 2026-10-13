@@ -26,3 +26,9 @@ agents.local.yaml
 *.tsbuildinfo
 web/test-results/
 web/playwright-report/
+
+# Package-discovered build outputs. Generate before building web/site.
+web/lib/environment-ids.json
+site/games.json
+.ruff_cache/
+dist/

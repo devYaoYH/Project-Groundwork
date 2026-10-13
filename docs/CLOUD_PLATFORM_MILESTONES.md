@@ -17,7 +17,7 @@ The current repository is a working local-first baseline:
 
 - `docker compose up --build --abort-on-container-exit runner` builds and
   completes the four-environment SQLite smoke run; the Compose viewer is healthy.
-- `a2a-run experiments/all_games_smoke.yaml --smoke-test` persists and reads
+- `python scripts/workspace.py smoke` persists and reads
   back Calendar and Negotiation (as well as the two reference games) without
   credentials or cloud access.
 - Calendar's typed-release smoke experiment and Negotiation's standalone

@@ -107,8 +107,9 @@ when it is absent from your PATH and seeds pip for the workspace installer:
 uv venv --python 3.12 --seed
 source .venv/bin/activate
 python scripts/install_workspace.py
-python -m pip install -r requirements-platform.txt
-a2a-run experiments/all_games_smoke.yaml --smoke-test
+python -m pip install -r requirements-platform.txt -r requirements-dev.txt
+python scripts/export_environment_ids.py
+python scripts/workspace.py smoke
 ```
 
 With an existing Python 3.12 installation, replace the first line with

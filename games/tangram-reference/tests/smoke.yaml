@@ -1,0 +1,18 @@
+environment_id: tangram_reference
+num_rounds: 2
+seed: 5
+agents:
+- type: scripted
+  role: director
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: groundwork:scripted-visual-v1
+- type: scripted
+  role: matcher
+  capabilities:
+    input:
+    - text
+    - image
+    evidence: groundwork:scripted-visual-v1

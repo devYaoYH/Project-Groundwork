@@ -5,6 +5,7 @@ description = "Calendar scheduling benchmark environment for a2a-engine."
 requires-python = ">=3.12"
 dependencies = [
     "a2a-engine",
+    "a2a-agent",
     "expt-runner",
     "ortools>=9.10",
     "pyyaml>=6.0",
@@ -30,5 +31,14 @@ packages = ["calendar_game"]
 "tasks/tiny_varied_density_5a3p.jsonl" = "calendar_game/items/tiny_varied_density_5a3p.jsonl"
 
 [tool.uv.sources]
+a2a-agent = { path = "../../a2a-agent", editable = true }
 a2a-engine = { path = "../../a2a-engine", editable = true }
 expt-runner = { path = "../../expt-runner", editable = true }
+
+[project.entry-points."a2a_agent.seats"]
+calendar = "calendar_game.seat_plugin:seat_plugin"
+
+[tool.groundwork]
+smoke_config = "tests/smoke.yaml"
+browser_fixtures = "tests/browser/fixtures.yaml"
+site_metadata = "catalogue.json"

@@ -54,7 +54,7 @@ services:
       # stack writes goes to the data volume, never back into the repository.
       - ./:/workspace:ro
       - a2a-data:/data
-    command: ["a2a-run", "experiments/all_games_smoke.yaml", "--smoke-test",
+    command: ["python", "scripts/workspace.py", "smoke",
               "--results-dir", "/data/results"]
     depends_on:
       redis:

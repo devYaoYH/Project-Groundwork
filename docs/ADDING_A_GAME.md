@@ -357,7 +357,10 @@ assert exact outcomes and run in CI with no keys. From
 - [ ] Remote adapters/strategies pass `/2` parity and isolated Compose smoke; installed wheels export without execution or credentials
 - [ ] Every declared derived metric has a registered deterministic extractor;
   `scripts/materialize_metrics.py --database ... --environment <environment>` is idempotent
-- [ ] Added to `experiments/all_games_smoke.yaml` and `site/games.json`
+- [ ] Package-owned `tests/smoke.yaml` declared as `tool.groundwork.smoke_config`
+- [ ] Agent-side `a2a_agent.seats` entry point declared when the game supports admitted seats
+- [ ] Browser fixtures and chat assertions live in `games/<name>/tests/browser/`
+- [ ] Display metadata lives in the game's `catalogue.json`; shared lists are generated
 
 ## 9. Where things live
 
@@ -374,3 +377,58 @@ assert exact outcomes and run in CI with no keys. From
 | Add an event renderer to the local viewer | `docs/VIEWER_EXTENSIONS.md` |
 | Understand the contracts | `docs/CONTRACTS.md` |
 | Copy a small complete environment | `games/buyer-seller/` |
+
+## Package-owned integration
+
+A new game does not edit the agent CLI, strategy factory, CI package lists,
+root smoke inventory, frontend route list, or landing-page catalogue. Declare
+these integration points in its own `pyproject.toml`:
+
+```toml
+[project.entry-points."a2a_agent.seats"]
+my_game = "my_game.seat_plugin:seat_plugin"
+
+[tool.groundwork]
+smoke_config = "tests/smoke.yaml"
+browser_fixtures = "tests/browser/fixtures.yaml"
+site_metadata = "catalogue.json"
+```
+
+Export a `SeatPlugin` from `a2a_agent.seat_plugins`, with a factory accepting
+`PolicyContext`. Ordinary policies use `context.model_client()`; specialized
+backends can consume the validated `context.config`. Advertise supported policy
+kinds and the runtime adapter (`a2a-turns/2`, or the legacy `/1` adapter). Declare
+`a2a-agent` as a dependency when importing that interface. Models and history
+stay agent-side; the environment retains observations and commit authority.
+
+`tests/smoke.yaml` contains one small engine configuration, including the
+`environment_id` and any required capabilities. The workspace CLI collects
+these into the all-environment experiment; it does not contact providers.
+`tests/browser/fixtures.yaml` contains a list of `{id, config}` rows with explicit
+scripted/heuristic agents. Rows may use different task versions of the same
+environment. Browser assertions are ordinary `*.spec.ts` files in the same
+directory, automatically collected by Playwright. Import `expect` and `test` from
+`../../../../web/tests/support/playwright` so the specs use the shared web dependencies. Inputs and committed outputs
+use the common trace contracts and chat renderer.
+
+```bash
+python scripts/install_workspace.py
+python -m pip install -r requirements-dev.txt
+python scripts/export_environment_ids.py  # before Next dev/build
+python scripts/workspace.py export-site
+python scripts/workspace.py test -q
+python scripts/workspace.py smoke
+python scripts/workspace.py build
+python scripts/workspace.py check-wheels
+ruff check .
+ruff format --check .
+```
+
+The installed-wheel check compares against a separately generated source
+manifest, so skipping a game during build/install fails verification. Discovery
+never runs fixtures, constructs environments, or makes model calls. Generated
+frontend routes and site catalogues are build outputs and are not committed.
+Ruff is pinned in `requirements-dev.txt` and enforced in CI for discovery,
+agent dispatch, and game seat-plugin files; older scientific modules are outside
+this initial formatting scope. A new transport or trace contract remains a
+shared infrastructure change and should land before its dependent game PRs.

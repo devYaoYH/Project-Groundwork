@@ -1,0 +1,9 @@
+- id: negotiation
+  config:
+    environment_id: negotiation
+    num_rounds: 2
+    cheap_talk_turns: 1
+    agents:
+    - &id001
+      type: heuristic
+    - *id001

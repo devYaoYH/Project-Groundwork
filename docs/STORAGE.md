@@ -71,7 +71,7 @@ a environment at SQLite should not drag a remote `prefix` along into the manifes
 
 Storage is resolved per *experiment*, not per cell — the runner holds one open
 sink for the whole run. An experiment spanning several games (see
-`experiments/all_games_smoke.yaml`) therefore writes them all to one place,
+the package-owned `tests/smoke.yaml` configurations) therefore writes them all to one place,
 which is what makes cross-environment comparison a single query.
 
 ### Secrets stay in `.env`
