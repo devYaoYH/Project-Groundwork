@@ -631,8 +631,13 @@ class ControlPlane:
         if not 1 <= limit <= 100:
             raise ValueError("item limit must be between 1 and 100")
         items, next_cursor = bank.page(limit=limit, cursor=cursor)
+        item_parameters = [parameter for parameter in self._declaration(environment_id).parameters
+                           if parameter.source == "item"]
         return {
-            "items": [item.summary() for item in items],
+            "items": [{**item.summary(), "parameter_values": {
+                parameter.name: item.attribute(parameter.bank_key)
+                for parameter in item_parameters
+            }} for item in items],
             "next_cursor": next_cursor,
             "item_bank_sha256": bank.item_bank_sha256,
         }
@@ -904,7 +909,7 @@ class ControlPlane:
                 return {"valid": False, "errors": [error.as_dict() for error in errors], "plan": None}
             preview = compile_design(
                 design, declaration, bank, experiment_id="preview", experiment_name="preview",
-                release_id=release.id,
+                release_id=release.id, agent_pool=self._design_agent_pool(design),
             )
             return {"valid": True, "errors": [], "plan": preview.as_api_dict()}
         except DesignValidationError as exc:
@@ -977,6 +982,7 @@ class ControlPlane:
         plan = compile_design(
             design, declaration, bank, experiment_id=experiment.id,
             experiment_name=experiment.name, release_id=release.id,
+            agent_pool=self._design_agent_pool(design),
         )
         locked_at = _now()
         with self._session() as db:
@@ -1139,6 +1145,7 @@ class ControlPlane:
             plan = compile_design(
                 design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
                 experiment_id=experiment.id, experiment_name=experiment.name, release_id=release.id,
+                agent_pool=self._design_agent_pool(design),
             )
             configs = [episode.config for cell in plan.cells for episode in cell.episodes]
 
@@ -1150,6 +1157,13 @@ class ControlPlane:
                         or seen_cells.add(config["provenance"]["cell_id"]))
             ]
         return [json.loads(_json(config)) for config in configs]
+
+    def _design_agent_pool(self, design):
+        from a2a_engine.agent_pool import load_agent_pool
+
+        if not any(participant.kind == "llm" and participant.binding for participant in design.roster):
+            return None
+        return load_agent_pool(self.workspace / "experiments")
 
     def _write_execution_plan(
         self, launch_id: str, experiment: Experiment, configs: list[dict[str, Any]]

@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
-import { DataTable } from "./DataTable";
 import { EnvironmentSummary, listEnvironments } from "../lib/api";
+import { environmentTitle } from "../lib/quick-play";
 
 export function EnvironmentIndex() {
   const [environments, setEnvironments] = useState<EnvironmentSummary[]>([]);
@@ -28,42 +27,26 @@ export function EnvironmentIndex() {
       <header className="page-heading">
         <div>
           <h1>Environments</h1>
-          <p>Shared, versioned, read-only. What each release declares here is what the design screen will let you put on an axis.</p>
+          <p>Choose an environment, pick your participants, and play one episode. Explore the details when you want to go deeper.</p>
         </div>
       </header>
       {error ? <p className="notice notice-error">{error}</p> : null}
-      <section className="card">
+      <section className="environment-grid" aria-label="Installed environments">
         {environments.length === 0 && !error ? (
           <p className="empty-state">
             {loaded ? "No environment releases are installed in this workspace." : "Loading registered environments..."}
           </p>
         ) : null}
         {environments.length > 0 ? (
-          <DataTable
-            rows={environments}
-            rowKey={(environment) => environment.environment_id}
-            columns={[
-              {
-                label: "environment",
-                render: (environment) => (
-                  <Link className="table-link" href={`/environments/${environment.environment_id}/`}>
-                    <strong>{environment.environment_id}</strong>
-                    <span>{environment.blurb}</span>
-                  </Link>
-                ),
-              },
-              { label: "release", className: "mono", render: (environment) => environment.version },
-              {
-                label: "used by",
-                render: (environment) => environment.experiment_count ? <Chip>{environment.experiment_count} experiments</Chip> : <span className="muted">-</span>,
-              },
-              {
-                label: "source",
-                className: "align-right",
-                render: (environment) => <a className="source-link" href={environment.source_url} target="_blank" rel="noreferrer">source</a>,
-              },
-            ]}
-          />
+          environments.map((environment, index) => <article className="card environment-card" key={environment.environment_id}>
+            <div className="environment-card-meta"><span className="environment-number">{String(index + 1).padStart(2, "0")}</span><span>Release {environment.version}</span></div>
+            <h2>{environmentTitle(environment.environment_id)}</h2>
+            <p>{environment.blurb}</p>
+            <div className="launch-actions">
+              <Link className="button button-primary" href={`/environments/${environment.environment_id}/play/`}>Quick Play<span className="visually-hidden"> {environmentTitle(environment.environment_id)}</span></Link>
+              <Link className="button" href={`/environments/${environment.environment_id}/`}>Details<span className="visually-hidden"> {environmentTitle(environment.environment_id)}</span></Link>
+            </div>
+          </article>)
         ) : null}
       </section>
     </>
