@@ -47,6 +47,14 @@ def test_design_parameters_keep_their_declared_domain_and_project_no_levels(tmp_
     assert mode["levels"] is None
 
 
+def test_item_parameter_values_include_declared_attributes_outside_params(tmp_path):
+    control = _control(tmp_path)
+    item = control.environment_items("negotiation")["items"][0]
+    bank_item = control._item_bank("negotiation").get(item["item_id"])
+    assert item["parameter_values"] == {"mc_ratio": bank_item.attribute("mc_bucket")}
+    assert "mc_bucket" not in item["params"]
+
+
 def test_a_column_with_one_value_per_item_is_flagged_as_identity_grained(tmp_path):
     detail = _control(tmp_path).environment_detail("word_guess")
     secret_word = _parameter(detail, "secret_word")

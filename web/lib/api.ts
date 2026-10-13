@@ -70,6 +70,7 @@ export type EnvironmentDetail = {
 };
 
 export type Item = {
+  parameter_values?: Record<string, unknown>;
   assets?: ImageReference[];
   item_id: string;
   params: Record<string, unknown>;

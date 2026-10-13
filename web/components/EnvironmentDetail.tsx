@@ -66,7 +66,7 @@ export function EnvironmentDetail({ id }: { id: string }) {
           <h1>{title}</h1>
           <p>{detail?.release.version ? `Release ${detail.release.version}. ` : ""}{detail ? "The declaration is the boundary between source code and research design." : "Loading release declaration..."}</p>
         </div>
-        {detail ? <Link className="button" href={`/environments/${id}/items/`}>Item bank</Link> : null}
+        {detail ? <div className="launch-actions"><Link className="button button-primary" href={`/environments/${id}/play/`}>Quick Play</Link><Link className="button" href={`/environments/${id}/items/`}>Item bank</Link></div> : null}
       </header>
       {error ? <p className="notice notice-error">{error}</p> : null}
       <EnvironmentWorkflow id={id} />

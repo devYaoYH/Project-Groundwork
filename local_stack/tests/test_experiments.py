@@ -62,6 +62,55 @@ def create(plane: ControlPlane):
     )
 
 
+def test_model_pool_bindings_resolve_before_lock_and_retain_the_frozen_route(tmp_path, monkeypatch):
+    import yaml
+    from a2a_engine.experiment import expand_cells, load_experiment
+    from expt_runner.run_experiment import _check_api_keys
+
+    pool_path = tmp_path / "agents.yaml"
+    routing = {"type": "llm", "model": "deepseek/deepseek-v4.1-flash",
+               "api_format": "openai", "api_base": "https://openrouter.ai/api/v1",
+               "credential": "OPENROUTER_API_KEY", "temperature": 0.2, "max_tokens": 4096,
+               "capabilities": {"input": ["text", "image"], "evidence": "test:model-contract"}}
+    pool_path.write_text(yaml.safe_dump({"agents": {"ds-v4.1-flash": routing}}))
+    monkeypatch.setenv("A2A_AGENT_POOL", str(pool_path))
+    # Only credential preflight is exercised; no provider request is made.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-preflight-only")
+    text = DESIGN.replace("kind: scripted", "kind: llm").replace(
+        "seller-baseline", "ds-v4.1-flash").replace("buyer-baseline", "ds-v4.1-flash")
+    plane = control(tmp_path)
+    preview = plane.validate_design_text(release_id="buyer_seller", design_text=text)
+    assert preview["valid"], preview["errors"]
+    preview_agent = preview["plan"]["preview_episode_config"]["agents"][0]
+    assert preview_agent["model"] == routing["model"]
+    assert preview_agent["api_base"] == routing["api_base"]
+
+    experiment = plane.create_experiment(name="Quick Play routing", release_id="buyer_seller", design_text=text)
+    locked = plane.lock_experiment(experiment.id, design_sha256=experiment.design_sha256)
+    frozen = plane._design_episode_configs(locked, mode="live")
+    for config in frozen:
+        for agent in config["agents"]:
+            assert agent["model"] == routing["model"]
+            assert agent["api_base"] == routing["api_base"]
+            assert agent["api_format"] == routing["api_format"]
+            assert agent["capabilities"] == routing["capabilities"]
+            assert agent["temperature"] == 0.2
+            assert agent["max_tokens"] == 4096
+            assert "credential" not in agent and "api_key" not in agent
+        _check_api_keys(config, mode="preflight")
+
+    path = plane._write_execution_plan("routing-test", locked, frozen)
+    runtime_configs = [config for _, config in expand_cells(load_experiment(path))]
+    assert [config["agents"] for config in runtime_configs] == [config["agents"] for config in frozen]
+    for config in runtime_configs:
+        _check_api_keys(config, mode="preflight")
+    original_hashes = frozen[0]["provenance"]["participants"]
+    assert all(participant["binding"] == routing["model"] for participant in original_hashes)
+    pool_path.write_text(yaml.safe_dump({"agents": {"ds-v4.1-flash": {**routing, "model": "changed-model"}}}))
+    assert plane._design_episode_configs(locked, mode="live") == frozen
+    assert locked.design_text == text
+
+
 def test_lock_stores_verbatim_text_and_full_fixed_plan(tmp_path):
     plane = control(tmp_path)
     experiment = create(plane)

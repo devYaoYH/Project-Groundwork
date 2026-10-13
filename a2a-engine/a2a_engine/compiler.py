@@ -22,6 +22,7 @@ from .environment import ParameterConfig, ReleaseDeclaration
 from .items import Item, ItemBank
 from .provenance import build_provenance
 from .seeds import derive_seed
+from .agent_pool import AgentPool
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ def compile(
     experiment_id: str,
     experiment_name: str,
     release_id: str | None = None,
+    agent_pool: AgentPool | None = None,
 ) -> ExecutionPlan:
     """Compile one valid design into exact, provenance-stamped episode configs."""
 
@@ -160,7 +162,7 @@ def compile(
                 design.seed.root, cell_id, episode_idx, mode=design.seed.mode
             )
             item = _select_item(pool, declaration.item_policy.mode, episode_idx, seed)
-            config = _base_config(declaration, design)
+            config = _base_config(declaration, design, agent_pool=agent_pool)
             if bank.assets:
                 config["asset_root"] = str(Path(declaration.item_policy.bank_path).parent / "assets")
                 config["image_assets"] = [image.model_dump(exclude={"data"}) for image in bank.assets]
@@ -440,7 +442,8 @@ def _select_item(pool: list[Item], mode: str, episode_idx: int, seed: int) -> It
     return random.Random(seed).choice(pool)
 
 
-def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, Any]:
+def _base_config(declaration: ReleaseDeclaration, design: Design, *,
+                 agent_pool: AgentPool | None = None) -> dict[str, Any]:
     defaults = copy.deepcopy(declaration.engine.defaults if declaration.engine else {})
     defaults["environment_id"] = declaration.environment_id
     defaults["required_modalities"] = sorted(declaration.required_modalities)
@@ -465,6 +468,26 @@ def _base_config(declaration: ReleaseDeclaration, design: Design) -> dict[str, A
         }
         for participant in design.roster
     ]
+    # A design roster names workspace bindings. Resolve them before provenance
+    # is stamped and the plan is frozen, never when replaying a locked plan.
+    # Concrete model bindings remain supported for existing authored designs.
+    for index, (participant, agent) in enumerate(zip(design.roster, defaults["agents"])):
+        if participant.kind != "llm" or agent_pool is None or participant.binding not in agent_pool.agents:
+            continue
+        resolved = agent_pool.entry(participant.binding).as_agent_config()
+        if resolved.get("type") != "llm" or not resolved.get("model"):
+            raise DesignValidationError([ValidationIssue(
+                f"roster[{index}].binding", "the selected binding must configure an LLM model"
+            )])
+        effective = {**resolved, **agent, "model": resolved["model"]}
+        from .modalities import validate_seat
+        try:
+            validate_seat(effective, _seat_requirements(participant, declaration))
+        except ValueError as exc:
+            raise DesignValidationError([ValidationIssue(
+                f"roster[{index}].binding", str(exc)
+            )]) from exc
+        defaults["agents"][index] = effective
     return defaults
 
 
