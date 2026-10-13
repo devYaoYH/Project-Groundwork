@@ -12,8 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import yaml
 
-from deploy import prepare_runtime, release
-from deploy import common, verify_hosted
+from deploy import common, prepare_runtime, release, verify_hosted
 
 OLD_SOURCE, NEW_SOURCE = "a" * 40, "b" * 40
 OLD_DIGEST, NEW_DIGEST, WORKER_DIGEST = ("sha256:" + value * 64 for value in ("1", "2", "3"))
