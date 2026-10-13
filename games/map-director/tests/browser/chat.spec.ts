@@ -1,6 +1,6 @@
 import { expect, test } from "../../../../web/tests/support/playwright";
 
-for (const environment of ["map_director"]) for (const width of [390, 1280]) {
+for (const environment of ["map_director", "map_director-v2"]) for (const width of [390, 1280]) {
   test(`${environment} preserves common chat and final outputs at ${width}px`, async ({ page, request }) => {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));

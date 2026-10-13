@@ -3,10 +3,10 @@
     environment_id: map_director
     num_agents: 2
     num_rounds: 2
-    seat_roles:
+    seat_roles: &id002
     - giver
     - follower
-    agents:
+    agents: &id003
     - type: scripted
       role: giver
       capabilities: &id001
@@ -17,3 +17,12 @@
     - type: scripted
       role: follower
       capabilities: *id001
+    task_version: v1
+- id: map_director-v2
+  config:
+    environment_id: map_director
+    num_agents: 2
+    num_rounds: 2
+    seat_roles: *id002
+    agents: *id003
+    task_version: v2

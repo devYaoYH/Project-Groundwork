@@ -15,7 +15,7 @@ def world(point, frame):
     return [(point[i] - frame["offset"][i]) / frame["scale"] for i in range(2)]
 
 
-def render_map(landmarks, frame, route=None, *, draft=False):
+def render_map(landmarks, frame, route=None, *, draft=False, direction_arrows=False):
     image = Image.new("RGB", (800, 800), "#fffdf7")
     draw = ImageDraw.Draw(image)
 
@@ -64,6 +64,19 @@ def render_map(landmarks, frame, route=None, *, draft=False):
     if route:
         points = [pixel(p) for p in route]
         draw.line(points, fill="#dc2626" if not draft else "#7c3aed", width=7)
+        if direction_arrows:
+            for a, b in zip(points, points[1:]):
+                length = dist(a, b)
+                if length < 20:
+                    continue
+                direction = [(b[i] - a[i]) / length for i in range(2)]
+                normal = [-direction[1], direction[0]]
+                center = [(a[i] + b[i]) / 2 for i in range(2)]
+                tip = [center[i] + 10 * direction[i] for i in range(2)]
+                back = [center[i] - 10 * direction[i] for i in range(2)]
+                draw.polygon([tuple(tip), tuple(back[i] + 8 * normal[i] for i in range(2)),
+                              tuple(back[i] - 8 * normal[i] for i in range(2))],
+                             fill="#dc2626" if not draft else "#7c3aed")
         for p in points:
             draw.ellipse(
                 (p[0] - 4, p[1] - 4, p[0] + 4, p[1] + 4),

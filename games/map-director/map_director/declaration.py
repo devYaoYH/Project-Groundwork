@@ -69,3 +69,34 @@ DECLARATION = ReleaseDeclaration(
     ],
     oracle_version="ordered-frechet-v1",
 )
+
+
+# Keep the V1 declaration and immutable bank available for older release files.
+DECLARATION_V1 = DECLARATION
+BANK_V2 = ItemBank.load(Path(__file__).parent / "items" / "maps_v2.jsonl")
+DECLARATION_V2 = DECLARATION_V1.model_copy(deep=True)
+DECLARATION_V2.release = DECLARATION_V2.version = "v2"
+DECLARATION_V2.blurb = "Repeated map grounding with independent landmark jitter and diverse valid routes through ordered passages."
+DECLARATION_V2.engine.defaults.update(task_version="v2", item_id="jitter_4_seed_17")
+DECLARATION_V2.parameters += [
+    ParameterConfig(name="jitter_radius", type="continuous", source="item"),
+    ParameterConfig(name="noise_seed", type="integer", source="item"),
+]
+DECLARATION_V2.item_policy = ItemPolicy(mode="enumerate", bank_path="games/map-director/map_director/items/maps_v2.jsonl",
+                                      item_bank_sha256=BANK_V2.item_bank_sha256)
+DECLARATION_V2.oracle_version = "ordered-gates-corridor-v2"
+DECLARATION_V2.measures += [MeasureConfig(name="gates_passed", producer="environment", grain="sequence",
+                                       index_label="round", direction="maximize")]
+DECLARATION_V2.metrics = list(DECLARATION_V2.measures)
+DECLARATION_V2.description = DECLARATION_V2.blurb
+DECLARATION_V2 = ReleaseDeclaration.model_validate(DECLARATION_V2.model_dump())
+# New catalogue designs select V2; explicit old release files still select V1.
+DECLARATION = DECLARATION_V2
+
+
+def bank_for(version):
+    if version == "v1":
+        return BANK
+    if version == "v2":
+        return BANK_V2
+    raise ValueError("Unsupported Map Director task_version")

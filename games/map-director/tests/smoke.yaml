@@ -16,3 +16,4 @@ agents:
     - text
     - image
     evidence: groundwork:scripted-visual-v1
+task_version: v2
