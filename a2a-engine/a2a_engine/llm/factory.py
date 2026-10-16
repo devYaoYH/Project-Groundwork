@@ -54,7 +54,11 @@ def env_var_for_provider(provider: str) -> str:
 
 def get_api_key_for_provider(provider: str) -> str:
     """Read the API key for a provider from release."""
-    return os.environ.get(env_var_for_provider(provider), "")
+    key = os.environ.get(env_var_for_provider(provider), "")
+    if not key and provider == "anthropic":
+        # An `ant auth` OAuth access token; the request layer sends it as a bearer token.
+        key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+    return key
 
 
 def make_llm_client(cfg: dict) -> LLMClient:

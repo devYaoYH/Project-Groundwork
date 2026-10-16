@@ -104,6 +104,11 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
     "claude-sonnet-4-6": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=True),
     "claude-haiku-4-5-20251001": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=8192, supports_temperature=True),
     "claude-haiku-4-5@20251001": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=8192, supports_temperature=True),
+
+    # Anthropic Claude 5 family: non-default sampling parameters are rejected, so omit temperature.
+    "claude-haiku-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=8192, supports_temperature=False),
+    "claude-sonnet-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=False),
+    "claude-opus-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=False),
 }
 
 # Fallback defaults for unknown models

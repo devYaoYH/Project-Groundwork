@@ -619,6 +619,17 @@ def _messages_to_anthropic_vertexai(messages: list[dict]) -> tuple[str, list[dic
     return "\n\n".join(system_parts), api_messages
 
 
+def _anthropic_headers(api_key: str) -> dict[str, str]:
+    """API keys go on x-api-key; OAuth access tokens (ant auth) go on Authorization with the oauth beta."""
+    headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+    if api_key.startswith("sk-ant-oat"):
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["anthropic-beta"] = "oauth-2025-04-20"
+    else:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 def _anthropic_vertexai_url(project: str, location: str, model: str) -> str:
     host = "aiplatform.googleapis.com" if location == "global" else f"{location}-aiplatform.googleapis.com"
     return (
@@ -1022,11 +1033,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
     if cached_idx is not None:
         api_messages[cached_idx]["content"] = original_content
 
-    req = urllib.request.Request(url, data=payload, headers={
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    })
+    req = urllib.request.Request(url, data=payload, headers=_anthropic_headers(api_key))
     t0 = time.monotonic()
     try:
         resp = urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx)
@@ -1127,11 +1134,8 @@ def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
         body["system"] = system_text
     if model_cfg.supports_temperature and temperature is not None:
         body["temperature"] = temperature
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }, method="POST")
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers=_anthropic_headers(api_key), method="POST")
     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as resp:
         data = json.loads(resp.read())
     return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text").strip()
