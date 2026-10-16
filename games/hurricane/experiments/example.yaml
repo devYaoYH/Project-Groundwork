@@ -1,0 +1,17 @@
+schema_version: 1
+name: hurricane_example
+description: Do three model-backed managers pool their ensembles well enough to evacuate the hit zones in time?
+release: ../environments/hurricane_tiny_v1.yaml
+agents:
+  - {role: manager, type: llm, model: gpt-4o-mini}
+  - {role: manager, type: llm, model: gpt-4o-mini}
+  - {role: manager, type: llm, model: gpt-4o-mini}
+episodes:
+  - label: central_city
+    count: 2
+    seeds: [1, 2]
+storage:
+  backend: sqlite
+  path: ./results/hurricane.db
+observability:
+  capture_content: true

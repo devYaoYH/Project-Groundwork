@@ -1,0 +1,17 @@
+schema_version: 1
+name: hurricane_local_smoke
+description: Scripted managers run the full six-round inquiry with no provider; writes SQLite and local OTel spans.
+release: ../environments/hurricane_tiny_v1.yaml
+agents:
+  - {role: manager, type: scripted, model: scripted}
+  - {role: manager, type: scripted, model: scripted}
+  - {role: manager, type: scripted, model: scripted}
+episodes:
+  - label: central_city
+    count: 1
+    seeds: [7]
+storage:
+  backend: sqlite
+  path: ./results/hurricane_local_smoke.db
+observability:
+  capture_content: true
