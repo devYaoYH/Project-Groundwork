@@ -284,7 +284,7 @@ def test_agent_gateway_rejects_hidden_calls():
 
 @pytest.mark.parametrize("identity_key", [None, "id", "participant_id"])
 def test_speakers_follow_the_roster(identity_key):
-    names = [f"manager_{i}" for i in range(3)] if identity_key is None else ["ana", "bo", "cy"]
+    names = [f"participant_{i}" for i in range(3)] if identity_key is None else ["ana", "bo", "cy"]
     agents = [{"type": "scripted", **({identity_key: n} if identity_key else {})} for n in names]
     trace = HurricaneEnvironment({"num_rounds": 2, "agents": agents}, dry_run=True).run()
     spoken = {e.data["speaker"] for e in trace.events if e.type in ("message", "probe", "observation", "hold", "evacuation_order", "disclosure")}

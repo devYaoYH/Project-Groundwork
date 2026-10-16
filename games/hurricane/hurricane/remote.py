@@ -41,7 +41,7 @@ def stage_action(spec, parsed, recorder):
 class RemoteManagerAgent:
     def __init__(self, runtime, seat_id, *, timeout_s=120, name=None):
         self.runtime, self.seat_id, self.timeout_s = runtime, seat_id, timeout_s
-        self.name = name or f"manager_{seat_id}"
+        self.name = name or f"participant_{seat_id}"
         self.records = []
         self.dispatcher = TurnDispatcherV2(
             runtime.io,

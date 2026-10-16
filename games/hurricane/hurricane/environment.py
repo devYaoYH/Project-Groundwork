@@ -134,7 +134,7 @@ class HurricaneEnvironment:
                     if seat < len(self.config.agents)
                     else {"type": "scripted" if dry_run else "llm", "model": "gpt-4o-mini"}
                 )
-                name = cfg.get("id") or cfg.get("participant_id") or f"manager_{seat}"
+                name = cfg.get("id") or cfg.get("participant_id") or f"participant_{seat}"
                 if cfg.get("runtime", "in_process") != "in_process":
                     from .remote import RemoteManagerAgent
 

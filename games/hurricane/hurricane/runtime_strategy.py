@@ -31,7 +31,7 @@ class HurricaneStrategy:
                 raise ValueError("unknown role")
             name = (
                 invocation.observation.get("participant_id")
-                or f"manager_{invocation.observation['participant'] - 1}"
+                or f"participant_{invocation.observation['participant'] - 1}"
             )
             self.agent = (
                 HurricaneAgent(self.bounded_client, name) if self.client else ScriptedManager(name)
