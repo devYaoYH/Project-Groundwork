@@ -38,7 +38,7 @@ def test_release_yaml_pins_the_same_bank_as_the_declaration():
     import yaml
 
     release = yaml.safe_load(
-        (Path(__file__).resolve().parents[1] / "environments/hurricane_tiny_v1.yaml").read_text()
+        (Path(__file__).resolve().parents[1] / "environments/hurricane_tiny_v2.yaml").read_text()
     )
     assert release["item_policy"]["item_bank_sha256"] == declaration().item_policy.item_bank_sha256
     assert release["inputs"][0]["sha256"] == declaration().item_policy.item_bank_sha256

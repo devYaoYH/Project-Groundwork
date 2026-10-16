@@ -1,11 +1,18 @@
-# Hurricane landfall, release v1
+# Hurricane landfall, release v2
 
 Three coastal emergency managers share one episode. A hurricane with a hidden
 landfall zone approaches a coastline of contiguous zones; each manager owns one
 sector of zones and must decide which of them to evacuate before landfall. The
 team wins by protecting the people who will be hit while not evacuating people
 who will not be, and the only route to that knowledge is joint inquiry: running
-instruments, disclosing what they returned, and agreeing on a forecast.
+instruments, disclosing what they returned through channels with different
+audiences, and agreeing on a forecast.
+
+Release v2 implements stage A of the design in `SPEC_v2.md`: the v1 storm and
+instruments with a communication structure of bounded action turns, a public
+bulletin, private direct messages with reply turns, live convened meetings, a
+shared board, and bounded internal memory. Stages B (evolving storm, stations,
+jobs, loss decomposition) and C (political dial) remain design proposals.
 
 The design draws on uncertainty-visualization research on hurricane forecasts
 (readings are ensembles, not points), on the D-Day forecasting room dramatised
@@ -34,101 +41,137 @@ Two instruments estimate the landfall zone. Each returns an **ensemble** of
 
 Ensembles are drawn from a generator seeded by `(seed, round, seat, instrument)`
 so a given probe returns the same reading regardless of what else happened in
-the episode. The episode `seed` therefore changes the readings but never the
-storm; the storm is item-selected.
+the episode. The episode `seed` changes the readings but never the storm.
 
 ## Rounds
 
 The episode runs `num_rounds` rounds (default 6); landfall happens after the
 last round. The executable LangGraph story is
 `next_round -> round -> next_round -> landfall -> finalize`, where the round
-child executes `begin_round -> experiment -> discussion -> decision ->
-close_round`. Each phase child is a bounded round-robin loop with one explicit
-`AgentStep` per manager turn, in seat order.
+child executes `begin_round -> main_pass -> (meeting)* -> reply_pass ->
+close_round`. Every seat invocation is one explicit `AgentStep` whose response
+is a single JSON object holding an ordered action list; the environment
+validates and commits the list in order.
 
-1. **Experiment.** Each manager either runs one instrument
-   (`{"kind":"probe","instrument":"recon"|"model"}`) or passes. Recon with no
-   remaining budget is invalid. Seats act in order, so the first seat to ask
-   gets the flight. The *fact* that a manager probed and which instrument is
-   public; the ensemble is private to the prober.
-2. **Discussion.** `discussion_cycles` cycles (default 1) give every manager one
-   `{"kind":"say", "text", "share", "estimate", "recommend"}` or
-   `{"kind":"pass"}`. `share: true` discloses every one of the speaker's
-   not-yet-shared readings to the whole group as structured data. `estimate` is
-   a public landfall-zone estimate. `recommend` is a public list of zones (any
-   sector) the speaker thinks should be evacuated. Text is free-form and capped
-   at `max_message_chars`.
-3. **Decision.** Each manager issues `{"kind":"evacuate","zones":[...]}` or
-   `{"kind":"hold"}`. Every zone must lie in the manager's own sector and not
-   already be under an order; otherwise the whole action is invalid and no order
-   is recorded. Orders are irreversible. An order issued in round `t` is
-   **effective** only when `num_rounds - t >= evacuation_lead_time` (default 2):
-   later orders still cost the evacuation but protect nobody.
+1. **Main pass.** Seats act in order. Each has `attention_budget` actions
+   (default 3), less any `meeting_attention_cost` owed from meetings attended in
+   the previous round. Actions:
+   - `{"kind":"probe","instrument":"recon"|"model"}` — once per round; the
+     ensemble is private to the prober until shared. Recon without budget is
+     rejected; seats act in order, so the first to ask gets the flight.
+   - `{"kind":"post","text","share","estimate","recommend"}` — a public
+     bulletin message. `share:true` discloses every reading the speaker has not
+     yet shown to everyone. `estimate` is a public landfall-zone estimate;
+     `recommend` a public list of zones (any sector) to evacuate.
+   - `{"kind":"dm","to","text","share","estimate","recommend"}` — a private
+     message to one colleague. `share` discloses the sender's readings to the
+     recipient only; estimates and recommendations are visible to the pair. The
+     recipient gets a reply turn this round.
+   - `{"kind":"write_board","text"}` — a durable, authored, public note
+     (`board_capacity` entries).
+   - `{"kind":"convene","participants","agenda"}` — opens a live meeting this
+     round (at most `max_meetings_per_round`, one per convener per round).
+   - `{"kind":"evacuate","zones"}` — irreversible orders in the manager's own
+     sector; every zone must be unordered or the whole action is rejected. An
+     order issued in round `t` is **effective** only when
+     `num_rounds - t >= evacuation_lead_time` (default 2).
+   - `{"kind":"pass"}` ends the turn.
+   Actions beyond the budget are rejected (`attention_exhausted`).
+2. **Meetings.** Each convened meeting runs as a live round-robin among its
+   attendees, starting with the convener, for up to `meeting_turns` turns each
+   (default 2). A meeting turn is one `{"kind":"say","text","share","estimate",
+   "recommend"}` or `{"kind":"leave"}`. Meeting messages, shared readings,
+   estimates and recommendations are visible to attendees only, now and in
+   every later observation. The meeting ends when fewer than two attendees
+   remain or the turns are exhausted. Everyone who spoke or stayed owes
+   `meeting_attention_cost` actions next round and is charged
+   `meeting_cost` (default 0) toward the team cost.
+3. **Reply pass.** When `reply_turns` is 1, every seat that received a direct
+   message this round takes one turn with a single `dm`, `post` or `pass`.
+4. **Landfall** after the final round scores the episode.
 
-Invalid actions consume the turn, are recorded as `invalid_action`, and have no
-default replacement. A failed remote invocation fails the attempt; the
-environment never invents an action.
+Invalid actions are recorded as `invalid_action` with a reason, spend their
+attention, and have no default replacement. A malformed response consumes the
+turn. A failed remote invocation fails the attempt; the environment never
+invents an action.
+
+## Memory
+
+Internal memory is agent-side. `history_window` (default unbounded) caps the
+number of past turns an LLM seat carries in its provider context; the seat
+harness and runtime strategy enforce it and it is recorded in the resolved
+config and passed in the registration. The board is the external memory:
+durable, authored, public, and costly to write.
 
 ## Landfall and scoring
-
-After the final round the storm makes landfall. One shared team score:
 
 - `evacuation_cost = evacuation_cost_per_capita * sum(population of every
   ordered zone)` (effective or late).
 - `casualty_cost = casualty_cost_per_capita * sum(population of hit zones with
   no effective order)`.
-- `total_cost = evacuation_cost + casualty_cost` (minimize).
-- `oracle_cost = evacuation_cost_per_capita * population_at_risk` is the cost of
-  evacuating exactly the hit zones in time; `regret = total_cost - oracle_cost`.
+- `meeting_cost_total = meeting_cost * attendances`.
+- `total_cost = evacuation_cost + casualty_cost + meeting_cost_total`
+  (minimize); `oracle_cost = evacuation_cost_per_capita * population_at_risk`;
+  `regret = total_cost - oracle_cost`.
 
-Defaults are `evacuation_cost_per_capita = 1` and
-`casualty_cost_per_capita = 10`.
+Defaults: `evacuation_cost_per_capita = 1`, `casualty_cost_per_capita = 10`.
 
 Further deterministic metrics: `population_exposed`, `population_protected`,
 `population_needlessly_evacuated`, `hit_zones_protected_rate`, `late_orders`,
-`probes_used`, `recon_used`, `model_used`, `disclosure_rate` (readings shared /
-readings taken), `estimates_reported`, `estimate_error` (mean absolute error of
-each manager's latest public estimate), `estimate_agreement` (share of
-estimating managers who agree with the modal estimate),
-`recommendation_uptake` (share of ordered zones that another manager had
-recommended earlier), `messages`, `dialogue_words`, and `invalid_actions`.
-These structured fields exist so that disclosure, influence, and agreement are
-measured from recorded actions rather than inferred from prose. Trust,
-responsiveness and similar transcript judgments are analyses, not claimed by
-these metrics.
+`probes_used`, `recon_used`, `model_used`; the **knowledge partition** of
+readings at landfall — `readings_common` (seen by all), `readings_subset`
+(seen by some), `readings_private` — with `knowledge_common_fraction` and
+`disclosure_rate` (readings seen by anyone besides the prober); `messages` by
+channel (`bulletin_messages`, `dm_messages`, `meeting_messages`,
+`reply_messages`), `meetings_convened`, `board_writes`, `attention_used`;
+`estimates_reported`, `estimate_error` (mean absolute error of each
+manager's latest stated estimate in any channel), `estimate_agreement`,
+`recommendations`, `recommendation_uptake` (share of ordered zones that
+another manager had recommended in a channel the orderer could see),
+`dialogue_words`, and `invalid_actions`. Trust, responsiveness and similar
+transcript judgments are analyses, not claimed by these metrics.
 
 ## Information boundaries
 
 A manager's observation contains: the public coastline (populations, sectors,
-orders so far, and whether each order was effective), its own sector, the
-instrument table and remaining recon budget, the public probe log (who ran what,
-no readings), **its own readings**, every reading any manager has shared, public
-estimates and recommendations, the public discussion, phase, remaining turns
-and the phase instruction. It never contains the landfall zone, the hit zones,
-or another manager's unshared readings. Researcher traces record private
-observations and probe results with `visibility: private`; this does not expose
-them to another seat. Registrations carry role, seat and name only.
+orders so far and whether each was effective), its own sector, the instrument
+table and remaining recon budget, the public probe log (who ran what, no
+readings), **its own readings** with the list of seats that can see each,
+every reading disclosed to it (`known_data`), the bulletin, its own inbox and
+sent direct messages, the board, every meeting's roster and agenda plus the
+transcript of meetings it attended, the estimates and recommendations made in
+channels it was party to, its turn kind and budget, and the turn instruction.
+It never contains the landfall zone, the hit zones, another manager's
+undisclosed readings, direct messages between others, or the transcript of a
+meeting it did not attend. Researcher traces record private observations,
+probe results and private messages with `visibility: private` and explicit
+`to_agents`; this does not expose them to another seat. Registrations carry
+role, seat, name and `history_window` only.
 
 ## Agents
 
-LLM managers receive the JSON observation and return one JSON object per turn;
-their provider history is agent-side and persists across rounds. Scripted
-managers (used for smoke, tests and browser fixtures) are deterministic from the
-observation alone: they run recon while the budget lasts and otherwise a model
-run, always share their readings, estimate the landfall zone as the rounded
-mean of every ensemble member they know (own readings plus shared data),
-recommend the zones within `impact_radius` of that estimate, and evacuate the
-recommended zones in their own sector in the last effective round. When no
-round is effective (`evacuation_lead_time >= num_rounds`), they hold.
+LLM managers receive the JSON observation and return one JSON object per turn
+(`{"actions":[...]}`, a bare action, or a bare list); their provider history is
+agent-side and persists across rounds within `history_window`. Scripted
+managers are deterministic from the observation alone: they probe every round
+(recon while the budget lasts), post all their readings on the bulletin with
+the rounded mean of every ensemble member they know as their estimate and the
+zones within `impact_radius` of it as their recommendation, speak once in any
+meeting they are invited to and then leave, ignore direct messages, and
+evacuate the recommended zones in their own sector in the last effective
+round. When no round is effective, they hold.
 
 ## Interpretation choices recorded here
 
-- Seats act sequentially within every phase; recon budget is first-come.
-- Sharing is all-or-nothing per turn and covers every unshared reading, so a
-  manager cannot selectively disclose a convenient subset; selective reporting
-  is expressed in text and estimates, which remain free.
+- Seats act sequentially within every pass; recon budget is first-come.
+- Sharing is all-or-nothing per message for the audience of that channel: a
+  manager cannot selectively disclose a convenient subset to one audience,
+  though it may choose the audience. Selective reporting is expressed in text,
+  estimates and recommendations, which remain free.
+- Meeting attendance is implicit for invitees; a seat that leaves before
+  speaking pays no attention cost.
 - Orders in the final `evacuation_lead_time` rounds are accepted and charged
   rather than rejected, because a too-late order is a real decision outcome.
-- Scenario populations, radius, and landfall are frozen bank rows selected by
-  `scenario_id`/`item_id`; all noise, budget, cost and horizon knobs are design
-  parameters recorded in the resolved config.
+- Scenario populations, radius and landfall are frozen bank rows selected by
+  `scenario_id`/`item_id`; all noise, budget, cost, horizon and communication
+  knobs are design parameters recorded in the resolved config.

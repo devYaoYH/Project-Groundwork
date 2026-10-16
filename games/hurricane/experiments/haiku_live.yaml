@@ -1,7 +1,7 @@
 schema_version: 1
 name: hurricane_haiku_live
 description: Three Claude Haiku 5.5 managers pool ensemble readings and order evacuations; one seeded episode on the central-city storm.
-release: ../environments/hurricane_tiny_v1.yaml
+release: ../environments/hurricane_tiny_v2.yaml
 # No max_tokens override: Haiku 5.5 thinks before answering and thinking counts
 # against the cap, so a small cap truncates or empties the JSON reply.
 agents:

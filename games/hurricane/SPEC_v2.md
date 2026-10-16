@@ -1,10 +1,21 @@
 # Hurricane landfall, release v2 — design specification
 
-Status: design proposal for review. Release v1 (`SPEC.md`) is implemented and
-shipped; v2 replaces its world, seats and communication layer while keeping
-the engine contracts (typed release, frozen item bank with oracle, executable
-LangGraph program, `a2a-turns/2` seats, normalized events, deterministic
-metrics). Nothing in this document is built yet; §11 gives the build order.
+Status: design proposal for review, built in stages. **Stage A (§4–§5, the
+communication layer on the v1 storm) is implemented as release v2 and
+described normatively in `SPEC.md`.** Stages B and C (§2–§3, §6–§7) remain
+proposals. v2 keeps the engine contracts (typed release, frozen item bank
+with oracle, executable LangGraph program, `a2a-turns/2` seats, normalized
+events, deterministic metrics); §11 gives the build order.
+
+Two findings from the shipped games shaped the implementation and supersede
+the wording below where they differ: (1) no shipped seat runs a
+call→result→model loop inside a turn — every turn is **one model response
+holding an ordered action list**, with read-only data (board, inbox, bulletin,
+meeting transcripts) supplied in the observation rather than fetched by tools;
+(2) bidirectional dialogue is therefore a property of the *workflow*: a
+convened meeting is a live round-robin among attendees within the round, and
+direct messages deliver immediately with a reply pass for recipients before the
+round closes. The bulletin and board are visible to everyone immediately.
 
 ## 1. Why v2
 

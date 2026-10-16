@@ -1,4 +1,4 @@
-"""Hurricane structured action staging; one action per admitted invocation."""
+"""Hurricane turn staging; one ordered action list per admitted invocation."""
 
 import asyncio
 import uuid
@@ -24,18 +24,33 @@ class HurricaneAction(WireModel):
     estimate: int | None = None
     recommend: list[int] | None = Field(default=None, max_length=64)
     zones: list[int] | None = Field(default=None, max_length=64)
+    to: int | None = None
+    participants: list[int] | None = Field(default=None, max_length=8)
+    agenda: str = Field(default="", max_length=2000)
+
+
+class HurricaneTurn(WireModel):
+    actions: list[HurricaneAction] = Field(default_factory=list, max_length=16)
     parse_failed: bool = False
 
 
 HURRICANE_TOOLS = (
-    ToolSpec("submit_action", "env", HurricaneAction, frozenset({"ACT"}), "end_of_turn"),
+    ToolSpec("submit_turn", "env", HurricaneTurn, frozenset({"ACT"}), "end_of_turn"),
 )
 
 
-def stage_action(spec, parsed, recorder):
+def compact(action):
+    """Drop defaults so the environment sees exactly what the agent chose."""
+    row = action.model_dump()
+    return {k: v for k, v in row.items() if v is not None and v != "" and not (k == "share" and v is False)}
+
+
+def stage_turn(spec, parsed, recorder):
     if any("action" in record for record in recorder.records):
-        return recorder.reject("already_submitted", "one action per invocation"), None
-    return ToolOutcome(status="accepted", resolves="end_of_turn"), parsed.model_dump()
+        return recorder.reject("already_submitted", "one turn per invocation"), None
+    if parsed.parse_failed:
+        return ToolOutcome(status="accepted", resolves="end_of_turn"), {"parse_failed": True}
+    return ToolOutcome(status="accepted", resolves="end_of_turn"), {"actions": [compact(a) for a in parsed.actions]}
 
 
 class RemoteManagerAgent:
@@ -76,11 +91,11 @@ class RemoteManagerAgent:
             seat=self.seat_id,
             turn_id=invocation.turn_id,
             phase="ACT",
-            allowed_tools=["env.submit_action"],
+            allowed_tools=["env.submit_turn"],
             exp=invocation.deadline.timestamp(),
         )
         invocation.capability = capabilities.mint(claims)
-        recorder = TurnRecorder(invocation, claims, capabilities, stage_action)
+        recorder = TurnRecorder(invocation, claims, capabilities, stage_turn)
         seat = self.runtime.episode.seats[self.seat_id]
         with self.runtime.episode.lock:
             seat.recorder = recorder

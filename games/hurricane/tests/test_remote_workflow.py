@@ -8,9 +8,9 @@ from a2a_engine.remote.server import EnvironmentApp
 from calendar_game.remote import CalendarRuntimeContext
 from hurricane.environment import HurricaneEnvironment
 from hurricane.remote import HURRICANE_TOOLS
-from hurricane.runtime_strategy import HurricaneStrategy
+from hurricane.runtime_strategy import HurricaneStrategy, submission
 
-CONFIG = {"num_rounds": 3, "seed": 7}
+CONFIG = {"num_rounds": 3, "seed": 7, "history_window": 2}
 
 
 def run_remote(*, fail=False, names=None):
@@ -65,11 +65,11 @@ def test_remote_session_parity_and_private_registration():
     assert [(e.type, e.data) for e in actual.events] == [(e.type, e.data) for e in expected.events]
     registrations = [i for i in invocations if i.kind == "register"]
     assert len(registrations) == 3
-    assert all(set(i.observation) == {"role", "participant", "participant_id"} for i in registrations)
+    assert all(set(i.observation) == {"role", "participant", "participant_id", "history_window"} for i in registrations)
     turns = [i for i in invocations if i.kind == "turn"]
-    assert len(turns) == 3 * 3 * 3
+    assert len(turns) == 3 * 3  # scripted seats never convene or message privately
     assert all("landfall_zone" not in i.observation for i in turns)
-    assert all(p.agent.request_history_lengths[-1] == 16 for p in policies)
+    assert all(p.agent.request_history_lengths[-1] == 4 for p in policies)
     assert not episode.active
 
 
@@ -79,12 +79,19 @@ def test_remote_failure_never_invents_an_action():
     assert "private" not in str(error.value)
 
 
-def test_action_staging_dedup_does_not_commit_twice():
+def test_submission_normalizes_turn_shapes():
+    assert submission({"actions": [{"kind": "pass"}, 3]}) == {"actions": [{"kind": "pass"}]}
+    assert submission({"kind": "leave"}) == {"actions": [{"kind": "leave"}]}
+    assert submission({"parse_failed": True}) == {"parse_failed": True}
+    assert submission({"actions": "x"}) == {"parse_failed": True}
+
+
+def test_turn_staging_dedup_does_not_commit_twice():
     from datetime import datetime, timedelta, timezone
     from a2a_engine.remote.contract import CapabilityClaims, TurnInvocationV2
     from a2a_engine.remote.capabilities import Capabilities
     from a2a_engine.remote.turns import TurnRecorder
-    from hurricane.remote import stage_action
+    from hurricane.remote import stage_turn
 
     invocation = TurnInvocationV2(
         environment_id="hurricane", episode_id="e", attempt_id="a", seat=0, turn_id="t",
@@ -94,15 +101,18 @@ def test_action_staging_dedup_does_not_commit_twice():
     )
     claims = CapabilityClaims(
         episode_id="e", attempt_id="a", seat=0, turn_id="t", phase="ACT",
-        exp=invocation.deadline.timestamp(), allowed_tools=["env.submit_action"],
+        exp=invocation.deadline.timestamp(), allowed_tools=["env.submit_turn"],
     )
-    recorder = TurnRecorder(invocation, claims, Capabilities(), stage_action)
+    recorder = TurnRecorder(invocation, claims, Capabilities(), stage_turn)
     tool = HURRICANE_TOOLS[0]
-    assert recorder.call(tool, {"kind": "evacuate", "zones": [3]}, "id").status == "accepted"
-    assert recorder.call(tool, {"kind": "evacuate", "zones": [3]}, "id").status == "accepted"
-    assert recorder.call(tool, {"kind": "hold"}, "id").code == "call_id_conflict"
-    assert recorder.call(tool, {"kind": "hold"}, "second").code == "already_submitted"
-    assert len([r for r in recorder.close() if "action" in r]) == 1
+    turn = {"actions": [{"kind": "evacuate", "zones": [3]}, {"kind": "dm", "to": 2, "text": "hi", "share": True}]}
+    assert recorder.call(tool, turn, "id").status == "accepted"
+    assert recorder.call(tool, turn, "id").status == "accepted"
+    assert recorder.call(tool, {"actions": [{"kind": "pass"}]}, "id").code == "call_id_conflict"
+    assert recorder.call(tool, {"actions": [{"kind": "pass"}]}, "second").code == "already_submitted"
+    records = [r for r in recorder.close() if "action" in r]
+    assert records == [{"action": {"actions": [{"kind": "evacuate", "zones": [3]},
+                                               {"kind": "dm", "to": 2, "text": "hi", "share": True}]}}]
 
 
 def test_remote_custom_identity_is_shared_by_agent_and_environment():
@@ -112,3 +122,4 @@ def test_remote_custom_identity_is_shared_by_agent_and_environment():
     assert {e.data["speaker"] for e in trace.events if e.type in ("message", "probe", "observation")} == set(names)
     registrations = sorted((i for i in invocations if i.kind == "register"), key=lambda i: i.seat)
     assert [i.observation["participant_id"] for i in registrations] == names
+    assert all(i.observation["history_window"] == 2 for i in registrations)

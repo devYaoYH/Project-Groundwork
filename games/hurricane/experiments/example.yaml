@@ -1,7 +1,7 @@
 schema_version: 1
 name: hurricane_example
 description: Do three model-backed managers pool their ensembles well enough to evacuate the hit zones in time?
-release: ../environments/hurricane_tiny_v1.yaml
+release: ../environments/hurricane_tiny_v2.yaml
 agents:
   - {role: manager, type: llm, model: gpt-4o-mini}
   - {role: manager, type: llm, model: gpt-4o-mini}

@@ -1,7 +1,7 @@
 schema_version: 1
 name: hurricane_local_smoke
 description: Scripted managers run the full six-round inquiry with no provider; writes SQLite and local OTel spans.
-release: ../environments/hurricane_tiny_v1.yaml
+release: ../environments/hurricane_tiny_v2.yaml
 agents:
   - {role: manager, type: scripted, model: scripted}
   - {role: manager, type: scripted, model: scripted}

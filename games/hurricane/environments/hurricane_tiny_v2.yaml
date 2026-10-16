@@ -1,7 +1,7 @@
 schema_version: 1
 id: hurricane.tiny
-release: v1
-description: Three coastal managers, nine zones, one frozen storm; six rounds with a two-round evacuation lead time.
+release: v2
+description: Three coastal managers, nine zones, one frozen storm; six rounds with a two-round lead time, bulletin, direct messages, live meetings and a shared board.
 engine:
   environment_id: hurricane
   defaults:
@@ -9,9 +9,12 @@ engine:
     scenario_id: storm.central_city
     num_rounds: 6
     evacuation_lead_time: 2
-    discussion_cycles: 1
     ensemble_size: 5
     recon_budget: 3
+    attention_budget: 3
+    meeting_turns: 2
+    meeting_attention_cost: 1
+    reply_turns: 1
 inputs:
 - id: storms-v1
   path: ../hurricane/items/storms_v1.jsonl
@@ -39,6 +42,12 @@ metrics:
 - name: estimate_error
   producer: environment
   direction: minimize
+- name: knowledge_common_fraction
+  producer: environment
+  direction: neutral
+- name: meetings_convened
+  producer: environment
+  direction: neutral
 item_policy:
   mode: enumerate
   bank_path: ../hurricane/items/storms_v1.jsonl

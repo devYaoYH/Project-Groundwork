@@ -1,4 +1,4 @@
-"""Agent service owns provider execution, deadline and accruing private history."""
+"""Agent service owns provider execution, deadline, bounded memory and accruing private history."""
 
 import asyncio
 import threading
@@ -13,6 +13,16 @@ class DeadlineClient:
 
     def oneshot(self, messages):
         return self.client.oneshot(messages, deadline=self.deadline)
+
+
+def submission(action):
+    """The environment's action dict becomes one submit_turn call."""
+    if not isinstance(action, dict) or action.get("parse_failed"):
+        return {"parse_failed": True}
+    actions = action.get("actions") if "actions" in action else [action]
+    if not isinstance(actions, list):
+        return {"parse_failed": True}
+    return {"actions": [a for a in actions if isinstance(a, dict)]}
 
 
 class HurricaneStrategy:
@@ -34,7 +44,9 @@ class HurricaneStrategy:
                 or f"participant_{invocation.observation['participant'] - 1}"
             )
             self.agent = (
-                HurricaneAgent(self.bounded_client, name) if self.client else ScriptedManager(name)
+                HurricaneAgent(self.bounded_client, name,
+                               history_window=invocation.observation.get("history_window"))
+                if self.client else ScriptedManager(name)
             )
             return []
         if invocation.kind != "turn":
@@ -64,4 +76,4 @@ class HurricaneStrategy:
                 raise
         else:
             action = await self.agent.act(invocation.observation, {})
-        return [("env", "submit_action", action)]
+        return [("env", "submit_turn", submission(action))]
