@@ -1,0 +1,17 @@
+schema_version: 1
+name: hurricane_haiku_live
+description: Three Claude Haiku 5.5 managers pool ensemble readings and order evacuations; one seeded episode on the central-city storm.
+release: ../environments/hurricane_tiny_v1.yaml
+agents:
+  - {role: manager, type: llm, model: claude-haiku-5-5, max_tokens: 1024}
+  - {role: manager, type: llm, model: claude-haiku-5-5, max_tokens: 1024}
+  - {role: manager, type: llm, model: claude-haiku-5-5, max_tokens: 1024}
+episodes:
+  - label: central_city
+    count: 1
+    seeds: [7]
+storage:
+  backend: sqlite
+  path: ./results/hurricane_haiku.db
+observability:
+  capture_content: true
