@@ -20,6 +20,8 @@ def main():
     command = [sys.executable, str(script), "--execution-dir", args.execution_dir]
     if args.loop:
         command.append("--loop")
+    else:
+        command.append("--wait-for-shutdown")
     os.execv(sys.executable, command)
 
 
