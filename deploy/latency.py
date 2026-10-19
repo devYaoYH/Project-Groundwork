@@ -55,6 +55,9 @@ def describe_timings(build):
     return {
         "id": build["id"],
         "status": build["status"],
+        "source_sha": build.get("substitutions", {}).get("_SOURCE_SHA"),
+        "runtime_source_sha": build.get("substitutions", {}).get("_RUNTIME_SOURCE_SHA"),
+        "machine_type": build.get("options", {}).get("machineType", "default"),
         "created_at": build.get("createTime"),
         "started_at": build.get("startTime"),
         "finished_at": build.get("finishTime"),
@@ -147,8 +150,8 @@ def submit(phase, project, region, source, runtime_source, publish_only):
         result = describe_timings(build) if build else {"status": "SUBMISSION_FAILED"}
         result.update(
             stage=f"cloud-{phase}",
-            started_at=started,
-            finished_at=stamp(),
+            request_started_at=started,
+            request_finished_at=stamp(),
             wall_seconds=round(time.monotonic() - clock, 3),
         )
         if build:

@@ -220,11 +220,20 @@ def promote(
         final_tag = repos["runtime"] + ":" + runtime_source
         final = images.registry_image(project, final_tag)
         if final is None:
-            subprocess.run(["docker", "pull", runtime], check=True)
-            if images.image_id(runtime) != runtime_config:
-                raise ValueError("Science image changed during download")
-            # The publisher never builds; it only copies the validated manifest/layers.
-            final = images.publish_image(project, final_tag, runtime_config, immutable=True)
+            # Pull/tag/push can rewrite manifest JSON despite identical image configs.
+            # A single-source registry copy must preserve the original manifest bytes.
+            images.docker(
+                "buildx",
+                "imagetools",
+                "create",
+                "--prefer-index=false",
+                "--tag",
+                final_tag,
+                runtime,
+            )
+            final = images.registry_image(project, final_tag)
+            if final is None:
+                raise RuntimeError("Promoted science image is missing")
         images.verify_registry_image(final, runtime_config)
         if final.rpartition("@")[2] != runtime.rpartition("@")[2]:
             raise ValueError("Science promotion must preserve the tested manifest digest")

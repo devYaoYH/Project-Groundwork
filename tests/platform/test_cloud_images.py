@@ -135,7 +135,9 @@ def test_promotion_copies_exact_science_or_rejects_a_concurrent_conflict(
 ):
     calls = []
     monkeypatch.setattr(cloud, "command", lambda *a: "")
-    monkeypatch.setattr(images, "registry_image", lambda *a: existing)
+    monkeypatch.setattr(
+        images, "registry_image", lambda *a: RUNTIME if ("copy",) in calls else existing
+    )
 
     def verify(image, config):
         if image == PLATFORM and config == SCI_CONFIG:
@@ -145,7 +147,15 @@ def test_promotion_copies_exact_science_or_rejects_a_concurrent_conflict(
     monkeypatch.setattr(images, "verify_registry_image", verify)
     monkeypatch.setattr(images, "image_id", lambda *a: SCI_CONFIG)
     monkeypatch.setattr(cloud.subprocess, "run", lambda args, **k: calls.append(tuple(args)))
-    monkeypatch.setattr(images, "publish_image", lambda *a, **k: calls.append(("copy",)) or RUNTIME)
+    monkeypatch.setattr(
+        images,
+        "docker",
+        lambda *a: (
+            calls.append(("copy",))
+            if a[:3] == ("buildx", "imagetools", "create") and "--prefer-index=false" in a
+            else pytest.fail("Unexpected Docker operation")
+        ),
+    )
     arguments = (
         "project",
         "us-central1",
@@ -222,7 +232,7 @@ def test_failed_cloud_submission_still_records_latency(tmp_path, monkeypatch):
 def test_publication_has_no_build_and_benchmark_skips_hosted_writes():
     root = Path(__file__).resolve().parents[2]
     config = yaml.safe_load((root / "cloudbuild.yaml").read_text())
-    assert not any("buildx" in str(step) or "docker build" in str(step) for step in config["steps"])
+    assert not any("docker build" in str(step) for step in config["steps"])
     for step in config["steps"]:
         if step["id"] in ("publish-catalogue", "publish", "verify-hosted"):
             assert "if test '${_PUBLISH_ONLY}' != true" in step["args"][-1]

@@ -270,7 +270,10 @@ Science tags remain immutable. PR jobs never authenticate or publish. Build
 manifests use a dedicated source-bucket prefix, separate from scientific evidence
 and catalogue objects. Configure candidate/cache retention for the mutable
 repository and manifest prefix according to the desired diagnostic window;
-do not apply cleanup to published science images referenced by locked plans.
+retain every science or platform digest referenced by locked plans, live
+deployments, or historical runtime bindings. A platform image keeps its candidate
+tag even when deployment activates its immutable digest; a blanket candidate-tag
+cleanup policy would therefore be unsafe.
 
 For a plain local web build after installing a new game, regenerate the same
 route artifact before building:

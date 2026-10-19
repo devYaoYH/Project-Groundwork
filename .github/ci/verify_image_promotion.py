@@ -126,6 +126,23 @@ def main():
             candidate_tag = address + "/candidate-runtime:" + fixture
             docker("tag", image_ids[1], candidate_tag)
             docker("push", candidate_tag)
+            # Non-canonical JSON is valid registry content. Docker pull/tag/push
+            # repacks it, which changed real BuildKit candidate digests in Cloud Build.
+            manifest_url = "http://" + address + "/v2/candidate-runtime/manifests/" + fixture
+            request = Request(
+                manifest_url,
+                headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+            )
+            with urlopen(request, timeout=5) as response:
+                raw_manifest = json.loads(response.read())
+            payload = (json.dumps(raw_manifest, indent=5) + "\n").encode()
+            request = Request(
+                manifest_url,
+                data=payload,
+                method="PUT",
+                headers={"Content-Type": "application/vnd.docker.distribution.manifest.v2+json"},
+            )
+            urlopen(request, timeout=5).close()
             candidate = lookup("fixture", candidate_tag)
             commands.clear()
             cloud.promote(
@@ -141,7 +158,9 @@ def main():
             )
             promoted = (context / "promoted-runtime").read_text()
             assert promoted.rpartition("@")[2] == candidate.rpartition("@")[2]
-            assert sum(command[0] == "push" for command in commands) == 1
+            assert (
+                sum(command[:3] == ("buildx", "imagetools", "create") for command in commands) == 1
+            )
             commands.clear()
             cloud.promote(
                 "fixture",
