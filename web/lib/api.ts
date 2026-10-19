@@ -218,6 +218,7 @@ export type CellEvidence = {
 };
 
 export type AgentBinding = {
+  source?: string | null;
   capabilities?: { input?: string[]; evidence?: string };
   name: string;
   description: string;

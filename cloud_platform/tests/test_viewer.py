@@ -181,7 +181,7 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
 
     app, control, _ = platform
     alice = sign_in(app, "Alice")
-    name = "haiku-5.5"
+    name = "haiku-5.5-vertex"
     response = alice.get("/api/agent-pool")
     assert response.status_code == 200
     entries = {entry["name"]: entry for entry in response.json()["agents"]}
@@ -190,6 +190,7 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
     entry = entries[name]
     assert entry["model"] == "claude-haiku-5-5"
     assert entry["api_format"] == "vertexai_anthropic"
+    assert entry["source"] == "vertexai"
     assert entry["credential"] is None
     assert entry["credential_present"] is None
 
@@ -211,4 +212,5 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
         assert [agent["model"] for agent in config["agents"]] == [entry["model"]] * 2
         assert all(agent["api_format"] == "vertexai_anthropic" for agent in config["agents"])
         assert all(agent["gcp_location"] == "global" for agent in config["agents"])
+        assert all(agent["source"] == "vertexai" for agent in config["agents"])
         assert all("api_key" not in agent and "credential" not in agent for agent in config["agents"])

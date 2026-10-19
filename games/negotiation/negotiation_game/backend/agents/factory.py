@@ -124,6 +124,15 @@ def make_agent(cfg: dict):
     if t == "human":
         return HumanAgent()
     if t == "llm":
+        if cfg.get("source") is not None:
+            from a2a_engine.llm.factory import make_llm_client
+            client = make_llm_client(cfg)
+            return LLMAgentStdlib(
+                api_base=client.api_base, api_key=client.api_key, model=client.model,
+                api_format=client.api_format, temperature=client.temperature,
+                max_tokens=client.max_tokens, vertex_adc_file=client.vertex_adc_file,
+                gcp_project=client.gcp_project, gcp_location=client.gcp_location,
+            )
         model = cfg.get("model", "gpt-4o-mini")
         api_base = cfg.get("api_base")
         api_key = cfg.get("api_key")

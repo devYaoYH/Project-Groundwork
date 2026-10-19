@@ -38,12 +38,12 @@ class AgentPoolEntry(BaseModel):
     required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     asset_root: str | None = None
     model: str | None = None
+    source: Literal["openai", "anthropic", "openrouter", "gemini", "ollama", "vertexai"] | None = None
     api_format: str | None = None
     api_base: str | None = None
-    # Named rather than inferred from the model string: inference is what makes
-    # a missing key surface as an opaque 401 instead of a named variable.
-    # ``None`` means the binding needs no release key (ADC, or a scripted
-    # agent that calls nothing).
+    # With an explicit source, this selects the account's environment variable.
+    # Legacy entries without source retain their metadata-only interpretation.
+    # ADC and scripted bindings do not need an API-key reference.
     credential: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -60,6 +60,13 @@ class AgentPoolEntry(BaseModel):
             if key not in self.model_fields_set:
                 fields.pop(key, None)
         result = {**fields, **self.config}
+        if result.get("source") is not None:
+            if self.credential:
+                result.setdefault("credential", self.credential)
+            from .llm.factory import provider_for_config, credential_for_config
+            reference = credential_for_config(result, provider_for_config(result))
+            if reference:
+                result["credential"] = reference
         from .remote.seats import validate_runtime
         validate_runtime(result)
         return result
@@ -82,11 +89,14 @@ class AgentPool(BaseModel):
 
     def missing_credentials(self, names: list[str]) -> list[str]:
         """Release variables these bindings need that are not set."""
-        missing = {
-            entry.credential
-            for entry in (self.entry(name) for name in names)
-            if entry.as_agent_config().get("runtime", "in_process") != "external" and entry.credential and not os.environ.get(entry.credential)
-        }
+        missing = set()
+        for name in names:
+            entry = self.entry(name)
+            config = entry.as_agent_config()
+            reference = config.get("credential") if config.get("source") is not None else entry.credential
+            if (config.get("runtime", "in_process") != "external"
+                    and reference and not os.environ.get(reference)):
+                missing.add(reference)
         return sorted(missing)
 
 

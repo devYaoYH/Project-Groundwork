@@ -137,8 +137,8 @@ by bootstrap and available only to the control API.
 
 ### Vertex AI ADC
 
-The published `haiku-5.5` binding uses `claude-haiku-5-5`,
-`api_format: vertexai_anthropic`, and location `global`. It requires no Anthropic
+The published `haiku-5.5-vertex` binding uses `claude-haiku-5-5`,
+`source: vertexai`, `api_format: vertexai_anthropic`, and location `global`. It requires no Anthropic
 API-key secret. Cloud Run obtains ADC from the attached `groundwork-worker`
 service account; the API, build and CI identities do not need prediction access.
 The Vertex model location is independent of the Cloud Run region `us-central1`.

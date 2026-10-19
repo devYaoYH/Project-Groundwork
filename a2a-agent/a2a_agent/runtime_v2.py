@@ -90,7 +90,29 @@ class AgentRuntimeV2:
         return JSONResponse({"healthy": not self.stopping})
 
     async def credentials(self, request):
-        from a2a_engine.llm.factory import PROVIDER_ENV_VARS, get_api_key_for_provider
+        from a2a_engine.llm.factory import ADC_PROVIDERS, PROVIDER_ENV_VARS, credential_for_config, get_api_key_for_provider
+        provider = request.query_params.get("provider")
+        if provider is not None:
+            reference = request.query_params.get("credential")
+            if provider in ADC_PROVIDERS:
+                if reference:
+                    return JSONResponse({"error": "ADC does not accept an API-key reference"}, status_code=400)
+                from a2a_engine.llm.api import _load_vertex_credentials
+                try:
+                    credentials, _ = _load_vertex_credentials(None)
+                    present = credentials is not None
+                except Exception:
+                    present = False
+            elif provider in PROVIDER_ENV_VARS:
+                if reference:
+                    try:
+                        credential_for_config({"source": provider, "credential": reference}, provider)
+                    except ValueError:
+                        return JSONResponse({"error": "invalid provider credential reference"}, status_code=400)
+                present = bool(get_api_key_for_provider(provider, reference))
+            else:
+                return JSONResponse({"error": "unknown provider"}, status_code=400)
+            return JSONResponse({"providers": {provider: present}})
         return JSONResponse({"providers": {provider: bool(get_api_key_for_provider(provider))
                                          for provider in PROVIDER_ENV_VARS}})
 

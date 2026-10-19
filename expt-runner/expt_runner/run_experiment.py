@@ -174,7 +174,7 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
     Agents without a ``model`` are scripted or heuristic and need no credential,
     so a config that calls no provider passes unconditionally.
     """
-    from a2a_engine.llm.factory import detect_provider, get_api_key_for_provider
+    from a2a_engine.llm.factory import ADC_PROVIDERS, provider_for_config, credential_for_config, get_api_key_for_provider
 
     agents = cfg.get("agents", [])
     for i, agent_spec in enumerate(agents):
@@ -184,13 +184,9 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
         model = spec.get("model", "")
         if not model:
             continue
+        provider = provider_for_config(spec)
         if spec.get("api_key"):
             continue
-        api_format = str(spec.get("api_format") or "")
-        if api_format in {"vertexai", "vertexai_anthropic", "vertexai_openai"}:
-            log.info("%s: api_format %r uses Google ADC; skipping API key check (agent %d)", mode, api_format, i)
-            continue
-        provider = detect_provider(model)
         if provider is None:
             # A pool name in `model:` is the likely mistake here: the two are
             # different namespaces, and left alone it fails much later with an
@@ -203,14 +199,15 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
                 )
             log.warning("%s: unknown provider for model %r (agent %d), skipping key check", mode, model, i)
             continue
-        if provider in {"gemini_vertexai", "claude_vertexai", "vertexai_openai", "llama_vertexai"}:
+        if provider in ADC_PROVIDERS:
             log.info("%s: provider %r uses Google ADC; skipping API key check (agent %d)", mode, provider, i)
             continue
-        key = get_api_key_for_provider(provider)
+        credential = credential_for_config(spec, provider)
+        key = get_api_key_for_provider(provider, credential)
         if not key:
             raise EnvironmentError(
                 f"{mode}: missing API key for provider {provider!r} "
-                f"(agent {i}, model {model!r}). Set it in the repo-root .env "
+                f"(agent {i}, model {model!r}, credential {credential or 'provider default'}). Set it in the repo-root .env "
                 f"before starting the stack."
             )
         log.info("%s: API key present for provider %r (agent %d)", mode, provider, i)

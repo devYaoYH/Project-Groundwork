@@ -697,17 +697,20 @@ class ControlPlane:
         pool = load_agent_pool(self.workspace / "experiments")
         entries = []
         for name, entry in sorted(pool.agents.items()):
+            config = entry.as_agent_config()
+            reference = config.get("credential") if config.get("source") is not None else entry.credential
             entries.append({
                 "name": name,
                 "description": entry.description,
                 "capabilities": entry.capabilities,
                 "type": entry.type,
                 "model": entry.model,
+                "source": config.get("source"),
                 "api_format": entry.api_format,
                 "api_base": entry.api_base,
-                "credential": entry.credential,
+                "credential": reference,
                 "credential_present": (
-                    bool(os.environ.get(entry.credential)) if entry.credential else None
+                    bool(os.environ.get(reference)) if reference else None
                 ),
             })
         return {"agents": entries, "sources": pool.sources}

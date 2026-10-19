@@ -337,6 +337,8 @@ class AgentConfig(_StrictModel):
     required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     asset_root: str | None = None
     model: str | None = None
+    source: Literal["openai", "anthropic", "openrouter", "gemini", "ollama", "vertexai"] | None = None
+    credential: str | None = None
     api_format: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -350,6 +352,9 @@ class AgentConfig(_StrictModel):
             if key not in self.model_fields_set:
                 base.pop(key, None)
         result = {**base, **self.config}
+        if result.get("source") is not None:
+            from .llm.factory import provider_for_config, credential_for_config
+            credential_for_config(result, provider_for_config(result))
         from .remote.seats import validate_runtime
         validate_runtime(result)
         return result

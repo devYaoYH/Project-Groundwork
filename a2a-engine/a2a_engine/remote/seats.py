@@ -84,11 +84,11 @@ class LocalProcessLauncher:
             "scripted" if spec.get("type") == "scripted" or heuristic else "structured_output"
         )
         if harness == "structured_output":
-            from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
+            from a2a_engine.llm.factory import ADC_PROVIDERS, provider_for_config, credential_for_config, env_var_for_provider
             from a2a_engine.manifest import redact_config
 
-            provider = detect_provider(spec["model"], spec.get("api_format"))
-            credential = env_var_for_provider(provider)
+            provider = provider_for_config(spec)
+            credential = credential_for_config(spec, provider) or env_var_for_provider(provider)
             required = [credential] if credential else []
             if provider in ADC_PROVIDERS:
                 required += ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"]
@@ -97,6 +97,8 @@ class LocalProcessLauncher:
                 key: spec[key]
                 for key in (
                     "model",
+                    "source",
+                    "credential",
                     "api_base",
                     "api_format",
                     "temperature",

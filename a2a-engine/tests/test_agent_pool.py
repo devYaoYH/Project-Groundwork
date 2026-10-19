@@ -179,7 +179,7 @@ def test_haiku_55_participants_use_vertex_adc_without_an_anthropic_key(tmp_path,
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     experiment = tmp_path / "haiku.yaml"
     experiment.write_text(
-        "name: haiku_55\nparticipants: [haiku-5.5, haiku-5.5]\n"
+        "name: haiku_55\nparticipants: [haiku-5.5-vertex, haiku-5.5-vertex]\n"
         "defaults: {environment_id: word_guess, num_agents: 2}\n"
         "cells: [{label: baseline, count: 1}]\n"
     )
@@ -209,9 +209,67 @@ def test_haiku_55_participants_use_vertex_adc_without_an_anthropic_key(tmp_path,
     assert client.api_key == "" and client.api_base == ""
     assert client.oneshot([{"role": "user", "content": "test"}]) == "ok"
     pool = load_agent_pool(workspace / "experiments")
-    assert pool.entry("haiku-5.5").credential is None
+    assert pool.entry("haiku-5.5-vertex").credential is None
+    assert pool.entry("haiku-5.5-vertex").source == "vertexai"
+    assert "haiku-5.5" not in pool.agents
     assert not {"sonnet-5.5", "opus-5.5"} & pool.agents.keys()
     assert pool.entry("haiku").model == "claude-haiku-4-5-20251001"
     # An inline direct Anthropic configuration keeps its existing route.
     assert detect_provider("claude-haiku-5-5") == "anthropic"
     assert make_llm_client({"model": "claude-haiku-5-5"}).api_format == "anthropic"
+
+
+def test_same_haiku_model_can_bind_to_independent_sources_and_accounts(monkeypatch):
+    from a2a_engine.llm.factory import make_llm_client
+    from a2a_engine.manifest import EpisodeManifest
+    from a2a_engine.provenance import pinned_participants
+    from expt_runner.run_experiment import _check_api_keys
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "default-account-key")
+    monkeypatch.setenv("ANTHROPIC_RESEARCH_API_KEY", "research-account-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat-unrelated")
+    pool = AgentPool(agents={
+        "haiku-research": AgentPoolEntry(model="claude-haiku-5-5", source="anthropic",
+            credential="ANTHROPIC_RESEARCH_API_KEY"),
+        "haiku-vertex": AgentPoolEntry(model="claude-haiku-5-5", source="vertexai",
+            api_format="vertexai_anthropic", config={"gcp_project": "study-project", "gcp_location": "global"}),
+    })
+    direct, vertex = hydrate_participants(["haiku-research", "haiku-vertex"], pool)
+    assert direct["model"] == vertex["model"]
+    assert direct["credential"] == "ANTHROPIC_RESEARCH_API_KEY"
+    direct_client, vertex_client = make_llm_client(direct), make_llm_client(vertex)
+    assert direct_client.api_key == "research-account-key"
+    assert direct_client.api_format == "anthropic"
+    assert vertex_client.api_key == "" and vertex_client.api_format == "vertexai_anthropic"
+    assert vertex_client.gcp_project == "study-project"
+    assert pinned_participants({"agents": [direct]})[0]["config_sha256"] != pinned_participants({"agents": [vertex]})[0]["config_sha256"]
+    manifest = EpisodeManifest.from_run(config={"agents": [direct, vertex]}, experiment_name="source-test", cell_id="one", episode_idx=0, episode_uid="test")
+    assert [agent.model_dump()["source"] for agent in manifest.agents] == ["anthropic", "vertexai"]
+    monkeypatch.delenv("ANTHROPIC_RESEARCH_API_KEY")
+    # An available key/token for a different account must not be substituted.
+    assert make_llm_client(direct).api_key == ""
+    with pytest.raises(EnvironmentError, match="ANTHROPIC_RESEARCH_API_KEY"):
+        _check_api_keys({"agents": [direct]}, mode="live")
+    _check_api_keys({"agents": [vertex]}, mode="live")
+
+
+@pytest.mark.parametrize("config", [
+    {"source": "vertexai"},
+    {"source": "vertexai", "api_format": "anthropic"},
+    {"source": "vertexai", "api_format": "vertexai_anthropic", "credential": "ANTHROPIC_API_KEY"},
+    {"source": "anthropic", "api_format": "vertexai_anthropic"},
+    {"source": "anthropic", "credential": "A2A_JOIN_TICKET"},
+    {"source": "openrouter", "credential": "OPENAI_API_KEY"},
+    {"source": "nonexistent"},
+])
+def test_explicit_source_refuses_conflicts_or_unrelated_credentials(config):
+    from a2a_engine.llm.factory import make_llm_client
+    with pytest.raises(ValueError):
+        make_llm_client({"model": "claude-haiku-5-5", **config})
+
+
+def test_explicit_source_materializes_the_default_account_reference(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    entry = AgentPoolEntry(model="claude-haiku-5-5", source="anthropic")
+    assert entry.as_agent_config()["credential"] == "ANTHROPIC_API_KEY"
+    assert AgentPool(agents={"direct": entry}).missing_credentials(["direct"]) == ["ANTHROPIC_API_KEY"]
