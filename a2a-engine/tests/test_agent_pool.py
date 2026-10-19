@@ -159,3 +159,60 @@ def test_runtime_harness_survive_pool_hydration_and_external_needs_no_key(monkey
     assert pool.entry("local").harness == "scripted"
     with pytest.raises(ValueError):
         AgentPoolEntry(config={"runtime": "unknown"}).as_agent_config()
+
+
+@pytest.mark.parametrize("family", ["haiku", "sonnet", "opus"])
+@pytest.mark.parametrize("auth", ["api-key", "oauth"])
+def test_claude_55_participants_reach_anthropic_without_temperature(
+    family, auth, tmp_path, monkeypatch,
+):
+    """Exercise CLI hydration through the actual request builder, without HTTP."""
+    import io
+    import json
+    from pathlib import Path
+
+    from a2a_engine.experiment import load_experiment
+    from a2a_engine.llm import api
+    from a2a_engine.llm.factory import make_llm_client
+    from expt_runner.run_experiment import _check_api_keys
+
+    workspace = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("A2A_AGENT_POOL", str(workspace / "experiments/agents.yaml"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    variable, key = ("ANTHROPIC_API_KEY", "test-api-key") if auth == "api-key" else (
+        "ANTHROPIC_AUTH_TOKEN", "sk-ant-oat-test-token",
+    )
+    monkeypatch.setenv(variable, key)
+    experiment = tmp_path / "claude.yaml"
+    experiment.write_text(
+        f"name: claude_55\nparticipants: [{family}-5.5, {family}-5.5]\n"
+        "defaults: {environment_id: word_guess, num_agents: 2}\n"
+        "cells: [{label: baseline, count: 1}]\n"
+    )
+    config = load_experiment(experiment).defaults
+    _check_api_keys(config, mode="live")
+    assert [agent["model"] for agent in config["agents"]] == [f"claude-{family}-5-5"] * 2
+    assert all("credential" not in agent and "api_key" not in agent for agent in config["agents"])
+
+    def fake_urlopen(request, **kwargs):
+        assert request.full_url == "https://api.anthropic.com/v1/messages"
+        body = json.loads(request.data)
+        assert body["model"] == f"claude-{family}-5-5"
+        assert "temperature" not in body
+        assert body["max_tokens"] > 0
+        headers = {name.lower(): value for name, value in request.header_items()}
+        if auth == "oauth":
+            assert headers["authorization"] == f"Bearer {key}"
+            assert headers["anthropic-beta"] == "oauth-2025-04-20"
+            assert "x-api-key" not in headers
+        else:
+            assert headers["x-api-key"] == key
+            assert "authorization" not in headers
+        return io.BytesIO(b'{"content": [{"type": "text", "text": "ok"}]}')
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", fake_urlopen)
+    client = make_llm_client(config["agents"][0])
+    assert client.oneshot([{"role": "user", "content": "test"}]) == "ok"
+    # Existing studies retain their Haiku 4.5 endpoint.
+    assert load_agent_pool(workspace / "experiments").entry("haiku").model == "claude-haiku-4-5-20251001"

@@ -69,7 +69,7 @@ YAML. `make_llm_client` infers a provider from `model` unless you override it.
 | Model / configuration | API format | Credential source |
 |---|---|---|
 | `gpt-*`, `o1-*`, `o3-*`, `o4-*` | `openai` | `OPENAI_API_KEY` |
-| `claude-*` | `anthropic` | `ANTHROPIC_API_KEY` |
+| `claude-*` (direct API) | `anthropic` | `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN` |
 | `gemini-*` | OpenAI-compatible | `GOOGLE_API_KEY` |
 | model identifier containing `/` | OpenAI-compatible | `OPENROUTER_API_KEY` |
 | `llama`, `mistral`, `qwen` | OpenAI-compatible | `OLLAMA_API_KEY` (usually optional locally) |
@@ -93,6 +93,15 @@ agents:
 `vertexai_anthropic`, and `vertexai_openai`. Vertex-only fields are
 `gcp_project`, `gcp_location`, and `vertex_adc_file` (or `adc_file`). They are
 optional integrations, not part of the local stack.
+
+For direct Anthropic clients, an unset or empty `ANTHROPIC_API_KEY` falls back
+to `ANTHROPIC_AUTH_TOKEN`. Tokens starting with `sk-ant-oat` use Bearer auth and
+the `oauth-2025-04-20` beta header. This works for in-process CLI seats when the
+variable is present in the runner's environment. It is not end-to-end platform
+OAuth support: the pool's credential indicator checks only its named variable,
+`local_process` children forward `ANTHROPIC_API_KEY` only, and the supplied
+platform Compose/runtime secret configuration passes API keys only. Use
+`ANTHROPIC_API_KEY` for those paths. Keep either credential private.
 
 ## Reproducibility and checks
 
@@ -162,9 +171,18 @@ agents:
     credential: OPENROUTER_API_KEY
 ```
 
-`credential` names the release variable the binding needs, so a missing key
-is reported by name before a run starts rather than as a 401 during it. Values
-go in `.env`.
+`credential` names the expected environment variable for pool inspection.
+Values go in `.env`. It is metadata: hydration drops this field, and the client
+factory/runner preflight selects credentials using the concrete model's provider.
+Naming an arbitrary variable here does not make the client read it.
+
+The direct Anthropic pool includes `haiku-5.5`, `sonnet-5.5`, and `opus-5.5`,
+resolving to `claude-haiku-5-5`, `claude-sonnet-5-5`, and `claude-opus-5-5`.
+They use `ANTHROPIC_API_KEY` on the platform. Existing `haiku` and `haiku-or`
+bindings retain Claude Haiku 4.5. The 5.5 registry entries omit `temperature`
+from requests; changing a pool binding alone would not supply that API rule.
+These bindings declare text input only; image support requires the explicit
+capability evidence described below.
 
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
@@ -194,3 +212,62 @@ Image input requires explicit `capabilities.input: [text, image]` and a
 provider adapter. Unknown support remains text-only. See
 [MULTIMODAL_INPUTS.md](MULTIMODAL_INPUTS.md) for agent-pool, design-roster, and
 remote runtime examples.
+
+## Onboard a model endpoint
+
+Runtime support and published choices are separate steps. The model registry is
+an API-parameter lookup, not an allowlist or the source of the Agents screen.
+An inline `model: claude-sonnet-5-5` can work in `a2a-run` while no corresponding
+pool choice appears in the UI. Complete this path when adding an endpoint:
+
+1. **Resolve the provider and wire format.** Check
+   `a2a-engine/a2a_engine/llm/factory.py` and `llm/providers.py` for model-name
+   inference, base URL and credentials. An existing provider usually needs only
+   configuration; a new protocol needs an adapter in `llm/api.py`.
+2. **Register API quirks when needed.** Update `llm/model_config.py` for token
+   parameter names, default token budgets or unsupported sampling parameters.
+   Unknown model IDs otherwise use fallback rules. Verify outgoing payloads
+   with mocked HTTP, including omission of unsupported parameters.
+3. **Publish a binding.** Add a distinct logical name in
+   `experiments/agents.yaml` with `type`, concrete `model`, `api_format`,
+   `credential`, and a description; set `api_base` for custom endpoints. Keep
+   existing names stable so new studies do not silently change models. For
+   private routing use `agents.local.yaml`; `A2A_AGENT_POOL=/path/to/pool.yaml`
+   replaces discovery entirely rather than merging with the shared pool.
+4. **Resolve each authoring path.** CLI experiments use positional
+   `participants: [haiku-5.5, sonnet-5.5]` (matching the release's seat count), or
+   inline `agents` with concrete model IDs. UI designs use pool names in the
+   roster, for example:
+
+   ```yaml
+   roster:
+     - {id: seller, role: seller, kind: llm, binding: sonnet-5.5}
+     - {id: buyer, role: buyer, kind: llm, binding: opus-5.5}
+   ```
+
+   The design compiler hydrates bindings before freezing the plan. Test that
+   the frozen agents contain concrete model IDs and formats, with no secrets.
+   Locked experiments retain their resolved bindings and runtime pins; create
+   or fork a design to select a newly published model.
+5. **Supply runtime credentials and rebuild.** The platform API reads the pool
+   through `GET /api/agent-pool`; the Agents page and roster choices consume
+   that response. No frontend model list needs editing. Provider secrets belong
+   in the runtime service (local `compose.platform.yml`, or the hosted secret
+   setup in [deploy/README.md](../deploy/README.md)), never the pool or bridge
+   request files. Rebuild/recreate the selected stack following
+   [INSTALLATION.md](INSTALLATION.md#refresh-and-stop), including both platform
+   and science-runtime images. Reload Agents and check the authenticated API
+   response. Hosted availability requires a separate release of the change;
+   editing the checkout or restarting an old image does not publish it.
+
+Run the focused offline checks from the repository's Python environment:
+
+```bash
+python -m pytest a2a-engine/tests/test_agent_pool.py a2a-engine/tests/test_experiment.py
+python -m pytest cloud_platform/tests/test_viewer.py cloud_platform/tests/test_catalogue.py
+```
+
+Use `--smoke-test` for scripted execution and SQLite readback. Neither a smoke
+run nor a mocked provider request proves live provider access. Run
+`a2a-run EXPERIMENT --dry-run` only when provider-backed validation is requested;
+it can contact providers and incur usage.

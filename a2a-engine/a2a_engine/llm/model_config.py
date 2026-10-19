@@ -3,6 +3,8 @@ Model-specific API configuration.
 
 Maps model identifiers to their required API parameters and quirks.
 Update this file when new models are released or API requirements change.
+This registry does not publish agent-pool choices; also follow the endpoint
+onboarding checklist in docs/AGENT_CONFIGURATION.md.
 """
 
 from dataclasses import dataclass
