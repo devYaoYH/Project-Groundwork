@@ -8,8 +8,8 @@ CI now uses four Python shards and three container shards on separate runners.
 Files remain intact within a shard, preserving module fixtures and avoiding
 concurrent checkout mutations or mutable Docker image tags on one runner.
 Discovery still collects all registered packages, including newly added games.
-`scripts/ci_sharding.py` assigns every collected file exactly once using
-`tests/ci_durations.json`; unknown files receive a test-count estimate.
+`.github/ci/ci_sharding.py` assigns every collected file exactly once using
+`.github/ci/ci_durations.json`; unknown files receive a test-count estimate.
 Weights come from the first passing Linux run of PR #32. Refresh them from
 CI artifacts after significant test changes; the bounded solver case uses its
 new focused timing instead of its previous 90-second duration.
@@ -37,7 +37,7 @@ ordinary build behavior. Do not set it against stale images.
 Reproduce a Python shard after the installation in INSTALLATION.md:
 
 ```bash
-uv run python scripts/workspace.py test -p scripts.ci_sharding --ci-shard=1/4 --durations=30
+PYTHONPATH=.github/ci uv run python scripts/workspace.py test -p ci_sharding --ci-shard=1/4 --durations=30
 ```
 
 For a full unsharded run, omit the plugin and shard arguments. Every Python,
@@ -53,3 +53,26 @@ input values at the 999/1,000 boundary and graph execution-budget calculation.
 The scenario-reproducibility test still executes the real Negotiation solver and
 oracle with a fixed random seed and a bounded iteration budget. Optional project
 naming is stubbed so ordinary tests do not perform ADC discovery or provider calls.
+
+
+## File ownership and local tooling checks
+
+CI scheduling code, duration estimates, and their tests live together in
+`.github/ci/`. Its README provides a short entry point; this document remains
+the detailed guide. Workflow orchestration stays in `.github/workflows/`, and
+the reusable image action stays in `.github/actions/build-image/`.
+
+`scripts/install_workspace.py` and its tests remain workspace tooling: local
+development, package discovery, and all four Dockerfiles use the installer.
+Deployment correctness tests remain in `tests/platform/`.
+
+Run the CI tooling and workspace tests from the repository root:
+
+```bash
+uv run python -m pytest .github/ci/tests tests/workspace
+```
+
+`scripts/workspace.py test` explicitly collects `.github/ci/tests`, including
+in an unsharded run. The sharded jobs set `PYTHONPATH=.github/ci` before loading
+`-p ci_sharding`; the duration JSON is resolved relative to the plugin file.
+New test files still enter the collection without edits to the weights.

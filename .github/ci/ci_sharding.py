@@ -1,6 +1,6 @@
 """Pytest plugin: deterministic, duration-balanced shards that keep files intact.
 
-Usage: pytest -p scripts.ci_sharding --ci-shard=1/4 ...
+Usage: PYTHONPATH=.github/ci pytest -p ci_sharding --ci-shard=1/4 ...
 Weights affect scheduling only; every collected file, including new files,
 belongs to exactly one shard. Separate runners isolate repository mutations
 and mutable Docker tags without weakening protocol or cleanup coverage.
@@ -44,7 +44,7 @@ def pytest_collection_modifyitems(config, items):
             "--ci-shard must be index/count with 1 <= index <= count"
         ) from error
     root = Path(config.rootpath)
-    weights = json.loads((root / "tests/ci_durations.json").read_text())
+    weights = json.loads(Path(__file__).with_name("ci_durations.json").read_text())
     paths = {item: item.path.relative_to(root).as_posix() for item in items}
     assigned, loads = assign_files(Counter(paths.values()), weights, total)
     selected = [item for item in items if assigned[paths[item]] == index - 1]

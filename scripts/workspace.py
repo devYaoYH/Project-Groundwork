@@ -178,6 +178,7 @@ def main():
                 *[item["path"] for item in manifest["packages"]],
                 "local_stack/tests",
                 "tests/workspace",
+                ".github/ci/tests",
                 *extra,
             ]
         )

@@ -64,6 +64,8 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .github/ci
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +81,7 @@ jobs:
       - run: uv run python scripts/install_workspace.py
       - name: Run every collected Python test across four isolated runners
         run: >-
-          uv run python scripts/workspace.py test -p scripts.ci_sharding
+          uv run python scripts/workspace.py test -p ci_sharding
           --ci-shard=${{ matrix.shard }}/4 --durations=30
           --junitxml=results/ci/python-${{ matrix.shard }}.xml
       - uses: actions/upload-artifact@v4
@@ -139,6 +141,7 @@ jobs:
         shard: [1, 2, 3]
     env:
       GROUNDWORK_CI_PREBUILT_IMAGES: "1"
+      PYTHONPATH: .github/ci
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -160,7 +163,7 @@ jobs:
       - run: docker tag a2a-comm-local:latest a2a-runtime-launch-test:local
       - name: Require all real game, transport, CLI and viewer containers
         run: >-
-          uv run python -m pytest tests/runtime -q -p scripts.ci_sharding
+          uv run python -m pytest tests/runtime -q -p ci_sharding
           --ci-shard=${{ matrix.shard }}/3 --durations=20
           --junitxml=results/ci/runtime-${{ matrix.shard }}.xml
       - uses: actions/upload-artifact@v4

@@ -1,4 +1,5 @@
 {
+  ".github/ci/tests/test_ci.py": 0.016,
   "a2a-agent/tests/test_conformance.py": 3.096,
   "a2a-agent/tests/test_join_link.py": 12.588,
   "a2a-agent/tests/test_runtime_failures.py": 5.546,
@@ -115,6 +116,5 @@
   "tests/runtime/test_container_negotiation.py": 58.949,
   "tests/runtime/test_container_turns.py": 47.928,
   "tests/runtime/test_container_word_guess.py": 33.31,
-  "tests/workspace/test_ci.py": 0.016,
   "tests/workspace/test_discovery.py": 0.045
 }
