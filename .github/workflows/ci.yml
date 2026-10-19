@@ -79,10 +79,10 @@ jobs:
       - run: uv venv
       - run: uv pip install pytest pytest-asyncio
       - run: uv run python scripts/install_workspace.py
-      - name: Run every collected Python test across four isolated runners
+      - name: Run every collected Python test across isolated runners
         run: >-
           uv run python scripts/workspace.py test -p ci_sharding
-          --ci-shard=${{ matrix.shard }}/4 --durations=30
+          --ci-shard=${{ matrix.shard }}/${{ strategy.job-total }} --durations=30
           --junitxml=results/ci/python-${{ matrix.shard }}.xml
       - uses: actions/upload-artifact@v4
         if: always()
@@ -160,7 +160,7 @@ jobs:
       - name: Require all real game, transport, CLI and viewer containers
         run: >-
           uv run python -m pytest tests/runtime -q -p ci_sharding
-          --ci-shard=${{ matrix.shard }}/3 --durations=20
+          --ci-shard=${{ matrix.shard }}/${{ strategy.job-total }} --durations=20
           --junitxml=results/ci/runtime-${{ matrix.shard }}.xml
       - uses: actions/upload-artifact@v4
         if: always()

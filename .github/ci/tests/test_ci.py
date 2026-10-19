@@ -70,3 +70,14 @@ def test_required_gates_include_every_shard_and_platform_stack():
     for job in (ci["test"], ci["runtime-containers"], platform["validate"]):
         assert job["if"] == "always()"
         assert "= success" in job["steps"][0]["run"]
+
+
+def test_workflow_shard_totals_follow_the_single_matrix_dimension():
+    root = Path(__file__).resolve().parents[3]
+    jobs = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"]
+    for name in ("python-tests", "runtime-tests"):
+        matrix = jobs[name]["strategy"]["matrix"]
+        assert set(matrix) == {"shard"}
+        assert matrix["shard"] == list(range(1, len(matrix["shard"]) + 1))
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "--ci-shard=${{ matrix.shard }}/${{ strategy.job-total }}" in commands
