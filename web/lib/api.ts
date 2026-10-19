@@ -217,8 +217,16 @@ export type CellEvidence = {
   metric_summaries: MetricSummary[];
 };
 
+export type ModelCredential =
+  | "ANTHROPIC_API_KEY"
+  | "ANTHROPIC_AUTH_TOKEN"
+  | "vertexai_adc"
+  | "OPENAI_API_KEY"
+  | "OPENROUTER_API_KEY"
+  | "GOOGLE_API_KEY"
+  | "OLLAMA_API_KEY";
+
 export type AgentBinding = {
-  source?: string | null;
   capabilities?: { input?: string[]; evidence?: string };
   name: string;
   description: string;
@@ -226,7 +234,7 @@ export type AgentBinding = {
   model: string | null;
   api_format: string | null;
   api_base: string | null;
-  credential: string | null;
+  credential: ModelCredential | null;
   credential_present: boolean | null;
 };
 

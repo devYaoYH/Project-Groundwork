@@ -87,7 +87,7 @@ def test_descriptor_retains_its_narrower_option_allowlist(tmp_path):
 def test_descriptor_keeps_the_explicit_vertex_account_and_location(tmp_path, monkeypatch):
     captured = []
     monkeypatch.setattr("a2a_engine.llm.factory.make_llm_client", lambda config: captured.append(config) or SimpleNamespace())
-    config = {"type": "llm", "model": "claude-haiku-5-5", "source": "vertexai",
+    config = {"type": "llm", "model": "claude-haiku-5-5", "credential": "vertexai_adc",
               "api_format": "vertexai_anthropic", "gcp_project": "study-project", "gcp_location": "global"}
     descriptor_policy({"environment_id": "word_guess", "policy": config}, tmp_path, NetworkPolicy())
     assert len(captured) == 1

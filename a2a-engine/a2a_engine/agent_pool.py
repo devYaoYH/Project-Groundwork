@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .llm.credentials import ModelCredential
 
 SHARED_POOL_RELATIVE = Path("experiments/agents.yaml")
 LOCAL_POOL_NAME = "agents.local.yaml"
@@ -38,21 +40,25 @@ class AgentPoolEntry(BaseModel):
     required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     asset_root: str | None = None
     model: str | None = None
-    source: Literal["openai", "anthropic", "openrouter", "gemini", "ollama", "vertexai"] | None = None
+    credential: ModelCredential | None = None
     api_format: str | None = None
     api_base: str | None = None
-    # With an explicit source, this selects the account's environment variable.
-    # Legacy entries without source retain their metadata-only interpretation.
-    # ADC and scripted bindings do not need an API-key reference.
-    credential: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_model_access(self):
+        if "credential" in self.config:
+            raise ValueError("credential must be declared once at the agent level, not inside config")
+        from .llm.factory import provider_for_config
+        provider_for_config({**self.model_dump(exclude_none=True, exclude={"config"}), **self.config})
+        return self
+
     def as_agent_config(self) -> dict[str, Any]:
         """The agent dict a environment receives, with pool-only fields dropped."""
         fields = self.model_dump(
-            exclude={"description", "credential", "config"}, exclude_none=True,
+            mode="json", exclude={"description", "config"}, exclude_none=True,
         )
         if "runtime" not in self.model_fields_set:
             fields.pop("runtime", None)
@@ -60,13 +66,8 @@ class AgentPoolEntry(BaseModel):
             if key not in self.model_fields_set:
                 fields.pop(key, None)
         result = {**fields, **self.config}
-        if result.get("source") is not None:
-            if self.credential:
-                result.setdefault("credential", self.credential)
-            from .llm.factory import provider_for_config, credential_for_config
-            reference = credential_for_config(result, provider_for_config(result))
-            if reference:
-                result["credential"] = reference
+        from .llm.factory import provider_for_config
+        provider_for_config(result)
         from .remote.seats import validate_runtime
         validate_runtime(result)
         return result
@@ -93,7 +94,8 @@ class AgentPool(BaseModel):
         for name in names:
             entry = self.entry(name)
             config = entry.as_agent_config()
-            reference = config.get("credential") if config.get("source") is not None else entry.credential
+            from .llm.factory import credential_env_for_config
+            reference = credential_env_for_config(config)
             if (config.get("runtime", "in_process") != "external"
                     and reference and not os.environ.get(reference)):
                 missing.add(reference)

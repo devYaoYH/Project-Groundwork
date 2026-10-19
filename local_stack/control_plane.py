@@ -698,17 +698,17 @@ class ControlPlane:
         entries = []
         for name, entry in sorted(pool.agents.items()):
             config = entry.as_agent_config()
-            reference = config.get("credential") if config.get("source") is not None else entry.credential
+            from a2a_engine.llm.factory import credential_env_for_config
+            reference = credential_env_for_config(config)
             entries.append({
                 "name": name,
                 "description": entry.description,
                 "capabilities": entry.capabilities,
                 "type": entry.type,
                 "model": entry.model,
-                "source": config.get("source"),
                 "api_format": entry.api_format,
                 "api_base": entry.api_base,
-                "credential": reference,
+                "credential": config.get("credential"),
                 "credential_present": (
                     bool(os.environ.get(reference)) if reference else None
                 ),
@@ -740,7 +740,7 @@ class ControlPlane:
         makes that failure avoidable rather than merely explainable.
         """
         from a2a_engine.llm.factory import (
-            detect_provider, env_var_for_provider, get_api_key_for_provider,
+            provider_for_config, credential_env_for_config, env_var_for_provider, get_api_key_for_provider,
         )
         from a2a_engine.remote.compose import compose_enabled, credential_present
         isolated = compose_enabled()
@@ -767,8 +767,9 @@ class ControlPlane:
                     continue
                 seen.add(signature)
 
-                provider = detect_provider(model) if model else None
-                env_var = env_var_for_provider(provider) if provider else ""
+                provider = provider_for_config(agent) if model else None
+                selected_env = credential_env_for_config(agent)
+                env_var = selected_env or (env_var_for_provider(provider) if provider else "")
                 agents.append({
                     "cell_id": cell.label,
                     "index": index,
@@ -779,8 +780,8 @@ class ControlPlane:
                     # A scripted agent needs no credential; an ADC provider
                     # needs one but not from the release.
                     "credential_env_var": env_var or None,
-                    "credential_present": (credential_present(provider, index) if isolated else
-                                           bool(get_api_key_for_provider(provider))) if env_var else None,
+                    "credential_present": (credential_present(provider, index, agent.get("credential")) if isolated else
+                                           bool(get_api_key_for_provider(provider, selected_env))) if env_var else None,
                 })
 
         missing = sorted({

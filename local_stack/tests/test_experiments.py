@@ -96,7 +96,7 @@ def test_model_pool_bindings_resolve_before_lock_and_retain_the_frozen_route(tmp
             assert agent["capabilities"] == routing["capabilities"]
             assert agent["temperature"] == 0.2
             assert agent["max_tokens"] == 4096
-            assert "credential" not in agent and "api_key" not in agent
+            assert agent["credential"] == "OPENROUTER_API_KEY" and "api_key" not in agent
         _check_api_keys(config, mode="preflight")
 
     path = plane._write_execution_plan("routing-test", locked, frozen)
@@ -364,3 +364,25 @@ def test_locked_smoke_launch_persists_compiled_provenance(tmp_path):
     assert provenance["experiment_id"] == locked.id
     assert provenance["design_sha256"] == locked.design_sha256
     assert set(provenance["item_attributes"]) == {"seller_cost"}
+
+
+def test_experiment_credential_readiness_uses_selected_token_without_key_fallback(tmp_path, monkeypatch):
+    import yaml
+    monkeypatch.delenv("A2A_RUNTIME_MODE", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "different-account")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    path = tmp_path / "experiments" / "oauth.yaml"
+    path.parent.mkdir()
+    path.write_text(yaml.safe_dump({
+        "name": "oauth-check", "defaults": {"environment_id": "word_guess", "num_agents": 2,
+        "agents": [{"type": "llm", "model": "claude-haiku-5-5", "credential": "ANTHROPIC_AUTH_TOKEN"}] * 2},
+        "cells": [{"label": "one", "count": 1}],
+    }))
+    plane = ControlPlane(tmp_path / "a2a.db", workspace=tmp_path)
+    report = plane.experiment_agents("experiments/oauth.yaml")
+    assert report["missing_credentials"] == ["ANTHROPIC_AUTH_TOKEN"]
+    assert not report["ready_for_live"]
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "selected-account")
+    report = plane.experiment_agents("experiments/oauth.yaml")
+    assert report["missing_credentials"] == [] and report["ready_for_live"]
+    assert all(agent["provider"] == "anthropic" for agent in report["agents"])

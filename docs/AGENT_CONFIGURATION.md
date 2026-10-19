@@ -1,7 +1,7 @@
 # Agent configuration
 
 Agent configuration belongs in an experiment's resolved YAML. The runner writes
-that configuration into every trace and removes credential fields from the
+that configuration into every trace and removes secret values from the
 manifest, so collaborators can reproduce a run without sharing secrets. New
 typed experiments bind each agent to a role declared by `ReleaseDeclaration`;
 legacy `defaults.agents` remains supported during migration.
@@ -64,9 +64,9 @@ agents and require no provider access.
 ## Credentials and endpoints
 
 Put credentials in `.env` (or the deployment release), never committed
-YAML. New bindings declare `source` to select the provider and accounting route.
+YAML. New bindings declare `credential` to select one authentication and accounting path.
 `make_llm_client` infers a provider from `model` only for legacy configurations
-without an explicit source.
+without an explicit credential selector.
 
 | Model / configuration | API format | Credential source |
 |---|---|---|
@@ -96,66 +96,70 @@ agents:
 `gcp_project`, `gcp_location`, and `vertex_adc_file` (or `adc_file`). They are
 optional integrations, not part of the local stack.
 
-### Explicit model sources and accounts
+### Explicit credential selection
 
-`model` identifies the model. `source` identifies how it is reached and billed.
-A binding's name is a label; routing reads its configuration, not the label.
+`model` identifies the model. A single `credential` enum selects how it is
+accessed and billed. It is a nonsecret selector, never a credential value.
+There is no separate `source` field or independent authentication override.
 
-| `source` | API format | Authentication/account selection |
+| `credential` | Provider / API format | Authentication |
 |---|---|---|
-| `anthropic` | `anthropic` | Named `ANTHROPIC_*_API_KEY` or `ANTHROPIC_*_AUTH_TOKEN` variable |
-| `vertexai` | `vertexai_anthropic`, `vertexai`, or `vertexai_openai` | ADC; project/location in configuration |
-| `openrouter` | `openai` | Named `OPENROUTER_*_API_KEY` variable |
-| `openai` | `openai` | Named `OPENAI_*_API_KEY` variable |
-| `gemini` | `openai` | Named `GOOGLE_*_API_KEY` variable |
-| `ollama` | `openai` | Named `OLLAMA_*_API_KEY` variable, if needed |
+| `ANTHROPIC_API_KEY` | Anthropic / `anthropic` | Only `ANTHROPIC_API_KEY` from the runtime environment |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic / `anthropic` | Only `ANTHROPIC_AUTH_TOKEN` from the runtime environment |
+| `vertexai_adc` | Vertex / `vertexai_anthropic`, `vertexai`, or `vertexai_openai` | Google ADC; project/location in configuration |
+| `OPENROUTER_API_KEY` | OpenRouter / `openai` | Only `OPENROUTER_API_KEY` |
+| `OPENAI_API_KEY` | OpenAI / `openai` | Only `OPENAI_API_KEY` |
+| `GOOGLE_API_KEY` | Gemini / `openai` | Only `GOOGLE_API_KEY` |
+| `OLLAMA_API_KEY` | Ollama / `openai` | Only `OLLAMA_API_KEY`, if required by the server |
 
-The standard names such as `ANTHROPIC_API_KEY` also work. For API-key sources,
-`credential` selects a provider-scoped environment variable; its value stays
-private. Custom account variables must be injected into the selected runtime;
-choosing a reference does not create a cloud secret or change deployment wiring.
-Missing a selected account's key never substitutes another account's
-key or switches to ADC. If omitted, `credential` uses that source's standard
-API-key variable. Vertex requires an explicit Vertex `api_format`, uses ADC,
-and rejects API-key credential references. Conflicting source/format settings
-and unknown sources fail validation.
+The selector determines the provider route and environment lookup together.
+Vertex requires an explicit Vertex `api_format` to choose its protocol adapter.
+Declare `credential` once at the agent level; nested `config` cannot override it.
+Unknown selectors, multiple selections, a conflicting format, inline `api_key`
+overrides, and Google ADC settings on key/token bindings fail validation.
+The typed pool and experiment schemas share `llm/credentials.py:ModelCredential`.
+Private key values belong in `.env` or injected runtime secrets. Arbitrary
+secret-variable names are not accepted as access methods.
 
-For example, these **private local bindings** target the same Haiku model via
-different accounts. They do not add shared choices or enable cloud products:
+For example, these **private local bindings** select three accounting paths for
+the same Haiku model. They do not publish shared choices or enable cloud products:
 
 ```yaml
 # agents.local.yaml
 agents:
-  haiku-research-api:
+  haiku-api:
     type: llm
     model: claude-haiku-5-5
-    source: anthropic
-    api_format: anthropic
-    credential: ANTHROPIC_RESEARCH_API_KEY
-  haiku-lab-vertex:
+    credential: ANTHROPIC_API_KEY
+  haiku-oauth:
     type: llm
     model: claude-haiku-5-5
-    source: vertexai
+    credential: ANTHROPIC_AUTH_TOKEN
+  haiku-vertex:
+    type: llm
+    model: claude-haiku-5-5
+    credential: vertexai_adc
     api_format: vertexai_anthropic
     config:
       gcp_project: your-lab-project
       gcp_location: global
 ```
 
-The resolved configuration retains `source`, the credential **reference**, and
-configured GCP project/location so the selected route participates in the plan
-and provenance. Local processes forward only that route's selected credentials
-and Google settings. The Agents screen displays source and identifies ADC
-rather than treating it as authentication-free. There is no cross-source
-fallback on a missing key, IAM failure, or quota error.
+The resolved configuration retains the selector and configured GCP
+project/location in the plan and provenance. Local processes forward only the
+selected key/token or Google ADC settings. Isolated services probe the same
+selector. The Agents screen identifies ADC explicitly. A missing key/token,
+IAM failure, or quota error never switches to another accounting path.
 
-Legacy configurations without `source` retain model-name inference. Legacy
-direct Anthropic lookup tries `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`;
-the legacy child environment forwards the API-key variable only. An explicit
-Anthropic source can instead select `credential: ANTHROPIC_AUTH_TOKEN`, including
-for a local child. Tokens starting with `sk-ant-oat` use Bearer auth and the
+Legacy inline configurations without `credential` retain model-name inference
+and PR #30's direct Anthropic lookup: `ANTHROPIC_API_KEY`, then
+`ANTHROPIC_AUTH_TOKEN`. The legacy child environment forwards the API-key
+variable only; explicitly selecting `ANTHROPIC_AUTH_TOKEN` forwards OAuth to a
+local child. Tokens starting with `sk-ant-oat` use Bearer auth and the
 `oauth-2025-04-20` beta header. The supplied hosted secret wiring passes API keys
-only. Keep all credential values out of YAML, traces, and public metadata.
+only; selecting OAuth does not provision a token secret. Old pool entries using
+the standard environment-variable names now retain that choice in the resolved
+configuration. Frozen experiments keep their original plans and runtime pins.
 
 ## Reproducibility and checks
 
@@ -225,14 +229,11 @@ agents:
     credential: OPENROUTER_API_KEY
 ```
 
-Shared LLM bindings declare `source`. Their `credential` field names the account's
-environment variable and is retained as a nonsecret reference during hydration.
-Values go in `.env` or runtime secrets. Legacy source-less entries keep the older
-metadata-only credential behavior; use explicit sources for new account routing.
+Shared LLM bindings declare one `credential` selector, retained during
+hydration. Secret values go in `.env` or runtime secrets.
 
 The `haiku-5.5-vertex` binding resolves to `claude-haiku-5-5` on Vertex AI's global
-endpoint using `source: vertexai`, `api_format: vertexai_anthropic`, and
-`credential: null` (ADC).
+endpoint using `credential: vertexai_adc` and `api_format: vertexai_anthropic`.
 Its pool `config.gcp_location: global` is included in the resolved agent config;
 the project comes from ADC or `GOOGLE_CLOUD_PROJECT`. Explicit Vertex formats
 select ADC in both the client factory and local-process credential forwarding,
@@ -292,15 +293,15 @@ pool choice appears in the UI. Complete this path when adding an endpoint:
    `a2a-engine/a2a_engine/llm/factory.py` and `llm/providers.py` for model-name
    inference, explicit `api_format` overrides, base URL and credentials. An
    existing provider usually needs only configuration; a new protocol needs an
-   adapter in `llm/api.py`. A new provider source also needs the allowed source
-   values in `AgentPoolEntry`/typed `AgentConfig` and the source resolver updated.
+   adapter in `llm/api.py`. A new access method also needs an enum member in
+   `llm/credentials.py:ModelCredential` and its factory resolution updated.
 2. **Register API quirks when needed.** Update `llm/model_config.py` for token
    parameter names, default token budgets or unsupported sampling parameters.
    Unknown model IDs otherwise use fallback rules. Verify outgoing payloads
    with mocked HTTP, including omission of unsupported parameters.
 3. **Publish a binding.** Add a distinct logical name in
-   `experiments/agents.yaml` with `type`, concrete `model`, explicit `source`,
-   `api_format`, `credential` for key-based accounts, and a description. Use
+   `experiments/agents.yaml` with `type`, concrete `model`, one `credential` selector,
+   `api_format`, and a description. Use
    distinct bindings for different routes/accounts; set `api_base` for custom endpoints. Keep
    existing names stable so new studies do not silently change models. For
    private routing use `agents.local.yaml`; `A2A_AGENT_POOL=/path/to/pool.yaml`

@@ -90,29 +90,31 @@ class AgentRuntimeV2:
         return JSONResponse({"healthy": not self.stopping})
 
     async def credentials(self, request):
-        from a2a_engine.llm.factory import ADC_PROVIDERS, PROVIDER_ENV_VARS, credential_for_config, get_api_key_for_provider
+        from a2a_engine.llm.credentials import ModelCredential
+        from a2a_engine.llm.factory import PROVIDER_ENV_VARS, get_api_key_for_provider
+        selected = request.query_params.get("credential")
         provider = request.query_params.get("provider")
-        if provider is not None:
-            reference = request.query_params.get("credential")
-            if provider in ADC_PROVIDERS:
-                if reference:
-                    return JSONResponse({"error": "ADC does not accept an API-key reference"}, status_code=400)
+        if selected is not None:
+            if provider is not None:
+                return JSONResponse({"error": "select credential alone"}, status_code=400)
+            try:
+                credential = ModelCredential(selected)
+            except ValueError:
+                return JSONResponse({"error": "unknown credential selector"}, status_code=400)
+            if credential is ModelCredential.VERTEXAI_ADC:
                 from a2a_engine.llm.api import _load_vertex_credentials
                 try:
                     credentials, _ = _load_vertex_credentials(None)
                     present = credentials is not None
                 except Exception:
                     present = False
-            elif provider in PROVIDER_ENV_VARS:
-                if reference:
-                    try:
-                        credential_for_config({"source": provider, "credential": reference}, provider)
-                    except ValueError:
-                        return JSONResponse({"error": "invalid provider credential reference"}, status_code=400)
-                present = bool(get_api_key_for_provider(provider, reference))
             else:
+                present = bool(get_api_key_for_provider(credential.provider, credential.value))
+            return JSONResponse({"credentials": {credential.value: present}})
+        if provider is not None:
+            if provider not in PROVIDER_ENV_VARS:
                 return JSONResponse({"error": "unknown provider"}, status_code=400)
-            return JSONResponse({"providers": {provider: present}})
+            return JSONResponse({"providers": {provider: bool(get_api_key_for_provider(provider))}})
         return JSONResponse({"providers": {provider: bool(get_api_key_for_provider(provider))
                                          for provider in PROVIDER_ENV_VARS}})
 

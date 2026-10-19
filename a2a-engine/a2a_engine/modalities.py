@@ -40,9 +40,8 @@ def require_modalities(required, capabilities, *, api_format=None, runtime="in_p
 
 
 def validate_seat(spec, required):
-    if spec.get("source") is not None:
-        from .llm.factory import provider_for_config, credential_for_config
-        credential_for_config(spec, provider_for_config(spec))
+    from .llm.factory import provider_for_config
+    provider_for_config(spec)
     api_format = spec.get("api_format")
     if api_format is None and spec.get("model"):
         from .llm.factory import provider_for_config

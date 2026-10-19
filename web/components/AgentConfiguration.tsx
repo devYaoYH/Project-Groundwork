@@ -10,7 +10,7 @@ import { AgentBinding, AgentPool, getAgentPool } from "../lib/api";
 import { useSession } from "./Session";
 
 function credentialState(agent: AgentBinding, platform: boolean) {
-  if (agent.source === "vertexai" || agent.api_format?.startsWith("vertexai")) return <Chip>Google ADC</Chip>;
+  if (agent.credential === "vertexai_adc" || agent.api_format?.startsWith("vertexai")) return <Chip>Google ADC</Chip>;
   if (!agent.credential) return <span className="muted">none needed</span>;
   if (platform) return <Chip>platform managed</Chip>;
   return <span className="agent-credential"><code>{agent.credential}</code> <Chip tone={agent.credential_present ? "good" : "warn"}>{agent.credential_present ? "set" : "missing"}</Chip></span>;
@@ -50,7 +50,6 @@ export function AgentConfiguration() {
             columns={[
               { label: "name", className: "mono", render: (agent) => agent.name },
               { label: "model", className: "mono", render: (agent) => agent.model ?? "-" },
-              { label: "source", className: "mono", render: (agent) => agent.source ?? (agent.type === "llm" ? "inferred" : "-") },
               { label: "declared inputs", render: (agent) => {
                 const inputs = Array.isArray(agent.capabilities?.input) ? agent.capabilities.input : ["text"];
                 return `${inputs.join(", ")}${inputs.some((input) => input !== "text") && !agent.capabilities?.evidence ? " · verification required" : ""}`;

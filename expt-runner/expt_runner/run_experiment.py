@@ -174,7 +174,7 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
     Agents without a ``model`` are scripted or heuristic and need no credential,
     so a config that calls no provider passes unconditionally.
     """
-    from a2a_engine.llm.factory import ADC_PROVIDERS, provider_for_config, credential_for_config, get_api_key_for_provider
+    from a2a_engine.llm.factory import ADC_PROVIDERS, provider_for_config, credential_env_for_config, get_api_key_for_provider
 
     agents = cfg.get("agents", [])
     for i, agent_spec in enumerate(agents):
@@ -202,7 +202,7 @@ def _check_api_keys(cfg: dict, *, mode: str = "dry-run") -> None:
         if provider in ADC_PROVIDERS:
             log.info("%s: provider %r uses Google ADC; skipping API key check (agent %d)", mode, provider, i)
             continue
-        credential = credential_for_config(spec, provider)
+        credential = credential_env_for_config(spec)
         key = get_api_key_for_provider(provider, credential)
         if not key:
             raise EnvironmentError(

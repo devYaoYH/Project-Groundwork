@@ -14,16 +14,14 @@
 # repository root and change it. That file is gitignored and shadows these
 # defaults entry by entry, so shared configs stay portable.
 #
-# `source` selects the provider/accounting route. `credential` names that route's
-# environment variable; Vertex uses ADC instead. Both remain in resolved configs
-# as nonsecret references. Put credential values in .env; never here.
+# `credential` selects one access method: a named API key/token or Vertex ADC.
+# It is an enum selector, never a secret value. Put values in .env/runtime secrets.
 
 agents:
   gpt-mini:
     description: OpenAI platform, small general-purpose model.
     type: llm
     model: gpt-5-mini
-    source: openai
     api_format: openai
     credential: OPENAI_API_KEY
 
@@ -31,7 +29,6 @@ agents:
     description: Anthropic API, Claude Haiku 4.5.
     type: llm
     model: claude-haiku-4-5-20251001
-    source: anthropic
     api_format: anthropic
     credential: ANTHROPIC_API_KEY
 
@@ -40,9 +37,8 @@ agents:
     description: Claude Haiku 5.5 via Vertex AI, using Google ADC.
     type: llm
     model: claude-haiku-5-5
-    source: vertexai
     api_format: vertexai_anthropic
-    credential: null
+    credential: vertexai_adc
     config:
       gcp_location: global
 
@@ -55,7 +51,6 @@ agents:
     description: DeepSeek V4 Flash via OpenRouter. Cheap; good default for playing around.
     type: llm
     model: deepseek/deepseek-v4-flash
-    source: openrouter
     api_format: openai
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY
@@ -64,7 +59,6 @@ agents:
     description: DeepSeek V4.1 Flash via OpenRouter, with native text and image input.
     type: llm
     model: deepseek/deepseek-v4.1-flash
-    source: openrouter
     api_format: openai
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY
@@ -81,7 +75,6 @@ agents:
     description: Claude Haiku 4.5 via OpenRouter.
     type: llm
     model: anthropic/claude-haiku-4.5
-    source: openrouter
     api_format: openai
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY

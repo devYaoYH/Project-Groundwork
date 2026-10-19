@@ -140,10 +140,10 @@ def test_reentrant_cancellation_owns_descriptor_before_writer_returns(tmp_path, 
 
 
 @pytest.mark.parametrize("account", [
-    {"source": "vertexai", "api_format": "vertexai_anthropic", "gcp_project": "study-project", "gcp_location": "global"},
-    {"source": "anthropic", "api_format": "anthropic", "credential": "ANTHROPIC_RESEARCH_API_KEY"},
+    {"credential": "vertexai_adc", "api_format": "vertexai_anthropic", "gcp_project": "study-project", "gcp_location": "global"},
+    {"api_format": "anthropic", "credential": "ANTHROPIC_API_KEY"},
 ])
-def test_compose_preserves_source_and_account_in_private_policy(tmp_path, monkeypatch, account):
+def test_compose_preserves_credential_selection_in_private_policy(tmp_path, monkeypatch, account):
     import json
     from a2a_engine.remote import compose
 
@@ -156,7 +156,7 @@ def test_compose_preserves_source_and_account_in_private_policy(tmp_path, monkey
     try:
         policy = json.loads(runtime.descriptors[0].read_text())["policy"]
         assert all(policy[key] == value for key, value in account.items())
-        expected = ("claude_vertexai", None) if account["source"] == "vertexai" else ("anthropic", "ANTHROPIC_RESEARCH_API_KEY")
+        expected = ("claude_vertexai", "vertexai_adc") if account["credential"] == "vertexai_adc" else ("anthropic", "ANTHROPIC_API_KEY")
         assert checked == [expected]
     finally:
         runtime.close()
