@@ -219,6 +219,7 @@ def test_cloud_queue_and_step_pull_times_are_separate():
 
 def test_failed_cloud_submission_still_records_latency(tmp_path, monkeypatch):
     monkeypatch.setattr(latency, "ROOT", tmp_path)
+    monkeypatch.setattr(latency.subprocess, "check_output", lambda *a, **k: SOURCE)
 
     def denied(*args, **kwargs):
         raise subprocess.CalledProcessError(1, ["gcloud"], stderr="PERMISSION_DENIED")
@@ -244,3 +245,11 @@ def test_publication_has_no_build_and_benchmark_skips_hosted_writes():
         ):
             assert "github.event_name != 'pull_request'" in step["if"]
     assert workflow["jobs"]["latencies"]["if"] == "always()"
+
+
+def test_wrong_checkout_source_is_rejected_before_cloud_submission(tmp_path, monkeypatch):
+    monkeypatch.setattr(latency, "ROOT", tmp_path)
+    monkeypatch.setattr(latency.subprocess, "check_output", lambda *a, **k: SOURCE)
+    monkeypatch.setattr(latency, "command", lambda *a, **k: pytest.fail("Unexpected cloud request"))
+    with pytest.raises(ValueError, match="checked-out commit"):
+        latency.submit("build", "project", "us-central1", SCIENCE, SCIENCE, False)

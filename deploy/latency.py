@@ -81,6 +81,9 @@ def describe_timings(build):
 
 
 def submit(phase, project, region, source, runtime_source, publish_only):
+    checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if checkout != source:
+        raise ValueError("Cloud Build source must match the checked-out commit")
     ROOT.mkdir(exist_ok=True)
     substitutions = {
         "_REGION": region,
