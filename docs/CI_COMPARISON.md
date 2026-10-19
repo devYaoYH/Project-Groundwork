@@ -42,8 +42,73 @@ that mixture.
 
 ## New measurements
 
-Measurements are added here with exact commit/run IDs after verification. An
-unexercised cloud stage is pending, not a measured improvement.
+Measured head: `e309c09`. Later documentation/timing/cancellation follow-ups do
+not change the successful build/test/publish path. The permanent
+[JSON snapshot](ci-latencies/2026-10-19-cloud-build.json) retains stages, cloud
+steps, queue times, run IDs, and the failed trials. Both ordinary workflows
+passed without retries at this head.
+
+| Successful run / stage | Measured time | Conditions |
+|---|---:|---|
+| [General PR CI](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39229207712) | **3m39s** | Web last, 3m34s; all shards pass |
+| [Platform PR validation](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39229207637) | **2m42s** through gate | Credential-free local builds; reporting follows gate |
+| [Publish-only pipeline](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39229202779) | **8m01s** through publication | Warm registry caches, changed platform source, existing science; initial wait 4s |
+| Candidate request wall time | 3m09.743s | Submission 4.509s; cloud execution 2m59.123s; cloud queue 0.573s |
+| GitHub artifact download | 40.839s | Both selected image digests and build manifest |
+| Compose startup + verification | 18.199s | 6.540s + 11.659s |
+| Platform-image pytest | 1m45.026s | Same suite also runs independently on the host |
+| Publish request wall time | 1m13.649s | Cloud execution 1m05.165s; cloud queue 0.523s |
+
+The [identical-commit repeat](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39229734850)
+retains its own artifact. Its final figures are recorded in
+[PR #33's description](https://github.com/devYaoYH/Project-Groundwork/pull/33),
+so recording measurements does not continually change the benchmarked checkout.
+
+These release figures do not prove that #33 is faster than #32: #32's trusted
+release path has not been measured under the same conditions. PR checks and a
+publish-only release perform different work. The new flow demonstrably reuses
+validated artifacts and centralizes release builds/caches; extra worker startup
+and artifact transport remain real costs. Publish-only still pulls the catalogue
+step's platform image even though its command skips catalogue publication.
+
+### Failures retained during verification
+
+- [Initial CA failure](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39227306660):
+  57.739s candidate request; fixed by passing the SDK CA bundle to Docker/Buildx.
+- [Cold build / copy failure](https://github.com/devYaoYH/Project-Groundwork/actions/runs/39227551020):
+  candidate request 3m49.806s, download 54.528s, platform-image tests 1m44.630s,
+  new-science smoke 7.730s. Validation passed, but Docker pull/tag/push changed
+  the manifest digest while preserving the configuration. Publication rejected
+  activation after 1m48.571s. Its copied science tag for `8e90b19` remains;
+  subsequent runs selected and revalidated that existing digest before testing.
+- The obsolete repeat `39228127602` was cancelled; its already-submitted
+  candidate build finished without validation/publication. A best-effort
+  candidate-build cancellation step now handles interrupted polling.
+- A strengthened Linux registry fixture rewrites otherwise valid manifest JSON
+  to reproduce repacking, then verifies raw promotion preserves its exact digest.
+  [Cloud probe `5aa28925`](https://console.cloud.google.com/cloud-build/builds;region=us-central1/5aa28925-4221-40f8-9b8a-474da989025b?project=cicl-487801)
+  also passed against the original BuildKit science candidate (`6e55d01b…`). It
+  used an isolated mutable package that was removed afterward. The earlier probe
+  `08a0a027` passed its copy assertion but failed automatic deletion under Writer
+  permissions; administrator cleanup completed without widening the build role.
+
+No hosted rollout was performed. Benchmark-only registry Reader, manifest-upload,
+and exact-branch manual WIF grants are temporary and restored after the runs.
+
+### What the measurements suggest next
+
+The general PR path still ends with web (3m34s). The release path spends substantial
+time starting fresh cloud workers, materializing cached layers, downloading images,
+and running platform pytest after the build. For the changed-source warm build,
+Buildx startup was 7.3s; source install plus the two metadata exports consumed
+about 33s; cache export itself was 2.5s. Cloud request queues were below one second.
+These observations do not point to excessive cache-writer parallelism as the
+remaining release bottleneck.
+
+A useful next comparison is a larger Cloud Build worker or a combined tools image,
+followed by assessing the intentional overlap between host and candidate-image
+platform pytest. Neither change is included here. Browser parallelism remains a
+separate potential improvement to PR feedback time.
 
 ## How to compare
 

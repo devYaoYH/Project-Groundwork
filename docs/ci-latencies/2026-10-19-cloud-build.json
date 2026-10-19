@@ -1,0 +1,708 @@
+{
+  "date": "2026-10-19",
+  "benchmark_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+  "pr32_preserved_sha": "4660bc3cbdd29084df5ab4f1d0c7087f89608db1",
+  "conditions": "Publish-only; default Cloud Build workers; warm registry caches with changed platform source; science already published and revalidated; no hosted rollout.",
+  "github": {
+    "run_id": "39229202779",
+    "attempt": "1",
+    "source_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+    "head_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+    "created_at": "2026-10-19T09:19:33Z",
+    "initial_wait_seconds": 4.0,
+    "active_span_seconds": 477.0,
+    "through_gate_or_publish_seconds": 481.0,
+    "jobs": [
+      {
+        "name": "platform-tests",
+        "conclusion": "success",
+        "queue_seconds": 2.0,
+        "seconds": 125.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run astral-sh/setup-uv@v6",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run uv venv",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run uv pip install -r requirements-platform.txt",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run uv run python scripts/install_workspace.py",
+            "conclusion": "success",
+            "seconds": 4.0
+          },
+          {
+            "name": "Run uv run python scripts/export_environment_ids.py",
+            "conclusion": "success",
+            "seconds": 3.0
+          },
+          {
+            "name": "Run uv run python -m pytest cloud_platform/tests tests/platform -q --durations=30 --junitxml=results/ci/platform.xml",
+            "conclusion": "success",
+            "seconds": 110.0
+          },
+          {
+            "name": "Run actions/upload-artifact@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Post Run astral-sh/setup-uv@v6",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "platform-stack",
+        "conclusion": "success",
+        "queue_seconds": 3.0,
+        "seconds": 377.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 2.0
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Identify the immutable scientific source",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run google-github-actions/auth@v3",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run google-github-actions/setup-gcloud@v3",
+            "conclusion": "success",
+            "seconds": 7.0
+          },
+          {
+            "name": "Build candidates and caches in Cloud Build",
+            "conclusion": "success",
+            "seconds": 190.0
+          },
+          {
+            "name": "Download the exact Cloud Build candidates",
+            "conclusion": "success",
+            "seconds": 41.0
+          },
+          {
+            "name": "Run ./.github/actions/build-image",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Verify image promotion against a disposable registry",
+            "conclusion": "success",
+            "seconds": 3.0
+          },
+          {
+            "name": "Record the images entering validation",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run docker compose -f compose.platform.yml config --quiet",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Verify the paired local worker and science runtime",
+            "conclusion": "success",
+            "seconds": 18.0
+          },
+          {
+            "name": "Stop the verification stack",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Test the release images without rebuilding",
+            "conclusion": "success",
+            "seconds": 105.0
+          },
+          {
+            "name": "Verify validation did not replace either image",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run actions/upload-artifact@v4",
+            "conclusion": "success",
+            "seconds": 2.0
+          },
+          {
+            "name": "Post Run google-github-actions/auth@v3",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "validate",
+        "conclusion": "success",
+        "queue_seconds": 2.0,
+        "seconds": 3.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run test \"$TEST_RESULT\" = success && test \"$STACK_RESULT\" = success",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "deploy",
+        "conclusion": "success",
+        "queue_seconds": 3.0,
+        "seconds": 91.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 3.0
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 2.0
+          },
+          {
+            "name": "Run google-github-actions/auth@v3",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run google-github-actions/setup-gcloud@v3",
+            "conclusion": "success",
+            "seconds": 6.0
+          },
+          {
+            "name": "Run actions/download-artifact@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Publish the validated artifacts through Cloud Build",
+            "conclusion": "success",
+            "seconds": 74.0
+          },
+          {
+            "name": "Run actions/upload-artifact@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Post Run google-github-actions/auth@v3",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      }
+    ]
+  },
+  "cloud_build": {
+    "id": "21dc4ca6-5c5d-480e-af43-7f4936af77dc",
+    "status": "SUCCESS",
+    "source_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+    "runtime_source_sha": "8e90b191364d4d3ac6ca98efd874387ad77852cf",
+    "machine_type": "default",
+    "created_at": "2026-10-19T09:19:54.609909630Z",
+    "started_at": "2026-10-19T09:19:55.182412381Z",
+    "finished_at": "2026-10-19T09:22:54.305453Z",
+    "queue_seconds": 0.572503,
+    "execution_seconds": 179.123041,
+    "steps": [
+      {
+        "id": "docker-tools",
+        "status": "SUCCESS",
+        "seconds": 8.036687,
+        "pull_seconds": 6.840376
+      },
+      {
+        "id": "select-runtime",
+        "status": "SUCCESS",
+        "seconds": 26.789101,
+        "pull_seconds": 17.568463
+      },
+      {
+        "id": "build-candidates",
+        "status": "SUCCESS",
+        "seconds": 106.950754,
+        "pull_seconds": 0.00252
+      },
+      {
+        "id": "record-candidates",
+        "status": "SUCCESS",
+        "seconds": 12.769922,
+        "pull_seconds": 0.002039
+      }
+    ],
+    "stage": "cloud-build",
+    "request_started_at": "2026-10-19T09:19:50.745326+00:00",
+    "request_finished_at": "2026-10-19T09:23:00.488447+00:00",
+    "wall_seconds": 189.743,
+    "submit_seconds": 4.509
+  },
+  "cloud_publish": {
+    "id": "8b98a6bc-78bd-45bb-9e57-2adb99a8643b",
+    "status": "SUCCESS",
+    "source_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+    "runtime_source_sha": "8e90b191364d4d3ac6ca98efd874387ad77852cf",
+    "machine_type": "default",
+    "created_at": "2026-10-19T09:26:19.224755853Z",
+    "started_at": "2026-10-19T09:26:19.747300638Z",
+    "finished_at": "2026-10-19T09:27:24.912144Z",
+    "queue_seconds": 0.522545,
+    "execution_seconds": 65.164844,
+    "steps": [
+      {
+        "id": "docker-tools",
+        "status": "SUCCESS",
+        "seconds": 7.862561,
+        "pull_seconds": 6.579392
+      },
+      {
+        "id": "validate-images",
+        "status": "SUCCESS",
+        "seconds": 25.948815,
+        "pull_seconds": 16.076671
+      },
+      {
+        "id": "publish-catalogue",
+        "status": "SUCCESS",
+        "seconds": 25.178193,
+        "pull_seconds": 24.383752
+      },
+      {
+        "id": "publish",
+        "status": "SUCCESS",
+        "seconds": 0.803945,
+        "pull_seconds": 0.001645
+      },
+      {
+        "id": "verify-hosted",
+        "status": "SUCCESS",
+        "seconds": 0.813643,
+        "pull_seconds": 0.002092
+      }
+    ],
+    "stage": "cloud-publish",
+    "request_started_at": "2026-10-19T09:26:15.744348+00:00",
+    "request_finished_at": "2026-10-19T09:27:29.393159+00:00",
+    "wall_seconds": 73.649,
+    "submit_seconds": 4.077
+  },
+  "stages": [
+    {
+      "stage": "artifact-download",
+      "started_at": "2026-10-19T09:23:00.548871+00:00",
+      "finished_at": "2026-10-19T09:23:41.388167+00:00",
+      "seconds": 40.839,
+      "exit_code": 0
+    },
+    {
+      "stage": "compose-start",
+      "started_at": "2026-10-19T09:23:45.434585+00:00",
+      "finished_at": "2026-10-19T09:23:51.974186+00:00",
+      "seconds": 6.54,
+      "exit_code": 0
+    },
+    {
+      "stage": "compose-verification",
+      "started_at": "2026-10-19T09:23:52.013585+00:00",
+      "finished_at": "2026-10-19T09:24:03.672595+00:00",
+      "seconds": 11.659,
+      "exit_code": 0
+    },
+    {
+      "stage": "platform-image-tests",
+      "started_at": "2026-10-19T09:24:04.638741+00:00",
+      "finished_at": "2026-10-19T09:25:49.664296+00:00",
+      "seconds": 105.026,
+      "exit_code": 0
+    }
+  ],
+  "ordinary_pr_platform": {
+    "run_id": "39229207637",
+    "attempt": "1",
+    "source_sha": "8d5d6ee1b542b40dfe002470373fa11b67b5bd04",
+    "head_sha": "e309c095755c0552c400b1a13cc7164fa283019c",
+    "created_at": "2026-10-19T09:19:36Z",
+    "initial_wait_seconds": 3.0,
+    "active_span_seconds": 159.0,
+    "through_gate_or_publish_seconds": 162.0,
+    "jobs": [
+      {
+        "name": "platform-stack",
+        "conclusion": "success",
+        "queue_seconds": 3.0,
+        "seconds": 154.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 2.0
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Identify the immutable scientific source",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run google-github-actions/auth@v3",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run google-github-actions/setup-gcloud@v3",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Build candidates and caches in Cloud Build",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Download the exact Cloud Build candidates",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run ./.github/actions/build-image",
+            "conclusion": "success",
+            "seconds": 115.0
+          },
+          {
+            "name": "Verify image promotion against a disposable registry",
+            "conclusion": "success",
+            "seconds": 3.0
+          },
+          {
+            "name": "Record the images entering validation",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run docker compose -f compose.platform.yml config --quiet",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Verify the paired local worker and science runtime",
+            "conclusion": "success",
+            "seconds": 19.0
+          },
+          {
+            "name": "Stop the verification stack",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Test the release images without rebuilding",
+            "conclusion": "skipped",
+            "seconds": 0.0
+          },
+          {
+            "name": "Verify validation did not replace either image",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run actions/upload-artifact@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Post Run ./.github/actions/build-image",
+            "conclusion": "success",
+            "seconds": 9.0
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "platform-tests",
+        "conclusion": "success",
+        "queue_seconds": 3.0,
+        "seconds": 126.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Run astral-sh/setup-uv@v6",
+            "conclusion": "success",
+            "seconds": 2.0
+          },
+          {
+            "name": "Run uv venv",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run uv pip install -r requirements-platform.txt",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run uv run python scripts/install_workspace.py",
+            "conclusion": "success",
+            "seconds": 4.0
+          },
+          {
+            "name": "Run uv run python scripts/export_environment_ids.py",
+            "conclusion": "success",
+            "seconds": 3.0
+          },
+          {
+            "name": "Run uv run python -m pytest cloud_platform/tests tests/platform -q --durations=30 --junitxml=results/ci/platform.xml",
+            "conclusion": "success",
+            "seconds": 112.0
+          },
+          {
+            "name": "Run actions/upload-artifact@v4",
+            "conclusion": "success",
+            "seconds": 1.0
+          },
+          {
+            "name": "Post Run astral-sh/setup-uv@v6",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "validate",
+        "conclusion": "success",
+        "queue_seconds": 2.0,
+        "seconds": 3.0,
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Run test \"$TEST_RESULT\" = success && test \"$STACK_RESULT\" = success",
+            "conclusion": "success",
+            "seconds": 0.0
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success",
+            "seconds": 0.0
+          }
+        ]
+      },
+      {
+        "name": "deploy",
+        "conclusion": "skipped",
+        "queue_seconds": null,
+        "seconds": null,
+        "steps": []
+      }
+    ]
+  },
+  "ordinary_pr_ci": {
+    "run_id": "39229207712",
+    "seconds": 219.0,
+    "jobs": [
+      {
+        "name": "local-stack",
+        "conclusion": "success",
+        "seconds": 179.0
+      },
+      {
+        "name": "python-tests (1)",
+        "conclusion": "success",
+        "seconds": 156.0
+      },
+      {
+        "name": "runtime-tests (3)",
+        "conclusion": "success",
+        "seconds": 185.0
+      },
+      {
+        "name": "python-tests (2)",
+        "conclusion": "success",
+        "seconds": 142.0
+      },
+      {
+        "name": "web",
+        "conclusion": "success",
+        "seconds": 214.0
+      },
+      {
+        "name": "lint",
+        "conclusion": "success",
+        "seconds": 7.0
+      },
+      {
+        "name": "python-tests (3)",
+        "conclusion": "success",
+        "seconds": 149.0
+      },
+      {
+        "name": "runtime-tests (2)",
+        "conclusion": "success",
+        "seconds": 209.0
+      },
+      {
+        "name": "package-tests",
+        "conclusion": "success",
+        "seconds": 48.0
+      },
+      {
+        "name": "python-tests (4)",
+        "conclusion": "success",
+        "seconds": 151.0
+      },
+      {
+        "name": "runtime-tests (1)",
+        "conclusion": "success",
+        "seconds": 166.0
+      },
+      {
+        "name": "test",
+        "conclusion": "success",
+        "seconds": 3.0
+      },
+      {
+        "name": "runtime-containers",
+        "conclusion": "success",
+        "seconds": 4.0
+      }
+    ]
+  },
+  "failed_trials": [
+    {
+      "run_id": "39227306660",
+      "sha": "2406ed5",
+      "build_id": "df1cf5e7-86ff-4265-b0dc-2d0dfe4f72fe",
+      "result": "Buildx client CA trust failed before validation; fixed with existing run_python.sh CA wrapper.",
+      "request_wall_seconds": 57.739
+    },
+    {
+      "run_id": "39227551020",
+      "sha": "8042abe",
+      "build_id": "f9ef4dc7-0171-4fa5-a248-28405a73e17f",
+      "publish_id": "0ea11dc1-0279-486e-bf7d-494e24a08b37",
+      "result": "Cold candidate build and GitHub tests passed. Docker copy kept configuration but changed manifest digest; gate rejected activation. Replaced copy with registry-side imagetools.",
+      "build_request_wall_seconds": 229.806,
+      "download_seconds": 54.528,
+      "platform_image_tests_seconds": 104.63,
+      "new_science_smoke_seconds": 7.73,
+      "failed_publish_request_wall_seconds": 108.571
+    }
+  ],
+  "promotion_probe": {
+    "build_id": "5aa28925-4221-40f8-9b8a-474da989025b",
+    "result": "SUCCESS",
+    "source_manifest": "sha256:6e55d01b3d79743c0716ad63bb80cb5afbecfe2f87069b81ae686603a3eb24a6",
+    "preserved_exact_digest": true,
+    "mutable_probe_removed": true
+  },
+  "same_commit_repeat": {
+    "run_id": "39229734850",
+    "results_location": "PR #33 description and release-latencies Actions artifact"
+  }
+}

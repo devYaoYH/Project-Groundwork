@@ -69,6 +69,18 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           python deploy/latency.py submit build --project "$GCP_PROJECT" --region "$GCP_REGION" \
             --source-sha "$SOURCE_SHA" --runtime-source-sha "$RUNTIME_SOURCE_SHA"
+      - name: Cancel an interrupted candidate build
+        if: cancelled() && github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: |
+          if test -f .platform-build/cloud-build.json; then
+            build_id="$(python -c 'import json; r=json.load(open(".platform-build/cloud-build.json")); print(r.get("id", "") if r.get("status") in ("PENDING", "QUEUED", "WORKING") else "")')"
+            if test -n "$build_id"; then
+              gcloud builds cancel "$build_id" --project "$GCP_PROJECT" --region "$GCP_REGION" --quiet
+            fi
+          fi
       - name: Download the exact Cloud Build candidates
         if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         env:

@@ -160,13 +160,19 @@ verification branches always use this mode. Pushes to main perform full release.
 wall time, Cloud Build queue/execution time, each cloud step and image pull, and
 GitHub artifact download / Compose / image-test durations. The final `latencies`
 job uses the exact Actions attempt API to retain runner queues and step durations
-without mixing retry attempts. Inspect its `release-latencies` artifact and job
+without mixing retry attempts. Initial workflow wait is reported separately from
+individual runner queues. Skipped jobs have no measured duration. Inspect the
+`release-latencies` artifact and job
 summary. Missing or unexercised cloud stages are not zero-duration successes.
 See [the PR comparison](CI_COMPARISON.md) for measurements and interpretation.
 
 Bootstrap gives CI repository-scoped **Reader** access to both repositories and
 gives Cloud Build a conditional source-bucket object-creation grant only below
-`ci-image-builds/`. Cloud Build remains the image/cache writer. WIF restricts
+`ci-image-builds/`. Cloud Build remains the image/cache writer. Candidate builds have a best-effort
+cancellation step; their ID is persisted before polling. A forced runner loss can
+leave an asynchronous build running: inspect and cancel that recorded build ID.
+Publication requests require separate inspection if interrupted, especially if
+a hosted rollout has already begun. WIF restricts
 cloud requests to the trusted workflow, numeric repository/owner IDs and approved
 branches/events. See `deploy/README.md` for rollout commands.
 
