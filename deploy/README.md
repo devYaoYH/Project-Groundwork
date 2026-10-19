@@ -127,56 +127,13 @@ Compose uses mutable development tags and `local` provenance placeholders by
 default. Hosted source commits, image digests and binding catalogs enforce the
 immutable runtime history described above.
 
-No provider secret is created with an empty value. To enable an API-key provider, add a
+No provider secret is created with an empty value. To enable a provider, add a
 Secret Manager secret with its real value, then grant `groundwork-worker` the
 `roles/secretmanager.secretAccessor` role **on that secret**. Supported names are
 `groundwork-openai-api-key`, `groundwork-anthropic-api-key`,
 `groundwork-google-api-key`, and `groundwork-openrouter-api-key`. These references
 are scoped to launch Jobs, never the control API. `groundwork-session` is generated
 by bootstrap and available only to the control API.
-
-### Vertex AI ADC
-
-The published `haiku-5.5-vertex` binding uses `claude-haiku-5-5`,
-`credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location `global`. It requires no Anthropic
-API-key secret. Cloud Run obtains ADC from the attached `groundwork-worker`
-service account; the API, build and CI identities do not need prediction access.
-The Vertex model location is independent of the Cloud Run region `us-central1`.
-
-Opt in to the runtime's prediction-only IAM setup as a project administrator:
-
-```sh
-python deploy/bootstrap.py --project cicl-487801 --region us-central1 --vertex-adc
-```
-
-This enables `aiplatform.googleapis.com` and creates/updates the custom
-`groundworkVertexPredictor` role with only `aiplatform.endpoints.predict` and
-`serviceusage.services.use`, granted to `groundwork-worker`. It does not grant
-service-account impersonation, create provider secrets, or enable partner-model
-products. For an existing deployment, the same focused setup is available as
-`deploy.bootstrap.enable_vertex_adc(project, runtime_account)` without rerunning
-the rest of bootstrap.
-
-Enable only the selected model's Marketplace service in that same project.
-For Haiku 5.5 the service is `anthropic-932.cloudpartnerservices.goog`, as linked
-from its Model Garden card. Review any required model-access questionnaire or
-terms in the Google Cloud console. Sonnet and Opus 5.5 use separate products;
-this initial rollout does not enable or publish them.
-
-Check model availability, project product enablement/quota, and the actual
-runtime identity separately. A visible Model Garden card, enabled Vertex API,
-or a successful request under a developer's account does not establish runtime
-access. Validate Haiku with a small `rawPredict` request under workload ADC and
-confirm the explicit global endpoint. A quota error is unresolved access, not a
-successful model check. See Google's [Haiku model card](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/haiku-5-5)
-and [Claude setup guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude).
-
-For host CLI runs, configure local ADC and the project; Docker Compose does not
-mount host ADC automatically. Keep ADC files private. Rebuild/release the new
-pool and runtime code before selecting Haiku in a new design. Locked plans
-retain their original model bindings and image pins.
-
-### Google sign-in and first release
 
 Create a Google Web OAuth client and add the deployed Cloud Run URL as an
 authorized JavaScript origin. Use the deterministic URL

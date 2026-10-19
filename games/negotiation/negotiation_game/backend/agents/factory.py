@@ -124,7 +124,7 @@ def make_agent(cfg: dict):
     if t == "human":
         return HumanAgent()
     if t == "llm":
-        if cfg.get("credential") is not None or "source" in cfg:
+        if cfg.get("credential") is not None:
             from a2a_engine.llm.factory import make_llm_client
             client = make_llm_client(cfg)
             return LLMAgentStdlib(

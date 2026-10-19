@@ -308,13 +308,12 @@ def test_heuristic_child_policy_kind_is_game_independent(monkeypatch):
 
 
 def test_explicit_vertex_child_receives_adc_settings_without_provider_keys(monkeypatch):
-    from pathlib import Path
     from types import SimpleNamespace
-    from a2a_engine.agent_pool import load_agent_pool
+    from a2a_engine.agent_pool import AgentPoolEntry
     from a2a_engine.llm.factory import make_llm_client
 
-    workspace = Path(__file__).resolve().parents[2]
-    spec = load_agent_pool(workspace / "experiments").entry("haiku-5.5-vertex").as_agent_config()
+    spec = AgentPoolEntry(model="claude-sonnet-4-6", credential="vertexai_adc",
+                          api_format="vertexai_anthropic", config={"gcp_location": "global"}).as_agent_config()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unrelated-oauth-token")
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")

@@ -66,8 +66,6 @@ class AgentPoolEntry(BaseModel):
             if key not in self.model_fields_set:
                 fields.pop(key, None)
         result = {**fields, **self.config}
-        from .llm.factory import provider_for_config
-        provider_for_config(result)
         from .remote.seats import validate_runtime
         validate_runtime(result)
         return result

@@ -63,103 +63,53 @@ agents and require no provider access.
 
 ## Credentials and endpoints
 
-Put credentials in `.env` (or the deployment release), never committed
-YAML. New bindings declare `credential` to select one authentication and accounting path.
-`make_llm_client` infers a provider from `model` only for legacy configurations
-without an explicit credential selector.
+`model` identifies the model; one nonsecret `credential` enum selects its access
+method. Put secret values in `.env` or injected runtime secrets, never YAML.
 
-| Model / configuration | API format | Credential source |
+| `credential` | Provider / `api_format` | Runtime authentication |
 |---|---|---|
-| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | `openai` | `OPENAI_API_KEY` |
-| `claude-*` (direct API) | `anthropic` | `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN` |
-| `gemini-*` | OpenAI-compatible | `GOOGLE_API_KEY` |
-| model identifier containing `/` | OpenAI-compatible | `OPENROUTER_API_KEY` |
-| `llama`, `mistral`, `qwen` | OpenAI-compatible | `OLLAMA_API_KEY` (usually optional locally) |
-| Vertex model | `vertexai`, `vertexai_anthropic`, or `vertexai_openai` | ADC plus `GOOGLE_CLOUD_PROJECT` |
-
-Use explicit fields only when inference is not enough:
-
-```yaml
-agents:
-  - type: llm
-    model: my-local-model
-    api_format: openai
-    api_base: http://host.docker.internal:11434/v1
-    api_key: ${OLLAMA_API_KEY:-ollama}
-    temperature: 0.0
-    max_tokens: 1024
-    rating_player_id: my-local-model-baseline
-```
-
-`api_format` supports `openai`, `anthropic`, `vertexai`,
-`vertexai_anthropic`, and `vertexai_openai`. Vertex-only fields are
-`gcp_project`, `gcp_location`, and `vertex_adc_file` (or `adc_file`). They are
-optional integrations, not part of the local stack.
-
-### Explicit credential selection
-
-`model` identifies the model. A single `credential` enum selects how it is
-accessed and billed. It is a nonsecret selector, never a credential value.
-There is no separate `source` field or independent authentication override.
-
-| `credential` | Provider / API format | Authentication |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic / `anthropic` | Only `ANTHROPIC_API_KEY` from the runtime environment |
-| `ANTHROPIC_AUTH_TOKEN` | Anthropic / `anthropic` | Only `ANTHROPIC_AUTH_TOKEN` from the runtime environment |
-| `vertexai_adc` | Vertex / `vertexai_anthropic`, `vertexai`, or `vertexai_openai` | Google ADC; project/location in configuration |
-| `OPENROUTER_API_KEY` | OpenRouter / `openai` | Only `OPENROUTER_API_KEY` |
+| `ANTHROPIC_API_KEY` | Anthropic / `anthropic` | Only `ANTHROPIC_API_KEY` |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic / `anthropic` | Only `ANTHROPIC_AUTH_TOKEN` |
+| `vertexai_adc` | Vertex / `vertexai`, `vertexai_anthropic`, or `vertexai_openai` | Google ADC |
 | `OPENAI_API_KEY` | OpenAI / `openai` | Only `OPENAI_API_KEY` |
+| `OPENROUTER_API_KEY` | OpenRouter / `openai` | Only `OPENROUTER_API_KEY` |
 | `GOOGLE_API_KEY` | Gemini / `openai` | Only `GOOGLE_API_KEY` |
-| `OLLAMA_API_KEY` | Ollama / `openai` | Only `OLLAMA_API_KEY`, if required by the server |
+| `OLLAMA_API_KEY` | Ollama / `openai` | Only `OLLAMA_API_KEY`, if the server requires it |
 
-The selector determines the provider route and environment lookup together.
-Vertex requires an explicit Vertex `api_format` to choose its protocol adapter.
-Declare `credential` once at the agent level; nested `config` cannot override it.
-Unknown selectors, multiple selections, a conflicting format, inline `api_key`
-overrides, and Google ADC settings on key/token bindings fail validation.
-The typed pool and experiment schemas share `llm/credentials.py:ModelCredential`.
-Private key values belong in `.env` or injected runtime secrets. Arbitrary
-secret-variable names are not accepted as access methods.
+The selector determines routing and authentication together; a missing key/token,
+IAM failure, or quota error never switches accounts. Declare it once at the agent
+level. Unknown/multiple selectors, nested `config.credential`, conflicting formats,
+inline key overrides, and ADC options on key/token bindings fail validation.
+The shared definition is `a2a_engine.llm.credentials.ModelCredential`.
 
-For example, these **private local bindings** select three accounting paths for
-the same Haiku model. They do not publish shared choices or enable cloud products:
+For example, a private Vertex binding in `agents.local.yaml` can select its own
+project without changing the runtime's ADC identity:
 
 ```yaml
-# agents.local.yaml
 agents:
-  haiku-api:
+  claude-lab:
     type: llm
-    model: claude-haiku-5-5
-    credential: ANTHROPIC_API_KEY
-  haiku-oauth:
-    type: llm
-    model: claude-haiku-5-5
-    credential: ANTHROPIC_AUTH_TOKEN
-  haiku-vertex:
-    type: llm
-    model: claude-haiku-5-5
+    model: claude-sonnet-4-6
     credential: vertexai_adc
     api_format: vertexai_anthropic
-    config:
-      gcp_project: your-lab-project
-      gcp_location: global
+    config: {gcp_project: your-lab-project, gcp_location: global}
 ```
 
-The resolved configuration retains the selector and configured GCP
-project/location in the plan and provenance. Local processes forward only the
-selected key/token or Google ADC settings. Isolated services probe the same
-selector. The Agents screen identifies ADC explicitly. A missing key/token,
-IAM failure, or quota error never switches to another accounting path.
+Vertex requires an explicit Vertex `api_format`; `gcp_project` otherwise comes
+from ADC or `GOOGLE_CLOUD_PROJECT`. Optional `vertex_adc_file` (alias `adc_file`)
+selects a private ADC file. Set `api_base` for local servers or custom endpoints.
+Resolved plans retain the selector and project/location. Local children receive
+only the selected key/token or ADC settings; isolated services check the same
+selector. The Agents page labels ADC explicitly. See the
+[onboarding checklist](#onboard-a-model-endpoint) for publication and deployment.
 
-Legacy inline configurations without `credential` retain model-name inference
-and PR #30's direct Anthropic lookup: `ANTHROPIC_API_KEY`, then
-`ANTHROPIC_AUTH_TOKEN`. The legacy child environment forwards the API-key
-variable only; explicitly selecting `ANTHROPIC_AUTH_TOKEN` forwards OAuth to a
-local child. Tokens starting with `sk-ant-oat` use Bearer auth and the
-`oauth-2025-04-20` beta header. The supplied hosted secret wiring passes API keys
-only; selecting OAuth does not provision a token secret. Old pool entries using
-the standard environment-variable names now retain that choice in the resolved
-configuration. Frozen experiments keep their original plans and runtime pins.
+Legacy inline configurations without `credential` retain model inference and
+direct Anthropic's `ANTHROPIC_API_KEY` then `ANTHROPIC_AUTH_TOKEN` lookup. Explicit
+OAuth selection also forwards the token to local children; legacy children
+forward only the API-key variable. Tokens beginning `sk-ant-oat` retain Bearer
+and `oauth-2025-04-20` headers. Existing pool entries with standard variable names
+now freeze that selection; custom variable names are not enum members. Hosted
+secret wiring supplies API keys only. Frozen plans and runtime pins stay intact.
 
 ## Reproducibility and checks
 
@@ -229,29 +179,8 @@ agents:
     credential: OPENROUTER_API_KEY
 ```
 
-Shared LLM bindings declare one `credential` selector, retained during
-hydration. Secret values go in `.env` or runtime secrets.
-
-The `haiku-5.5-vertex` binding resolves to `claude-haiku-5-5` on Vertex AI's global
-endpoint using `credential: vertexai_adc` and `api_format: vertexai_anthropic`.
-Its pool `config.gcp_location: global` is included in the resolved agent config;
-the project comes from ADC or `GOOGLE_CLOUD_PROJECT`. Explicit Vertex formats
-select ADC in both the client factory and local-process credential forwarding,
-even though the same model ID also works on the direct Anthropic API. Claude
-5.5 uses undated Vertex IDs; do not invent an `@` suffix to force routing.
-
-Only Haiku 5.5 is published initially. Sonnet and Opus 5.5 retain engine registry
-support but have no shared pool entry. Existing `haiku` and `haiku-or` bindings
-retain Claude Haiku 4.5. The 5.5 registry entries omit `temperature` from
-requests. The new binding declares text input only; image support requires the
-explicit capability evidence described below.
-
-ADC requires more than removing an API key: enable the partner model in the
-selected GCP project, select a supported model location, and grant the runtime
-identity prediction permission. Model Garden visibility is not proof of
-project entitlement, quota, or runtime IAM access. Check those separately and
-make a small live request when provider-backed validation is requested. Hosted
-setup is in [deploy/README.md](../deploy/README.md#vertex-ai-adc).
+Bindings retain their [credential selector](#credentials-and-endpoints) during
+hydration; secret values stay in the runtime environment.
 
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
@@ -284,63 +213,29 @@ remote runtime examples.
 
 ## Onboard a model endpoint
 
-Runtime support and published choices are separate steps. The model registry is
-an API-parameter lookup, not an allowlist or the source of the Agents screen.
-An inline `model: claude-sonnet-5-5` can work in `a2a-run` while no corresponding
-pool choice appears in the UI. Complete this path when adding an endpoint:
+The model registry controls request parameters; the agent pool supplies published
+UI/CLI choices. Complete both paths when adding an endpoint:
 
-1. **Resolve the provider and wire format.** Check
-   `a2a-engine/a2a_engine/llm/factory.py` and `llm/providers.py` for model-name
-   inference, explicit `api_format` overrides, base URL and credentials. An
-   existing provider usually needs only configuration; a new protocol needs an
-   adapter in `llm/api.py`. A new access method also needs an enum member in
-   `llm/credentials.py:ModelCredential` and its factory resolution updated.
-2. **Register API quirks when needed.** Update `llm/model_config.py` for token
-   parameter names, default token budgets or unsupported sampling parameters.
-   Unknown model IDs otherwise use fallback rules. Verify outgoing payloads
-   with mocked HTTP, including omission of unsupported parameters.
-3. **Publish a binding.** Add a distinct logical name in
-   `experiments/agents.yaml` with `type`, concrete `model`, one `credential` selector,
-   `api_format`, and a description. Use
-   distinct bindings for different routes/accounts; set `api_base` for custom endpoints. Keep
-   existing names stable so new studies do not silently change models. For
-   private routing use `agents.local.yaml`; `A2A_AGENT_POOL=/path/to/pool.yaml`
-   replaces discovery entirely rather than merging with the shared pool.
-4. **Resolve each authoring path.** CLI experiments use positional
-   `participants: [haiku-5.5-vertex, haiku-5.5-vertex]` (matching the release's seat count), or
-   inline `agents` with concrete model IDs. UI designs use pool names in the
-   roster, for example:
+1. **Resolve access.** Follow [credential selection](#credentials-and-endpoints).
+   Existing adapters need configuration; new protocols need `llm/api.py` support.
+   New access methods also need `llm/credentials.py` and factory resolution.
+2. **Register API quirks.** Update `llm/model_config.py` for token limits or
+   unsupported parameters; check outgoing payloads with mocked HTTP.
+3. **Publish a binding.** Add a distinct name to `experiments/agents.yaml` with
+   `model`, `credential`, `api_format`, and a description. Preserve existing names
+   and targets. Use `agents.local.yaml` for private routes; `A2A_AGENT_POOL` replaces
+   pool discovery rather than merging with the shared pool.
+4. **Check resolution.** CLI `participants: [gpt-mini, gpt-mini]` and UI roster
+   `binding: gpt-mini` must freeze concrete model/adapter/credential settings,
+   without secrets. Match the release's seat count. Existing locked experiments
+   retain their plans and runtime pins; create or fork a design for new bindings.
+5. **Configure and publish the runtime.** Supply the selected key/token or ADC,
+   model access, and runtime IAM separately; see [hosted setup](../deploy/README.md).
+   Rebuild both selected images following [installation](INSTALLATION.md#refresh-and-stop).
+   Check `GET /api/agent-pool` and the Agents page; they consume the pool directly,
+   with no frontend model list. Hosted publication requires a release.
 
-   ```yaml
-   roster:
-     - {id: seller, role: seller, kind: llm, binding: haiku-5.5-vertex}
-     - {id: buyer, role: buyer, kind: llm, binding: haiku-5.5-vertex}
-   ```
-
-   The design compiler hydrates bindings before freezing the plan. Test that
-   the frozen agents contain concrete model IDs and formats, with no secrets.
-   Locked experiments retain their resolved bindings and runtime pins; create
-   or fork a design to select a newly published model.
-5. **Supply runtime credentials and rebuild.** The platform API reads the pool
-   through `GET /api/agent-pool`; the Agents page and roster choices consume
-   that response. No frontend model list needs editing. Provider secrets belong
-   in the runtime service (local `compose.platform.yml`, or the hosted setup in
-   [deploy/README.md](../deploy/README.md)), never the pool or bridge request
-   files. Vertex routes instead use ADC and runtime IAM, without provider-key
-   secrets; local containers need ADC configured separately. Rebuild/recreate the selected stack following
-   [INSTALLATION.md](INSTALLATION.md#refresh-and-stop), including both platform
-   and science-runtime images. Reload Agents and check the authenticated API
-   response. Hosted availability requires a separate release of the change;
-   editing the checkout or restarting an old image does not publish it.
-
-Run the focused offline checks from the repository's Python environment:
-
-```bash
-python -m pytest a2a-engine/tests/test_agent_pool.py a2a-engine/tests/test_experiment.py a2a-engine/tests/test_remote_seats.py
-python -m pytest cloud_platform/tests/test_viewer.py cloud_platform/tests/test_catalogue.py
-```
-
-Use `--smoke-test` for scripted execution and SQLite readback. Neither a smoke
-run nor a mocked provider request proves live provider access. Run
-`a2a-run EXPERIMENT --dry-run` only when provider-backed validation is requested;
-it can contact providers and incur usage.
+Run `python -m pytest a2a-engine/tests/test_agent_pool.py cloud_platform/tests/test_viewer.py`
+and a scripted `a2a-run EXPERIMENT --smoke-test` with SQLite readback. These prove
+configuration/execution plumbing, not live access. `--dry-run` can call providers;
+use it only when provider-backed validation is requested.

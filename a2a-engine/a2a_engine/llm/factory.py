@@ -74,8 +74,6 @@ def get_api_key_for_provider(provider: str, credential: str | None = None) -> st
 
 def provider_for_config(cfg: dict) -> str | None:
     """The credential selector fixes both routing and authentication."""
-    if "source" in cfg:
-        raise ValueError("source was replaced by the single credential selector")
     credential, api_format = cfg.get("credential"), cfg.get("api_format")
     if credential is None:
         return detect_provider(cfg.get("model") or "gpt-4o-mini", api_format)
@@ -122,8 +120,10 @@ def make_llm_client(cfg: dict) -> LLMClient:
         if not api_key:
             api_key = get_api_key_for_provider(provider, credential_env_for_config(cfg))
 
-    from a2a_engine.modalities import validate_seat
-    validate_seat({**cfg, "api_format": api_format or "openai"}, cfg.get("required_modalities", ["text"]))
+    from a2a_engine.modalities import require_modalities
+    require_modalities(cfg.get("required_modalities", ["text"]), cfg.get("capabilities"),
+                       api_format=api_format or "openai", runtime=cfg.get("runtime", "in_process"),
+                       llm=cfg.get("type", "llm") == "llm")
     return LLMClient(
         api_format=api_format or "openai",
         api_base=api_base or "",

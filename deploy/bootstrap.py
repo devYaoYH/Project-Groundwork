@@ -2,30 +2,13 @@
 import argparse
 import json
 import secrets
-
-try:
-    from .common import bucket, bucket_grant, command, exists, grant, service_account
-except ImportError:
-    from common import bucket, bucket_grant, command, exists, grant, service_account
-
-
-def enable_vertex_adc(project, runtime_account):
-    """Grant prediction-only ADC access to the Cloud Run runtime identity."""
-    command(["services", "enable", "aiplatform.googleapis.com", "--project", project, "--quiet"])
-    role = "groundworkVertexPredictor"
-    action = "update" if exists(["iam", "roles", "describe", role, "--project", project]) else "create"
-    command(["iam", "roles", action, role, "--project", project,
-             "--title=Groundwork Vertex predictor", "--stage=GA",
-             "--permissions=aiplatform.endpoints.predict,serviceusage.services.use", "--quiet"], capture=True)
-    grant(project, f"serviceAccount:{runtime_account}", f"projects/{project}/roles/{role}")
+from common import bucket, bucket_grant, command, exists, grant, service_account
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", default="cicl-487801")
     parser.add_argument("--region", default="us-central1")
-    parser.add_argument("--vertex-adc", action="store_true",
-                        help="Enable Vertex prediction-only access for the runtime identity.")
     args = parser.parse_args()
     project, region = args.project, args.region
     command(["services", "enable", "run.googleapis.com", "cloudbuild.googleapis.com",
@@ -36,8 +19,6 @@ def main():
              "--project", project, "--quiet"])
     accounts = {name: service_account(project, f"groundwork-{name}")
                 for name in ("api", "worker", "dispatch", "build", "ci")}
-    if args.vertex_adc:
-        enable_vertex_adc(project, accounts["worker"])
     for name in ("api", "worker"):
         grant(project, f"serviceAccount:{accounts[name]}", "roles/datastore.user")
         grant(project, f"serviceAccount:{accounts[name]}", "roles/logging.logWriter")
