@@ -106,9 +106,8 @@ def test_run_round_and_stop_share_graph_preserve_finalization(single_round, stop
         assert after[1][-1][0] == 'game_complete' and after[0]['stopped']
 
 
-@pytest.mark.parametrize('turn_cap', [0, -1])
-def test_nonpositive_talk_runs_exactly_1000_passes(turn_cap):
-    cfg = GameConfig(episode_uid='cap', num_rounds=1, cheap_talk_turns=turn_cap)
+def test_nonpositive_talk_runs_exactly_1000_passes():
+    cfg = GameConfig(episode_uid='cap', num_rounds=1, cheap_talk_turns=0)
     agents = [ControlledAgent(), ControlledAgent()]
     result, events, _, _ = asyncio.run(execute(GameEngine, cfg, agents))
     for agent in agents:
@@ -118,6 +117,19 @@ def test_nonpositive_talk_runs_exactly_1000_passes(turn_cap):
         assert len([call for call in agent.calls if call[0] == 'decide']) == 1
     assert result['rounds'][0]['stats']['num_turns_used'] == 1000
     assert events[-1][0] == 'game_complete'
+
+
+
+@pytest.mark.parametrize('turn_cap', [0, -1])
+def test_nonpositive_talk_boundary_and_graph_budget(turn_cap):
+    from types import SimpleNamespace
+    cfg = GameConfig(num_rounds=1, cheap_talk_turns=turn_cap)
+    runtime = SimpleNamespace(context=SimpleNamespace(engine=SimpleNamespace(config=cfg)))
+    state = {'alloc_a': None, 'alloc_b': None, 'turn': 999}
+    assert workflow.talk_destination(state, runtime) == 'continue'
+    assert workflow.talk_destination({**state, 'turn': 1000}, runtime) == 'cap'
+    assert workflow.talk_destination({**state, 'alloc_a': {}, 'alloc_b': {}}, runtime) == 'both_decided'
+    assert workflow.execution_limit(cfg) == workflow.execution_limit(GameConfig(num_rounds=1, cheap_talk_turns=1000))
 
 
 def test_three_total_attempts_then_empty_allocation():

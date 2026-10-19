@@ -1,0 +1,27 @@
+name: Build a cached local image
+description: Import and export BuildKit layers, then load the tested image into Docker
+inputs:
+  dockerfile:
+    required: true
+    description: Dockerfile path
+  image:
+    required: true
+    description: Local image tag used by Compose
+  scope:
+    required: true
+    description: Cache scope specific to this image
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ${{ inputs.dockerfile }}
+        tags: ${{ inputs.image }}
+        load: true
+        cache-from: type=gha,scope=${{ inputs.scope }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.scope }}
+    # Fixture Dockerfiles inherit the loaded agent image by its local tag.
+    - run: docker buildx use default
+      shell: bash

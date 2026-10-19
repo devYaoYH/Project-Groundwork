@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+
+from .compose_support import run_compose
 import time
 import uuid
 
@@ -18,8 +20,8 @@ def test_calendar_container_subgraphs_callbacks_and_frozen_driver_parity():
     command = [*base, "-f", "tests/runtime/calendar.compose.yml"]
 
     def compose(*args, timeout=120, base_image=False):
-        output = subprocess.run([*(base if base_image else command), *args], cwd=ROOT, env=env,
-                                capture_output=True, text=True, timeout=timeout)
+        output = run_compose(base if base_image else command, args, cwd=ROOT, env=env,
+                                timeout=timeout, fixture_agent=not base_image)
         assert output.returncode == 0, f"Disposable Calendar Compose command failed: {args[0]}\n{output.stderr}"
         return output.stdout
 

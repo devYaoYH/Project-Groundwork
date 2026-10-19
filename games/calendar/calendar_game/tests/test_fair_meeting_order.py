@@ -14,7 +14,7 @@ def test_five_agent_three_participant_five_meeting_tasks_balance_participation_a
         "density": 0.6,
         "pref_level": 1,
         "num_meetings": 5,
-    })
+    }, skip_optimal=True)
 
     participation = Counter(
         agent_id
@@ -38,7 +38,7 @@ def test_two_agent_five_meeting_first_speaker_is_as_balanced_as_possible():
         "density": 0.6,
         "pref_level": 1,
         "num_meetings": 5,
-    })
+    }, skip_optimal=True)
 
     first_counts = Counter(meeting["speaker_order"][0] for meeting in task["meetings"])
 

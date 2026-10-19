@@ -1,7 +1,7 @@
 name: Platform release
 on:
   pull_request:
-    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml']
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml', '.github/actions/**']
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,28 +9,60 @@ permissions:
   contents: read
 concurrency:
   group: platform-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  validate:
+  platform-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+          enable-cache: true
       - run: uv venv
-      - run: uv pip install pip -r requirements-platform.txt
+      - run: uv pip install -r requirements-platform.txt
       - run: uv run python scripts/install_workspace.py
       - run: uv run python scripts/export_environment_ids.py
-      - run: uv run python -m pytest cloud_platform/tests tests/platform -q
+      - run: uv run python -m pytest cloud_platform/tests tests/platform -q --durations=30 --junitxml=results/ci/platform.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-timings
+          path: results/ci/*.xml
+
+  platform-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+        with:
+          dockerfile: Dockerfile.platform
+          image: groundwork-platform:local
+          scope: platform
+      - uses: ./.github/actions/build-image
+        with:
+          dockerfile: Dockerfile.runtime
+          image: groundwork-runtime:local
+          scope: science
       - run: docker compose -f compose.platform.yml config --quiet
       - name: Verify the paired local worker and science runtime
         run: |
-          docker compose -f compose.platform.yml up --build --detach --wait
-          uv run python deploy/verify_local.py --url http://localhost:8080
+          docker compose -f compose.platform.yml up --no-build --detach --wait
+          docker compose -f compose.platform.yml exec -T api python deploy/verify_local.py --url http://localhost:8080
       - name: Stop the verification stack
         if: always()
         run: docker compose -f compose.platform.yml down
+
+  validate:
+    if: always()
+    needs: [platform-tests, platform-stack]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success
+        env:
+          TEST_RESULT: ${{ needs.platform-tests.result }}
+          STACK_RESULT: ${{ needs.platform-stack.result }}
+
   deploy:
     if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
     needs: validate

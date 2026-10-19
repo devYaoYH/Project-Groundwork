@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+
+from .compose_support import run_compose
 import time
 import uuid
 
@@ -17,7 +19,7 @@ def test_word_guess_container_sessions_privacy_and_runner_viewer_readback():
                "-f", "docker-compose.yml", "-f", "docker-compose.agent-runtime.yml", "-f", "tests/runtime/word-guess.compose.yml"]
 
     def compose(*args, timeout=120):
-        result = subprocess.run([*command, *args], cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+        result = run_compose(command, args, cwd=ROOT, env=env, timeout=timeout)
         assert result.returncode == 0, f"Disposable Word Guess Compose command failed: {args[0]}\n{result.stderr}"
         return result.stdout
 

@@ -11,6 +11,7 @@ include = [
   "a2a-agent/tests/test_service_policies.py",
   "a2a-agent/tests/test_seat_plugins.py",
   "scripts/workspace.py",
+  "scripts/ci_sharding.py",
   "scripts/install_workspace.py",
   "scripts/check_runtime_packages.py",
   "scripts/export_environment_ids.py",

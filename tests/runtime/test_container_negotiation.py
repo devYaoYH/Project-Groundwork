@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+
+from .compose_support import run_compose
 import time
 import uuid
 
@@ -23,8 +25,8 @@ def test_negotiation_real_containers_lifecycle_parity_and_pending_candidate(mode
             '-f', 'docker-compose.yml', '-f', 'docker-compose.agent-runtime.yml']
     command = [*base, '-f', 'tests/runtime/negotiation.compose.yml']
     def compose(*args, timeout=120, base_image=False):
-        result = subprocess.run([*(base if base_image else command), *args], cwd=ROOT, env=env,
-                                capture_output=True, text=True, timeout=timeout)
+        result = run_compose(base if base_image else command, args, cwd=ROOT, env=env,
+                                timeout=timeout, fixture_agent=not base_image)
         assert result.returncode == 0, f'Disposable Negotiation Compose failed: {args[0]}\n{result.stderr}'
         return result.stdout
     def request(path, method='GET'):

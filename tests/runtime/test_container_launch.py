@@ -1,5 +1,7 @@
 import json
 import subprocess
+
+from .compose_support import run_compose
 import uuid
 from urllib.request import urlopen
 
@@ -14,7 +16,7 @@ def test_supported_cli_viewer_launches_and_agent_only_provider_configuration():
                "-f", "docker-compose.runtime-launch.yml", "-f", "tests/runtime/launch.compose.yml"]
 
     def compose(*args, timeout=120):
-        result = subprocess.run([*command, *args], cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+        result = run_compose(command, args, cwd=ROOT, env=env, timeout=timeout)
         assert result.returncode == 0, f"Isolated launch gate failed: {args[0]}\n{result.stdout}\n{result.stderr}"
         return result.stdout
 
