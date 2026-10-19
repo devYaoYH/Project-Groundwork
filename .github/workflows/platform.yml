@@ -36,14 +36,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-image
         with:
-          dockerfile: Dockerfile.platform
-          image: groundwork-platform:local
-          scope: platform
-      - uses: ./.github/actions/build-image
-        with:
-          dockerfile: Dockerfile.runtime
-          image: groundwork-runtime:local
-          scope: science
+          targets: platform
+          cache-write: "true"
       - run: docker compose -f compose.platform.yml config --quiet
       - name: Verify the paired local worker and science runtime
         run: |

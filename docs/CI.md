@@ -21,8 +21,16 @@ branch protection names remain valid. Packaging/smoke checks and platform
 pytest/Compose checks run independently. Superseded PR runs are cancelled;
 running main-branch verification and deployments are never cancelled by this policy.
 
-Image builds import/export BuildKit caches by image scope. A metadata stage
-exports external dependency constraints from trusted package declarations;
+Each image job starts one BuildKit builder. Bake builds the viewer/agent or
+platform/science pair concurrently, sharing common dependency layers within the
+job, then loads both current-source images into the local Docker engine.
+Runtime shard 1 is the sole viewer/agent cache writer; the other runtime shards
+and local-stack import those caches without exporting them. The platform-stack
+job writes the separate platform/science scopes. Jobs still run independently:
+none waits for another job to build or publish an image. Fixture builds switch
+back to the default Docker builder so they can inherit locally loaded tags.
+
+A metadata stage exports external dependency constraints from trusted declarations;
 source-only changes retain the dependency layer. Editable source packages are
 then installed with uv and `--no-deps`. The pip installer remains available on
 hosts without uv. The science runtime still excludes control, worker, and web

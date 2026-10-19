@@ -150,16 +150,12 @@ jobs:
           enable-cache: true
       - run: uv venv
       - run: uv pip install pytest
+      # One builder shares dependency layers across both concurrent image builds.
+      # The shortest shard writes caches; other shards and local-stack only read.
       - uses: ./.github/actions/build-image
         with:
-          dockerfile: Dockerfile
-          image: a2a-comm-local:latest
-          scope: viewer
-      - uses: ./.github/actions/build-image
-        with:
-          dockerfile: a2a-agent/runtime/Dockerfile
-          image: a2a-agent-runtime:local
-          scope: agent
+          targets: runtime
+          cache-write: ${{ matrix.shard == 1 }}
       - run: docker tag a2a-comm-local:latest a2a-runtime-launch-test:local
       - name: Require all real game, transport, CLI and viewer containers
         run: >-
@@ -187,9 +183,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-image
         with:
-          dockerfile: Dockerfile
-          image: a2a-comm-local:latest
-          scope: viewer
+          targets: viewer
       - name: Start the cloud-free viewer from the tested image
         run: docker compose up --no-build --detach --wait viewer
       - name: Run all-environment SQLite smoke job
