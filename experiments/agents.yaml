@@ -33,27 +33,15 @@ agents:
     api_format: anthropic
     credential: ANTHROPIC_API_KEY
 
-  # Versioned names preserve existing studies using Haiku 4.5.
+  # Haiku 5.5 uses Vertex ADC; the existing Haiku 4.5 routes stay stable.
   haiku-5.5:
-    description: Anthropic API, Claude Haiku 5.5.
+    description: Claude Haiku 5.5 via Vertex AI, using Google ADC.
     type: llm
     model: claude-haiku-5-5
-    api_format: anthropic
-    credential: ANTHROPIC_API_KEY
-
-  sonnet-5.5:
-    description: Anthropic API, Claude Sonnet 5.5.
-    type: llm
-    model: claude-sonnet-5-5
-    api_format: anthropic
-    credential: ANTHROPIC_API_KEY
-
-  opus-5.5:
-    description: Anthropic API, Claude Opus 5.5.
-    type: llm
-    model: claude-opus-5-5
-    api_format: anthropic
-    credential: ANTHROPIC_API_KEY
+    api_format: vertexai_anthropic
+    credential: null
+    config:
+      gcp_location: global
 
   # --- OpenRouter -------------------------------------------------------
   # One key reaches many vendors, which makes it the cheap way to explore a

@@ -176,13 +176,26 @@ Values go in `.env`. It is metadata: hydration drops this field, and the client
 factory/runner preflight selects credentials using the concrete model's provider.
 Naming an arbitrary variable here does not make the client read it.
 
-The direct Anthropic pool includes `haiku-5.5`, `sonnet-5.5`, and `opus-5.5`,
-resolving to `claude-haiku-5-5`, `claude-sonnet-5-5`, and `claude-opus-5-5`.
-They use `ANTHROPIC_API_KEY` on the platform. Existing `haiku` and `haiku-or`
-bindings retain Claude Haiku 4.5. The 5.5 registry entries omit `temperature`
-from requests; changing a pool binding alone would not supply that API rule.
-These bindings declare text input only; image support requires the explicit
-capability evidence described below.
+The `haiku-5.5` binding resolves to `claude-haiku-5-5` on Vertex AI's global
+endpoint using `api_format: vertexai_anthropic` and `credential: null` (ADC).
+Its pool `config.gcp_location: global` is included in the resolved agent config;
+the project comes from ADC or `GOOGLE_CLOUD_PROJECT`. Explicit Vertex formats
+select ADC in both the client factory and local-process credential forwarding,
+even though the same model ID also works on the direct Anthropic API. Claude
+5.5 uses undated Vertex IDs; do not invent an `@` suffix to force routing.
+
+Only Haiku 5.5 is published initially. Sonnet and Opus 5.5 retain engine registry
+support but have no shared pool entry. Existing `haiku` and `haiku-or` bindings
+retain Claude Haiku 4.5. The 5.5 registry entries omit `temperature` from
+requests. The new binding declares text input only; image support requires the
+explicit capability evidence described below.
+
+ADC requires more than removing an API key: enable the partner model in the
+selected GCP project, select a supported model location, and grant the runtime
+identity prediction permission. Model Garden visibility is not proof of
+project entitlement, quota, or runtime IAM access. Check those separately and
+make a small live request when provider-backed validation is requested. Hosted
+setup is in [deploy/README.md](../deploy/README.md#vertex-ai-adc).
 
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
@@ -222,8 +235,9 @@ pool choice appears in the UI. Complete this path when adding an endpoint:
 
 1. **Resolve the provider and wire format.** Check
    `a2a-engine/a2a_engine/llm/factory.py` and `llm/providers.py` for model-name
-   inference, base URL and credentials. An existing provider usually needs only
-   configuration; a new protocol needs an adapter in `llm/api.py`.
+   inference, explicit `api_format` overrides, base URL and credentials. An
+   existing provider usually needs only configuration; a new protocol needs an
+   adapter in `llm/api.py`.
 2. **Register API quirks when needed.** Update `llm/model_config.py` for token
    parameter names, default token budgets or unsupported sampling parameters.
    Unknown model IDs otherwise use fallback rules. Verify outgoing payloads
@@ -235,14 +249,14 @@ pool choice appears in the UI. Complete this path when adding an endpoint:
    private routing use `agents.local.yaml`; `A2A_AGENT_POOL=/path/to/pool.yaml`
    replaces discovery entirely rather than merging with the shared pool.
 4. **Resolve each authoring path.** CLI experiments use positional
-   `participants: [haiku-5.5, sonnet-5.5]` (matching the release's seat count), or
+   `participants: [haiku-5.5, haiku-5.5]` (matching the release's seat count), or
    inline `agents` with concrete model IDs. UI designs use pool names in the
    roster, for example:
 
    ```yaml
    roster:
-     - {id: seller, role: seller, kind: llm, binding: sonnet-5.5}
-     - {id: buyer, role: buyer, kind: llm, binding: opus-5.5}
+     - {id: seller, role: seller, kind: llm, binding: haiku-5.5}
+     - {id: buyer, role: buyer, kind: llm, binding: haiku-5.5}
    ```
 
    The design compiler hydrates bindings before freezing the plan. Test that
@@ -252,9 +266,10 @@ pool choice appears in the UI. Complete this path when adding an endpoint:
 5. **Supply runtime credentials and rebuild.** The platform API reads the pool
    through `GET /api/agent-pool`; the Agents page and roster choices consume
    that response. No frontend model list needs editing. Provider secrets belong
-   in the runtime service (local `compose.platform.yml`, or the hosted secret
-   setup in [deploy/README.md](../deploy/README.md)), never the pool or bridge
-   request files. Rebuild/recreate the selected stack following
+   in the runtime service (local `compose.platform.yml`, or the hosted setup in
+   [deploy/README.md](../deploy/README.md)), never the pool or bridge request
+   files. Vertex routes instead use ADC and runtime IAM, without provider-key
+   secrets; local containers need ADC configured separately. Rebuild/recreate the selected stack following
    [INSTALLATION.md](INSTALLATION.md#refresh-and-stop), including both platform
    and science-runtime images. Reload Agents and check the authenticated API
    response. Hosted availability requires a separate release of the change;
@@ -263,7 +278,7 @@ pool choice appears in the UI. Complete this path when adding an endpoint:
 Run the focused offline checks from the repository's Python environment:
 
 ```bash
-python -m pytest a2a-engine/tests/test_agent_pool.py a2a-engine/tests/test_experiment.py
+python -m pytest a2a-engine/tests/test_agent_pool.py a2a-engine/tests/test_experiment.py a2a-engine/tests/test_remote_seats.py
 python -m pytest cloud_platform/tests/test_viewer.py cloud_platform/tests/test_catalogue.py
 ```
 

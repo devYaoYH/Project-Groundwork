@@ -6,8 +6,15 @@ from a2a_engine.llm.api import LLMClient
 from a2a_engine.llm.providers import LLM_PROVIDERS
 
 
-def detect_provider(model: str) -> str | None:
-    """Detect provider key from a model name. Returns None if unknown."""
+def detect_provider(model: str, api_format: str | None = None) -> str | None:
+    """Resolve explicit Vertex routing first, then infer from the model name."""
+    vertex_provider = {
+        "vertexai": "gemini_vertexai",
+        "vertexai_anthropic": "claude_vertexai",
+        "vertexai_openai": "vertexai_openai",
+    }.get(api_format)
+    if vertex_provider:
+        return vertex_provider
     m = model.lower()
     if m == "gemini-3-flash-preview" or m.startswith("publishers/google/models/gemini-3"):
         return "gemini_vertexai"
@@ -72,7 +79,7 @@ def make_llm_client(cfg: dict) -> LLMClient:
     api_key = cfg.get("api_key")
     api_format = cfg.get("api_format")
 
-    provider = detect_provider(model)
+    provider = detect_provider(model, api_format)
     if provider and provider in LLM_PROVIDERS:
         p = LLM_PROVIDERS[provider]
         api_base = api_base or p["api_base"]

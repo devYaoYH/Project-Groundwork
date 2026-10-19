@@ -305,3 +305,32 @@ def test_heuristic_child_policy_kind_is_game_independent(monkeypatch):
     assert captured["env"]["A2A_POLICY_KIND"] == "heuristic"
     assert captured["command"][captured["command"].index("--harness") + 1] == "scripted"
     assert "A2A_MODEL_CONFIG" not in captured["env"]
+
+
+def test_explicit_vertex_child_receives_adc_settings_without_provider_keys(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from a2a_engine.agent_pool import load_agent_pool
+    from a2a_engine.llm.factory import make_llm_client
+
+    workspace = Path(__file__).resolve().parents[2]
+    spec = load_agent_pool(workspace / "experiments").entry("haiku-5.5").as_agent_config()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unrelated-oauth-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/private/test-adc.json")
+    captured = {}
+    def launch(command, **options):
+        captured.update(options)
+        return SimpleNamespace()
+    monkeypatch.setattr("a2a_engine.remote.seats.subprocess.Popen", launch)
+    LocalProcessLauncher("http://127.0.0.1:1/join", "private-test-ticket", spec)
+    child = captured["env"]
+    assert child["GOOGLE_CLOUD_PROJECT"] == "test-project"
+    assert child["GOOGLE_APPLICATION_CREDENTIALS"] == "/private/test-adc.json"
+    assert all(key not in child for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"))
+    config = json.loads(child["A2A_MODEL_CONFIG"])
+    assert config["gcp_location"] == "global"
+    client = make_llm_client(config)
+    assert client.api_format == "vertexai_anthropic" and client.api_key == ""

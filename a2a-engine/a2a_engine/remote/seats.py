@@ -87,7 +87,7 @@ class LocalProcessLauncher:
             from a2a_engine.llm.factory import ADC_PROVIDERS, detect_provider, env_var_for_provider
             from a2a_engine.manifest import redact_config
 
-            provider = detect_provider(spec["model"])
+            provider = detect_provider(spec["model"], spec.get("api_format"))
             credential = env_var_for_provider(provider)
             required = [credential] if credential else []
             if provider in ADC_PROVIDERS:

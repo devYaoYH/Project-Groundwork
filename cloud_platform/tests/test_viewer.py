@@ -174,23 +174,23 @@ def test_original_ui_assets_do_not_publish_workspace_files(platform):
     assert client.get("/environment-assets/negotiation/webapp/static/styles/base.css").status_code == 200
 
 
-@pytest.mark.parametrize("family", ["haiku", "sonnet", "opus"])
-def test_claude_55_pool_choices_freeze_to_concrete_models(platform, family):
+def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
     """The Agents API and design compiler must agree on published bindings."""
     from pathlib import Path
     import yaml
 
     app, control, _ = platform
     alice = sign_in(app, "Alice")
-    name = f"{family}-5.5"
+    name = "haiku-5.5"
     response = alice.get("/api/agent-pool")
     assert response.status_code == 200
     entries = {entry["name"]: entry for entry in response.json()["agents"]}
     assert name in entries
+    assert not {"sonnet-5.5", "opus-5.5"} & entries.keys()
     entry = entries[name]
-    assert entry["model"] == f"claude-{family}-5-5"
-    assert entry["api_format"] == "anthropic"
-    assert entry["credential"] == "ANTHROPIC_API_KEY"
+    assert entry["model"] == "claude-haiku-5-5"
+    assert entry["api_format"] == "vertexai_anthropic"
+    assert entry["credential"] is None
     assert entry["credential_present"] is None
 
     workspace = Path(__file__).resolve().parents[2]
@@ -209,5 +209,6 @@ def test_claude_55_pool_choices_freeze_to_concrete_models(platform, family):
     assert plan
     for config in plan:
         assert [agent["model"] for agent in config["agents"]] == [entry["model"]] * 2
-        assert all(agent["api_format"] == "anthropic" for agent in config["agents"])
+        assert all(agent["api_format"] == "vertexai_anthropic" for agent in config["agents"])
+        assert all(agent["gcp_location"] == "global" for agent in config["agents"])
         assert all("api_key" not in agent and "credential" not in agent for agent in config["agents"])
