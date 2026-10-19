@@ -60,6 +60,9 @@ tests/
   workspace/test_install_workspace.py
   runtime/compose_support.py      # real container test image-reuse adapter
   platform/test_deployment_release.py
+  platform/test_validated_images.py
+deploy/
+  validated_images.py             # tested image IDs, publication, digest-only handoff
 Dockerfile                        # original viewer and runner
 Dockerfile.platform               # control API/UI and infrastructure worker
 Dockerfile.runtime                # independently pinned scientific runtime
@@ -110,10 +113,40 @@ explicitly requires `success` from every dependency. Failed, cancelled, or
 skipped children cannot turn into a successful gate. Other directly required
 checks still depend on the repository's branch-protection settings.
 
-The platform deployment job depends on `validate`, excludes PR events, and
-requires configured workload identity. It selects the immutable scientific
-source revision and submits the tested checkout to Cloud Build. PR validation
-does not deploy or replace existing pinned scientific runtime images.
+The platform deployment job depends on both `validate` and the image outputs
+from `platform-stack`, excludes PR events, and requires configured workload
+identity. PR validation never authenticates to GCP or publishes images.
+
+For a trusted release, `platform-stack` resolves the immutable science source tag
+before building. If it exists, the job pulls its digest and builds only the new
+control image; otherwise it builds both images. Compose verification therefore
+uses the same science image the release will deploy. Record both local image
+configuration IDs before testing and verify them again afterward. Trusted release
+runs also execute platform pytest in the built image and the packaged science
+smoke for newly built runtimes, preserving the previous Cloud Build checks.
+Previously published science images still receive Compose/bridge verification;
+the workflow does not assume they contain today's workspace smoke script.
+
+After validation, publish those exact image IDs to Artifact Registry and check
+that each registry manifest references its tested configuration ID. A conflicting
+science source tag fails rather than replacing a pin or silently selecting an
+untested image. Platform publication tags include the source, run ID, and attempt;
+deployment receives immutable digests and the validated source SHA through job
+outputs. The `validated-images` artifact records the local IDs, source pins,
+validation status, and published digests for inspection.
+
+`cloudbuild.yaml` is deploy-only: reject source mismatches, mutable references,
+or the wrong registry namespace; publish the catalogue from the selected platform
+image; deploy both digests; then verify the hosted release and runtime bindings.
+It never builds, substitutes, or retests a different image. The separate
+`deploy/cloudbuild-image.yaml` remains an initial-bootstrap build-only path.
+This reuse removes a rebuild cycle after merge; it does not promote PR artifacts
+across a potentially different merge revision.
+
+Before the first release with this flow, apply the updated `deploy/bootstrap.py`
+or its documented repository-scoped CI writer grants. WIF remains restricted to
+the trusted workflow/branches and push/manual events. This PR does not apply live
+IAM changes or deploy to GCP. See `deploy/README.md` for the rollout commands.
 
 ## Host test environment and discovery
 

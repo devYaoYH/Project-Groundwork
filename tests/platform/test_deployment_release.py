@@ -138,15 +138,21 @@ def test_science_history_covers_copied_inputs_and_ci_tests_real_pair():
     assert "deploy/verify_local.py --url http://localhost:8080" in workflow
     build = yaml.safe_load((root / "cloudbuild.yaml").read_text())
     assert "_RUNTIME_SOURCE_SHA" in build["substitutions"]
-    assert next(step for step in build["steps"] if step["id"] == "resolve-runtime")
+    assert next(step for step in build["steps"] if step["id"] == "validate-images")
+    assert "Select the science image before validation" in workflow
 
 
-@pytest.mark.parametrize("config_path", ["cloudbuild.yaml", "deploy/cloudbuild-image.yaml"])
+@pytest.mark.parametrize("config_path", [".github/workflows/platform.yml", "deploy/cloudbuild-image.yaml"])
 def test_runtime_smoke_uses_the_packaged_workspace_command(config_path):
     root = Path(__file__).resolve().parents[2]
     build = yaml.safe_load((root / config_path).read_text())
-    step = next(step for step in build["steps"] if step["id"] == "runtime-tests")
-    command = step["args"][-1]
+    if "jobs" in build:
+        step = next(step for step in build["jobs"]["platform-stack"]["steps"]
+                    if step.get("name") == "Test the release images without rebuilding")
+        command = step["run"]
+    else:
+        step = next(step for step in build["steps"] if step["id"] == "runtime-tests")
+        command = step["args"][-1]
     assert "python scripts/workspace.py smoke" in command
     assert "experiments/all_games_smoke.yaml" not in command
     assert "--max-parallelism 1" in command
@@ -224,10 +230,12 @@ def test_build_publishes_tested_image_catalogue_before_api_rollout():
     build = yaml.safe_load((Path(__file__).resolve().parents[2] / "cloudbuild.yaml").read_text())
     steps = build["steps"]
     order = {step["id"]: index for index, step in enumerate(steps)}
-    assert order["platform-tests"] < order["push"] < order["publish-catalogue"] < order["publish"]
+    assert order["validate-images"] < order["publish-catalogue"] < order["publish"] < order["verify-hosted"]
+    assert not {"build", "build-runtime", "platform-tests", "push", "push-runtime"} & set(order)
     publication = steps[order["publish-catalogue"]]
-    image_build = steps[order["build"]]
-    assert publication["name"] == image_build["args"][image_build["args"].index("-t") + 1]
+    assert publication["name"] == "${_PLATFORM_IMAGE}"
+    assert "--image '${_PLATFORM_IMAGE}'" in steps[order["publish"]]["args"][-1]
+    assert "--runtime-image '${_RUNTIME_IMAGE}'" in steps[order["publish"]]["args"][-1]
     assert publication["entrypoint"] == "python"
     assert publication["args"][:2] == ["-m", "cloud_platform.publish_catalogue"]
     assert "--catalogue-sha256" in steps[order["publish"]]["args"][-1]

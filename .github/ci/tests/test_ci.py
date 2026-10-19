@@ -66,7 +66,7 @@ def test_required_gates_include_every_shard_and_platform_stack():
     assert set(ci["test"]["needs"]) == {"python-tests", "package-tests"}
     assert ci["runtime-containers"]["needs"] == "runtime-tests"
     assert set(platform["validate"]["needs"]) == {"platform-tests", "platform-stack"}
-    assert platform["deploy"]["needs"] == "validate"
+    assert set(platform["deploy"]["needs"]) == {"validate", "platform-stack"}
     for job in (ci["test"], ci["runtime-containers"], platform["validate"]):
         assert job["if"] == "always()"
         assert "= success" in job["steps"][0]["run"]

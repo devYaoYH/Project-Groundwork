@@ -1,3 +1,4 @@
+# Initial bootstrap only; routine releases deploy validation outputs via cloudbuild.yaml.
 # Build both immutable images; administrator initializes public service once.
 substitutions:
   _REGION: us-central1

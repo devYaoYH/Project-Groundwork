@@ -1,5 +1,16 @@
 # Platform deployment changelog
 
+## Deploy validated image artifacts — 2026-10-19
+
+- Resolve any existing science digest before validation; test the selected pair,
+  record image configuration IDs, and publish only the validated image contents.
+- Make routine Cloud Build releases consume validation digests without rebuilding;
+  retain catalogue publication, hosted verification, and historical runtime pins.
+- Reject mismatched sources, mutable references, changed local images, and registry
+  manifests that differ from the tested configurations.
+- Add repository-scoped CI writer grants to bootstrap. Applying IAM and a live
+  hosted release remain separate rollout steps; this change stages code and checks.
+
 ## Public onboarding and coding-agent setup — 2026-10-12
 
 - Render the landing page without login, including while authentication is
