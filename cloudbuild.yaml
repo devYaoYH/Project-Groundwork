@@ -1,45 +1,11 @@
+# Deployment consumes validation outputs. Building or substituting images here
+# would invalidate the guarantee that the deployed artifacts passed CI.
 steps:
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
-    id: resolve-runtime
+    id: validate-images
     entrypoint: bash
-    args: ['deploy/run_python.sh', 'deploy/prepare_runtime.py', '--project', '$PROJECT_ID', '--image', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}', '--source-sha', '${_RUNTIME_SOURCE_SHA}']
-  - name: gcr.io/cloud-builders/docker
-    id: build-runtime
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        if ! test -e .platform-build/runtime-existing; then
-          docker build -f Dockerfile.runtime -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' .
-        fi
-  - name: gcr.io/cloud-builders/docker
-    id: runtime-tests
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        if ! test -e .platform-build/runtime-existing; then
-          docker run --rm '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}' python scripts/workspace.py smoke --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
-        fi
-  - name: gcr.io/cloud-builders/docker
-    id: push-runtime
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        if ! test -e .platform-build/runtime-existing; then
-          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork-runtime/runtime:${_RUNTIME_SOURCE_SHA}'
-        fi
-  - name: gcr.io/cloud-builders/docker
-    id: build
-    args: ['build', '-f', 'Dockerfile.platform', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', '.']
-  - name: gcr.io/cloud-builders/docker
-    id: platform-tests
-    args: ['run', '--rm', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}', 'python', '-m', 'pytest', 'cloud_platform/tests', 'tests/platform', '-q']
-  - name: gcr.io/cloud-builders/docker
-    id: push
-    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}']
-  - name: '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}'
+    args: ['deploy/run_python.sh', 'deploy/validated_images.py', 'check', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}', '--validated-source-sha', '${_VALIDATED_SOURCE_SHA}', '--platform-image', '${_PLATFORM_IMAGE}', '--runtime-image', '${_RUNTIME_IMAGE}', '--runtime-source-sha', '${_RUNTIME_SOURCE_SHA}']
+  - name: '${_PLATFORM_IMAGE}'
     id: publish-catalogue
     entrypoint: python
     args: ['-m', 'cloud_platform.publish_catalogue', '--project', '$PROJECT_ID', '--output', '.platform-build/catalogue-sha256']
@@ -49,7 +15,7 @@ steps:
     args:
       - -c
       - |
-        bash deploy/run_python.sh deploy/release.py --project '$PROJECT_ID' --region '${_REGION}' --image '${_REGION}-docker.pkg.dev/$PROJECT_ID/groundwork/platform:${_SOURCE_SHA}' --source-sha '${_SOURCE_SHA}' --runtime-image "$$(cat .platform-build/runtime-image)" --runtime-source-sha '${_RUNTIME_SOURCE_SHA}' --oauth-client-id '${_GOOGLE_OAUTH_CLIENT_ID}' --catalogue-sha256 "$$(cat .platform-build/catalogue-sha256)"
+        bash deploy/run_python.sh deploy/release.py --project '$PROJECT_ID' --region '${_REGION}' --image '${_PLATFORM_IMAGE}' --source-sha '${_SOURCE_SHA}' --runtime-image '${_RUNTIME_IMAGE}' --runtime-source-sha '${_RUNTIME_SOURCE_SHA}' --oauth-client-id '${_GOOGLE_OAUTH_CLIENT_ID}' --catalogue-sha256 "$$(cat .platform-build/catalogue-sha256)"
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: verify-hosted
     entrypoint: bash
@@ -57,6 +23,9 @@ steps:
 substitutions:
   _REGION: us-central1
   _SOURCE_SHA: ''
+  _VALIDATED_SOURCE_SHA: ''
+  _PLATFORM_IMAGE: ''
+  _RUNTIME_IMAGE: ''
   _RUNTIME_SOURCE_SHA: ''
   _GOOGLE_OAUTH_CLIENT_ID: ''
 serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com

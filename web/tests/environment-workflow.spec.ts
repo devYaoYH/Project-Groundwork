@@ -413,6 +413,28 @@ for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as 
   });
 }
 
+test("layout completion preserves focus moved into the outline", async ({ page, request }) => {
+  const { workflow: doc }: { workflow: WorkflowDocument } = await (await request.get("/api/environments/calendar/workflow")).json();
+  const root = doc.graphs.find((graph) => graph.id === doc.root_graph)!;
+  const parent = root.nodes.find((node) => node.subgraph)!;
+  const child = doc.graphs.find((graph) => graph.id === parent.subgraph)!;
+  await page.goto("/environments/calendar/");
+  const section = page.locator(".workflow-section"), canvas = section.locator(".workflow-canvas");
+  const outlineButton = section.locator(`.workflow-outline li[data-canvas-id="${canvasId(root.id, parent.id)}"] > button`).first();
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length);
+  const expand = canvas.locator(`.react-flow__node[data-id="${canvasId(root.id, parent.id)}"] .workflow-expand`);
+  // Move focus before the asynchronous layout/fit callback can restore it.
+  await expand.evaluate((button, id) => {
+    (button as HTMLButtonElement).click();
+    document.querySelector<HTMLButtonElement>(`.workflow-outline li[data-canvas-id="${id}"] > button`)!.focus();
+  }, canvasId(root.id, parent.id));
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(root.nodes.length + child.nodes.length);
+  await expectFittedNodes(canvas);
+  await expect(outlineButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(section.getByRole("complementary", { name: "Step inspector" }).getByRole("heading", { name: parent.id, exact: true })).toBeVisible();
+});
+
 for (const environment of ["calendar", "negotiation"]) for (const width of [390, 1280]) for (const colorScheme of ["light", "dark"] as const) {
   test(`${environment} document-based compound expansion at ${width}px ${colorScheme}`, async ({ page, request }) => {
     await page.setViewportSize({ width, height: 1000 });

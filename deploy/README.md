@@ -222,8 +222,9 @@ This writes nonsecret repository variables and provisions Workload Identity
 Federation restricted to the numeric repository and owner IDs, the platform
 workflow, and `main` push/manual events. No service-account key is stored in
 GitHub. Pull requests run platform tests without cloud credentials. Trusted main
-pushes validate, submit Cloud Build, test the built image, push Artifact Registry,
-and deploy a digest-pinned release for all experimenters. All checked-in game
+pushes select the pinned science image, build and validate the release images,
+publish their exact contents to Artifact Registry, and submit those immutable
+digests to the deploy-only Cloud Build pipeline for all experimenters. All checked-in game
 packages declaring `a2a_engine.environments` are automatically installed. The
 image first installs those packages, then exports route IDs from the same
 registered release declarations used by the API catalog. Next builds static
@@ -236,6 +237,34 @@ reuses that runtime tag's existing immutable digest when only infrastructure cod
 changes. A logging or storage fix publishes a new worker and binding catalog while
 retaining the default experiment runtime. Scientific input changes publish a new
 runtime; older locked experiments continue to reference their original image.
+
+Validation records image configuration IDs before Compose testing and verifies
+that neither local image changed afterward. Trusted releases also run platform
+pytest inside the built platform image and packaged smoke for newly built science
+images. Publication verifies the registry manifests against those tested IDs.
+An existing science tag is selected before testing; a conflicting tag appearing
+during validation aborts publication instead of switching the deployed image.
+`platform-stack` passes the tested digests and source pins through workflow outputs;
+Cloud Build checks the handoff, publishes the catalogue, deploys, and performs
+hosted verification without rebuilding. The `validated-images` Actions artifact
+records the image IDs and publication results.
+
+Before the first release using this handoff, an administrator must rerun the
+updated bootstrap or grant CI publication on the two repositories:
+
+```sh
+for repository in groundwork groundwork-runtime; do
+  gcloud artifacts repositories add-iam-policy-binding "$repository" \
+    --project cicl-487801 --location us-central1 \
+    --member serviceAccount:groundwork-ci@cicl-487801.iam.gserviceaccount.com \
+    --role roles/artifactregistry.writer
+done
+```
+
+The science repository retains immutable tags. PR jobs never authenticate or
+publish, and the existing WIF conditions still limit cloud credentials to the
+trusted deployment workflow and push/manual events. These instructions describe
+the required rollout; editing this repository does not apply live IAM changes.
 
 For a plain local web build after installing a new game, regenerate the same
 route artifact before building:
@@ -254,20 +283,23 @@ Remove the temporary push trigger before merge and rerun the configuration comma
 without that flag afterward to remove the temporary trust. Protect `main` with required
 reviews and CI checks appropriate to the repository's contributor model.
 
-Cloud Build uses the `groundwork-build` identity and Cloud Logging. To submit the
-same pipeline manually:
+Cloud Build uses the `groundwork-build` identity and Cloud Logging. To resubmit
+a release that already passed validation, use the exact image digests and source
+pins from that run's `validated-images` artifact. `FULL_COMMIT` must equal the
+validated source SHA. The deployment config accepts no build fallback:
 
 ```sh
 gcloud builds submit . --project cicl-487801 --region us-central1 \
   --config cloudbuild.yaml \
   --gcs-source-staging-dir gs://cicl-487801-groundwork-build-source/source \
-  --substitutions _SOURCE_SHA=FULL_COMMIT,_RUNTIME_SOURCE_SHA=SCIENCE_COMMIT,_GOOGLE_OAUTH_CLIENT_ID=CLIENT.apps.googleusercontent.com
+  --substitutions _SOURCE_SHA=FULL_COMMIT,_VALIDATED_SOURCE_SHA=FULL_COMMIT,_PLATFORM_IMAGE=us-central1-docker.pkg.dev/cicl-487801/groundwork/platform@sha256:PLATFORM_DIGEST,_RUNTIME_IMAGE=us-central1-docker.pkg.dev/cicl-487801/groundwork-runtime/runtime@sha256:RUNTIME_DIGEST,_RUNTIME_SOURCE_SHA=SCIENCE_COMMIT,_GOOGLE_OAUTH_CLIENT_ID=CLIENT.apps.googleusercontent.com
 ```
 
 Workload Identity Federation permits impersonation of `groundwork-ci`; API
 permissions still come from that service account's roles. Bootstrap grants CI
 Cloud Build submission, use of the build identity, access to its source bucket,
-and `roles/serviceusage.serviceUsageConsumer`. Its source-bucket access includes
+repository-scoped Artifact Registry Writer on `groundwork` and
+`groundwork-runtime`, and `roles/serviceusage.serviceUsageConsumer`. Its source-bucket access includes
 bucket metadata read (`roles/storage.legacyBucketReader`) in addition to object
 upload: `gcloud builds submit` checks bucket existence before uploading source.
 Both CI and the build identity

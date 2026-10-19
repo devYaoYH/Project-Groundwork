@@ -282,16 +282,31 @@ def test_resolve_does_not_mutate_the_input():
     assert cfg == {"scenario_pool_path": "p", "mc_ratio": 0.8}
 
 
-@pytest.mark.slow
-def test_mc_ratio_is_baked_into_the_config_so_the_run_is_reproducible():
+def test_mc_ratio_is_baked_into_the_config_so_the_run_is_reproducible(monkeypatch):
     """The reason resolve_config exists.
 
     The SA solver is stochastic. Under the old HTTP runner the generated scenario
     lived only in the request body, so a run could not be rebuilt from its YAML.
     Resolving into the config puts it in the trace.
     """
+    import random
+    from negotiation_game.backend import optimizer
     from negotiation_game.resolve import resolve_config
 
+    # Exercise real generation and oracle computation, without an unbounded
+    # stochastic search or optional naming's ADC/provider discovery.
+    generate = optimizer.generate_scenario
+    generated = []
+    monkeypatch.setattr(optimizer, "random", random.Random(0))
+    monkeypatch.setattr(optimizer, "name_projects", lambda projects: projects)
+
+    def bounded_scenario(**settings):
+        assert settings["target_mc"] == 0.8
+        result = generate(**settings, max_iter=16)
+        generated.append(result)
+        return result
+
+    monkeypatch.setattr(optimizer, "generate_scenario", bounded_scenario)
     out = resolve_config({
         "mc_ratio": 0.8,
         "resource_types": ["wood", "stone"],
@@ -299,8 +314,10 @@ def test_mc_ratio_is_baked_into_the_config_so_the_run_is_reproducible():
         "resource_supply": {"wood": 6, "stone": 6},
         "agent_budget": 10,
     })
-    assert out["agent_projects"], "generated projects must be recorded"
-    assert out["oracle_stats"], "oracle stats must be recorded"
+    assert len(generated) == 1
+    assert out["agent_projects"] == generated[0]["agent_projects"]
+    assert out["oracle_stats"] == generated[0]["oracle_stats"]
+    assert out["agent_projects"] and out["oracle_stats"]
     assert out["requested_mc_ratio"] == 0.8
     assert "mc_ratio" not in out
 

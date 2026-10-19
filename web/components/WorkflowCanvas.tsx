@@ -30,7 +30,12 @@ function RestoreToggleFocus({ canvas, pending, nodes }: { canvas: RefObject<HTML
       void fitView().then(() => {
         if (stale || !pending.current) return;
         const node = [...(canvas.current?.querySelectorAll<HTMLElement>(".react-flow__node") ?? [])].find((node) => node.dataset.id === pending.current);
-        node?.querySelector<HTMLButtonElement>(".workflow-expand")?.focus({ preventScroll: true });
+        // Layout can finish after a user has moved into the outline or inspector.
+        // Restore a removed toggle's focus, but never override that newer intent.
+        const active = document.activeElement;
+        if (active === document.body || (active && node?.contains(active))) {
+          node?.querySelector<HTMLButtonElement>(".workflow-expand")?.focus({ preventScroll: true });
+        }
         pending.current = null;
       });
     });

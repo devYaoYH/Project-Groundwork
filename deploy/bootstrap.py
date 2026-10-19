@@ -52,10 +52,13 @@ def main():
     if not exists(["artifacts", "repositories", "describe", repository, "--project", project, "--location", region]):
         command(["artifacts", "repositories", "create", repository, "--project", project,
                  "--location", region, "--repository-format=docker", "--quiet"])
-    command(["artifacts", "repositories", "add-iam-policy-binding", repository,
-             "--project", project, "--location", region,
-             "--member", f"serviceAccount:{accounts['build']}",
-             "--role", "roles/artifactregistry.writer"], capture=True)
+    # Trusted main validation publishes the images it tested; Cloud Build only
+    # deploys their digests. Scope CI publication to these two repositories.
+    for identity in ("build", "ci"):
+        command(["artifacts", "repositories", "add-iam-policy-binding", repository,
+                 "--project", project, "--location", region,
+                 "--member", f"serviceAccount:{accounts[identity]}",
+                 "--role", "roles/artifactregistry.writer"], capture=True)
     runtime_repository = "groundwork-runtime"
     if not exists(["artifacts", "repositories", "describe", runtime_repository, "--project", project, "--location", region]):
         command(["artifacts", "repositories", "create", runtime_repository, "--project", project,
@@ -63,9 +66,10 @@ def main():
     else:
         command(["artifacts", "repositories", "update", runtime_repository, "--project", project,
                  "--location", region, "--immutable-tags", "--quiet"])
-    command(["artifacts", "repositories", "add-iam-policy-binding", runtime_repository,
-             "--project", project, "--location", region, "--member", f"serviceAccount:{accounts['build']}",
-             "--role", "roles/artifactregistry.writer"], capture=True)
+    for identity in ("build", "ci"):
+        command(["artifacts", "repositories", "add-iam-policy-binding", runtime_repository,
+                 "--project", project, "--location", region, "--member", f"serviceAccount:{accounts[identity]}",
+                 "--role", "roles/artifactregistry.writer"], capture=True)
     artifact_bucket, source_bucket = f"{project}-groundwork-artifacts", f"{project}-groundwork-build-source"
     bucket(project, artifact_bucket, region)
     bucket(project, source_bucket, region)

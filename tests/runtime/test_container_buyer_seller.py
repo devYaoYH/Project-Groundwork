@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+
+from .compose_support import run_compose
 import time
 import uuid
 
@@ -24,8 +26,8 @@ def test_buyer_seller_real_containers_privacy_parity_and_pending_round(mode, act
     command = [*base, "-f", "tests/runtime/buyer-seller.compose.yml"]
 
     def compose(*args, timeout=120, base_image=False):
-        result = subprocess.run([*(base if base_image else command), *args], cwd=ROOT, env=env,
-                                capture_output=True, text=True, timeout=timeout)
+        result = run_compose(base if base_image else command, args, cwd=ROOT, env=env,
+                                timeout=timeout, fixture_agent=not base_image)
         assert result.returncode == 0, f"Disposable bargaining Compose command failed: {args[0]}\n{result.stderr}"
         return result.stdout
 

@@ -1,7 +1,7 @@
 name: Platform release
 on:
   pull_request:
-    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml']
+    paths: ['cloud_platform/**', 'tests/platform/**', 'deploy/**', 'compose.platform.yml', 'Dockerfile.platform', 'Dockerfile.runtime', 'requirements-platform.txt', 'cloudbuild.yaml', 'scripts/install_workspace.py', 'scripts/workspace.py', 'scripts/export_environment_ids.py', 'scripts/export_catalogue.py', 'a2a-engine/**', 'a2a-agent/**', 'a2a-judge/**', 'expt-runner/**', 'games/**', 'experiments/**', 'web/**', '.github/workflows/platform.yml', '.github/actions/**']
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,31 +9,139 @@ permissions:
   contents: read
 concurrency:
   group: platform-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  validate:
+  platform-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+          enable-cache: true
       - run: uv venv
-      - run: uv pip install pip -r requirements-platform.txt
+      - run: uv pip install -r requirements-platform.txt
       - run: uv run python scripts/install_workspace.py
       - run: uv run python scripts/export_environment_ids.py
-      - run: uv run python -m pytest cloud_platform/tests tests/platform -q
+      - run: uv run python -m pytest cloud_platform/tests tests/platform -q --durations=30 --junitxml=results/ci/platform.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: platform-timings
+          path: results/ci/*.xml
+
+  platform-stack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      platform-image: ${{ steps.publish.outputs.platform-image }}
+      runtime-image: ${{ steps.publish.outputs.runtime-image }}
+      runtime-source-sha: ${{ steps.publish.outputs.runtime-source-sha }}
+      source-sha: ${{ steps.publish.outputs.source-sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Identify the immutable scientific source
+        id: runtime-source
+        run: |
+          runtime_source_sha="$(git log -1 --format=%H -- Dockerfile.runtime scripts/install_workspace.py scripts/workspace.py a2a-engine a2a-agent a2a-judge expt-runner games experiments)"
+          test -n "$runtime_source_sha"
+          echo "sha=$runtime_source_sha" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+      - name: Select the science image before validation
+        id: runtime
+        if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          RUNTIME_SOURCE_SHA: ${{ steps.runtime-source.outputs.sha }}
+        run: |
+          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+          python deploy/prepare_runtime.py --project "$GCP_PROJECT" \
+            --image "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT/groundwork-runtime/runtime:$RUNTIME_SOURCE_SHA" \
+            --source-sha "$RUNTIME_SOURCE_SHA"
+          if test -e .platform-build/runtime-existing; then
+            runtime_image="$(cat .platform-build/runtime-image)"
+            docker pull "$runtime_image"
+            docker tag "$runtime_image" groundwork-runtime:local
+            echo 'existing=true' >> "$GITHUB_OUTPUT"
+            echo "image=$runtime_image" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: ./.github/actions/build-image
+        with:
+          targets: ${{ steps.runtime.outputs.existing == 'true' && 'control' || 'platform' }}
+          cache-write: "true"
+      - name: Verify image promotion against a disposable registry
+        run: python .github/ci/verify_image_promotion.py
+      - name: Record the images entering validation
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUNTIME_SOURCE_SHA: ${{ steps.runtime-source.outputs.sha }}
+          REUSED_RUNTIME: ${{ steps.runtime.outputs.image }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python deploy/validated_images.py record --source-sha "$SOURCE_SHA" \
+            --runtime-source-sha "$RUNTIME_SOURCE_SHA" --reused-runtime "$REUSED_RUNTIME"
       - run: docker compose -f compose.platform.yml config --quiet
       - name: Verify the paired local worker and science runtime
         run: |
-          docker compose -f compose.platform.yml up --build --detach --wait
-          uv run python deploy/verify_local.py --url http://localhost:8080
+          docker compose -f compose.platform.yml up --no-build --detach --wait
+          docker compose -f compose.platform.yml exec -T api python deploy/verify_local.py --url http://localhost:8080
       - name: Stop the verification stack
         if: always()
         run: docker compose -f compose.platform.yml down
+      - name: Test the release images without rebuilding
+        if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        run: |
+          docker run --rm groundwork-platform:local python -m pytest cloud_platform/tests tests/platform -q
+          if ! test -e .platform-build/runtime-existing; then
+            docker run --rm groundwork-runtime:local python scripts/workspace.py smoke \
+              --max-parallelism 1 --results-dir /tmp/science-smoke --storage-path /tmp/science-smoke/a2a.db
+          fi
+      - name: Verify validation did not replace either image
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python deploy/validated_images.py verify --source-sha "$SOURCE_SHA"
+      - name: Publish the validated images
+        id: publish
+        if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python deploy/validated_images.py publish --project "$GCP_PROJECT" --region "$GCP_REGION" \
+            --source-sha "$SOURCE_SHA" --release-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validated-images
+          path: .platform-build/validated-images.json
+          include-hidden-files: true
+
+  validate:
+    if: always()
+    needs: [platform-tests, platform-stack]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success
+        env:
+          TEST_RESULT: ${{ needs.platform-tests.result }}
+          STACK_RESULT: ${{ needs.platform-stack.result }}
+
   deploy:
     if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
-    needs: validate
+    needs: [validate, platform-stack]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,26 +150,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Identify the immutable scientific source
-        id: runtime
-        run: |
-          runtime_source_sha="$(git log -1 --format=%H -- Dockerfile.runtime scripts/install_workspace.py scripts/workspace.py a2a-engine a2a-agent a2a-judge expt-runner games experiments)"
-          test -n "$runtime_source_sha"
-          echo "source_sha=$runtime_source_sha" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
-      - name: Submit tested source to Cloud Build
+      - name: Deploy the validated image digests through Cloud Build
         env:
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
           GCP_REGION: ${{ vars.GCP_REGION }}
           GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
-          RUNTIME_SOURCE_SHA: ${{ steps.runtime.outputs.source_sha }}
-        run: >-
-          gcloud builds submit . --project "$GCP_PROJECT" --region "$GCP_REGION"
-          --config cloudbuild.yaml
-          --service-account "projects/$GCP_PROJECT/serviceAccounts/groundwork-build@$GCP_PROJECT.iam.gserviceaccount.com"
-          --gcs-source-staging-dir "gs://$GCP_PROJECT-groundwork-build-source/source"
-          --substitutions "_REGION=$GCP_REGION,_SOURCE_SHA=$GITHUB_SHA,_RUNTIME_SOURCE_SHA=$RUNTIME_SOURCE_SHA,_GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"
+          SOURCE_SHA: ${{ github.sha }}
+          VALIDATED_SOURCE_SHA: ${{ needs.platform-stack.outputs.source-sha }}
+          PLATFORM_IMAGE: ${{ needs.platform-stack.outputs.platform-image }}
+          RUNTIME_IMAGE: ${{ needs.platform-stack.outputs.runtime-image }}
+          RUNTIME_SOURCE_SHA: ${{ needs.platform-stack.outputs.runtime-source-sha }}
+        run: |
+          python deploy/validated_images.py check --project "$GCP_PROJECT" --region "$GCP_REGION" \
+            --source-sha "$SOURCE_SHA" --validated-source-sha "$VALIDATED_SOURCE_SHA" \
+            --platform-image "$PLATFORM_IMAGE" --runtime-image "$RUNTIME_IMAGE" \
+            --runtime-source-sha "$RUNTIME_SOURCE_SHA"
+          gcloud builds submit . --project "$GCP_PROJECT" --region "$GCP_REGION" \
+            --config cloudbuild.yaml \
+            --service-account "projects/$GCP_PROJECT/serviceAccounts/groundwork-build@$GCP_PROJECT.iam.gserviceaccount.com" \
+            --gcs-source-staging-dir "gs://$GCP_PROJECT-groundwork-build-source/source" \
+            --substitutions "_REGION=$GCP_REGION,_SOURCE_SHA=$SOURCE_SHA,_VALIDATED_SOURCE_SHA=$VALIDATED_SOURCE_SHA,_PLATFORM_IMAGE=$PLATFORM_IMAGE,_RUNTIME_IMAGE=$RUNTIME_IMAGE,_RUNTIME_SOURCE_SHA=$RUNTIME_SOURCE_SHA,_GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID"

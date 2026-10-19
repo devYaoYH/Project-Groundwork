@@ -3,6 +3,8 @@
 import json
 import os
 import subprocess
+
+from .compose_support import run_compose
 import time
 import uuid
 from pathlib import Path
@@ -15,7 +17,7 @@ SERVICES = ["runtime-environment", "runtime-agent"]
 
 
 def clean_environment():
-    return {key: os.environ[key] for key in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "TMPDIR") if key in os.environ}
+    return {key: os.environ[key] for key in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "TMPDIR", "GROUNDWORK_CI_PREBUILT_IMAGES") if key in os.environ}
 
 
 @pytest.mark.parametrize("runtime_loss", [False, True])
@@ -31,7 +33,7 @@ def test_real_container_acknowledgement_and_opposite_mcp_completion(runtime_loss
                "-f", "docker-compose.yml", "-f", "docker-compose.agent-runtime.yml"]
 
     def compose(*arguments, timeout=120):
-        result = subprocess.run([*command, *arguments], cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+        result = run_compose(command, arguments, cwd=ROOT, env=env, timeout=timeout)
         assert result.returncode == 0, f"Disposable Compose command failed: {arguments[0]}\n{result.stderr}"
         return result.stdout
 

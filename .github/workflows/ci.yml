@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Cancel obsolete PR runs; main-branch verification is never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -29,8 +34,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+          enable-cache: true
       - run: uv venv
-      - run: uv pip install pip pytest pytest-asyncio
+      - run: uv pip install pytest pytest-asyncio
       - run: uv run python scripts/install_workspace.py
       - run: uv run python scripts/export_environment_ids.py
       - run: uv run python scripts/workspace.py export-site
@@ -46,20 +52,55 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npm run test:browser
+      - run: npm run test:browser -- --reporter=dot,junit
         working-directory: web
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-timings
+          path: web/test-results/browser.xml
 
-  test:
+  python-tests:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .github/ci
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv venv
+      - run: uv pip install pytest pytest-asyncio
+      - run: uv run python scripts/install_workspace.py
+      - name: Run every collected Python test across isolated runners
+        run: >-
+          uv run python scripts/workspace.py test -p ci_sharding
+          --ci-shard=${{ matrix.shard }}/${{ strategy.job-total }} --durations=30
+          --junitxml=results/ci/python-${{ matrix.shard }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-timings-${{ matrix.shard }}
+          path: results/ci/*.xml
+
+  package-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+          enable-cache: true
       - run: uv venv
-      - run: uv pip install pip pytest pytest-asyncio
+      - run: uv pip install pytest pytest-asyncio
       - run: uv run python scripts/install_workspace.py
-      - run: uv run python scripts/workspace.py test
       - run: uv run python scripts/workspace.py smoke
       - run: uv run python scripts/export_turn_contract.py --check
       - run: uv run python scripts/export_turn_contract.py --protocol-version a2a-turns/2 --check
@@ -75,30 +116,76 @@ jobs:
               --smoke-test --storage-path "/tmp/${name}-runtime.db"
           done
       - run: python scripts/release_check.py
-      - run: docker compose config
+      - run: docker compose config --quiet
       - run: uv run python scripts/workspace.py build
       - name: Export from ordinary installed wheels without credentials
         run: uv run python scripts/workspace.py check-wheels
 
-  runtime-containers:
+  # Preserve the required check name and fail closed if any shard is cancelled.
+  test:
+    if: always()
+    needs: [python-tests, package-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    steps:
+      - run: test "$PYTHON_RESULT" = success && test "$PACKAGE_RESULT" = success
+        env:
+          PYTHON_RESULT: ${{ needs.python-tests.result }}
+          PACKAGE_RESULT: ${{ needs.package-tests.result }}
+
+  runtime-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      GROUNDWORK_CI_PREBUILT_IMAGES: "1"
+      PYTHONPATH: .github/ci
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+          enable-cache: true
       - run: uv venv
       - run: uv pip install pytest
+      # One builder shares dependency layers across both concurrent image builds.
+      # The shortest shard writes caches; other shards and local-stack only read.
+      - uses: ./.github/actions/build-image
+        with:
+          targets: runtime
+          cache-write: ${{ matrix.shard == 1 }}
+      - run: docker tag a2a-comm-local:latest a2a-runtime-launch-test:local
       - name: Require all real game, transport, CLI and viewer containers
-        run: uv run pytest tests/runtime -q
+        run: >-
+          uv run python -m pytest tests/runtime -q -p ci_sharding
+          --ci-shard=${{ matrix.shard }}/${{ strategy.job-total }} --durations=20
+          --junitxml=results/ci/runtime-${{ matrix.shard }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-timings-${{ matrix.shard }}
+          path: results/ci/*.xml
+
+  runtime-containers:
+    if: always()
+    needs: runtime-tests
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.runtime-tests.result }}
 
   local-stack:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and start the cloud-free viewer
-        run: docker compose up --build --detach --wait viewer
+      - uses: ./.github/actions/build-image
+        with:
+          targets: viewer
+      - name: Start the cloud-free viewer from the tested image
+        run: docker compose up --no-build --detach --wait viewer
       - name: Run all-environment SQLite smoke job
         run: docker compose run --rm runner
       - name: Run packaged MCP children and inspect persisted viewer readback
