@@ -37,6 +37,9 @@ jobs:
 
   platform-stack:
     runs-on: ubuntu-latest
+    outputs:
+      validated-artifact-id: ${{ steps.validated-images.outputs.artifact-id }}
+      diagnostics-artifact-id: ${{ steps.build-diagnostics.outputs.artifact-id }}
     permissions:
       contents: read
       id-token: write
@@ -129,10 +132,23 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: python deploy/validated_images.py verify --source-sha "$SOURCE_SHA"
+      # Only a successful validation produces the deployment handoff. Names
+      # include the attempt because v4 deduplicates artifact listings by name.
       - uses: actions/upload-artifact@v4
+        id: validated-images
+        if: success() && github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        with:
+          name: validated-images-${{ github.run_attempt }}
+          path: |
+            .platform-build/candidates.json
+            .platform-build/validated-images.json
+          if-no-files-found: error
+          include-hidden-files: true
+      - uses: actions/upload-artifact@v4
+        id: build-diagnostics
         if: always()
         with:
-          name: validated-images
+          name: platform-build-diagnostics-${{ github.run_attempt }}
           path: .platform-build/*.json
           include-hidden-files: true
 
@@ -162,10 +178,15 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
+      - name: Require the validation artifact ID
+        env:
+          VALIDATED_ARTIFACT_ID: ${{ needs.platform-stack.outputs.validated-artifact-id }}
+        run: test -n "$VALIDATED_ARTIFACT_ID"
       - uses: actions/download-artifact@v4
         with:
-          name: validated-images
+          artifact-ids: ${{ needs.platform-stack.outputs.validated-artifact-id }}
           path: .platform-build
+          merge-multiple: true
       - name: Publish the validated artifacts through Cloud Build
         env:
           GCP_PROJECT: ${{ vars.GCP_PROJECT }}
@@ -196,9 +217,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: needs.platform-stack.outputs.diagnostics-artifact-id != ''
         continue-on-error: true
         with:
-          pattern: '*images'
+          artifact-ids: ${{ needs.platform-stack.outputs.diagnostics-artifact-id }}
           path: results/latencies
           merge-multiple: true
       - uses: actions/download-artifact@v4

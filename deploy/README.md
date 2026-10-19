@@ -246,8 +246,14 @@ Validation seals their IDs; the required gate must pass before publication.
 The second request copies new science into the immutable runtime repository,
 requiring the same configuration **and manifest digest**. Existing science
 remains the image selected before validation. Neither request substitutes a new
-runtime after tests; publication never rebuilds. `validated-images` and
-`release-latencies` Actions artifacts retain provenance and timing data.
+runtime after tests; publication never rebuilds. Only successful validation
+uploads `validated-images-ATTEMPT`; deployment downloads the exact artifact ID
+returned by that job, including when only deployment is rerun. Attempt-specific
+names prevent an older upload from hiding the selected artifact in v4 listings.
+Partial/failed attempts retain their records separately in
+`platform-build-diagnostics-ATTEMPT`. Latency reporting downloads that job's exact
+diagnostic artifact ID and retains provenance and timing data in
+`release-latencies`.
 
 Before using the flow, apply the updated bootstrap or these narrowly scoped grants:
 
