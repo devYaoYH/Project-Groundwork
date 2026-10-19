@@ -32,6 +32,16 @@ agents:
     api_format: anthropic
     credential: ANTHROPIC_API_KEY
 
+  # Haiku 5.5 uses Vertex ADC; the existing Haiku 4.5 routes stay stable.
+  haiku-5.5-vertex:
+    description: Claude Haiku 5.5 via Vertex AI, using Google ADC.
+    type: llm
+    model: claude-haiku-5-5
+    api_format: vertexai_anthropic
+    credential: vertexai_adc
+    config:
+      gcp_location: global
+
   # --- OpenRouter -------------------------------------------------------
   # One key reaches many vendors, which makes it the cheap way to explore a
   # line-up before committing to a provider. Any OpenRouter model id works

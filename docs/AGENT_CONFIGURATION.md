@@ -213,6 +213,8 @@ remote runtime examples.
 
 ## Onboard a model endpoint
 
+For a concrete Vertex rollout, see [Haiku 5.5 onboarding](HAIKU_VERTEX.md).
+
 The model registry controls request parameters; the agent pool supplies published
 UI/CLI choices. Complete both paths when adding an endpoint:
 

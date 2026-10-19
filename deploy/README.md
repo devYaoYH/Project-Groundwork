@@ -135,6 +135,13 @@ Secret Manager secret with its real value, then grant `groundwork-worker` the
 are scoped to launch Jobs, never the control API. `groundwork-session` is generated
 by bootstrap and available only to the control API.
 
+### Vertex AI ADC
+
+For the Haiku binding, prediction-only IAM setup, model enablement, and runtime
+verification, follow [Haiku 5.5 on Vertex AI](../docs/HAIKU_VERTEX.md).
+
+### Google sign-in and first release
+
 Create a Google Web OAuth client and add the deployed Cloud Run URL as an
 authorized JavaScript origin. Use the deterministic URL
 `https://groundwork-control-1011791564032.us-central1.run.app` for this project;
