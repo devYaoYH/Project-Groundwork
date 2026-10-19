@@ -20,8 +20,7 @@ steps:
       - -ec
       - |
         export PATH="/builder/home/bin:$$PATH"
-        docker buildx create --name candidates --driver docker-container --use
-        docker buildx bake --file .platform-build/cloud-bake.json --metadata-file .platform-build/cloud-metadata.json
+        bash deploy/run_python.sh deploy/cloud_images.py build
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: record-candidates
     entrypoint: bash

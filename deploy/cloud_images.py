@@ -65,6 +65,35 @@ def prepare(project, region, source, runtime_source, build_id):
     command(["auth", "configure-docker", f"{region}-docker.pkg.dev", "--quiet"])
 
 
+def build():
+    # run_python.sh supplies the Cloud SDK CA bundle to Docker/Buildx as well.
+    subprocess.run(
+        [
+            "docker",
+            "buildx",
+            "create",
+            "--name",
+            "candidates",
+            "--driver",
+            "docker-container",
+            "--use",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "docker",
+            "buildx",
+            "bake",
+            "--file",
+            str(ROOT / "cloud-bake.json"),
+            "--metadata-file",
+            str(ROOT / "cloud-metadata.json"),
+        ],
+        check=True,
+    )
+
+
 def candidates(project, region):
     record = json.loads((ROOT / "build-inputs.json").read_text())
     metadata = json.loads((ROOT / "cloud-metadata.json").read_text())
@@ -208,7 +237,7 @@ def promote(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["prepare", "candidates", "pull", "promote"])
+    parser.add_argument("operation", choices=["prepare", "build", "candidates", "pull", "promote"])
     parser.add_argument("--project", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--region", default=os.environ.get("REGION", "us-central1"))
     parser.add_argument("--source-sha", default=os.environ.get("SOURCE_SHA"))
@@ -218,6 +247,8 @@ def main():
     ROOT.mkdir(exist_ok=True)
     if args.operation == "prepare":
         prepare(args.project, args.region, args.source_sha, args.runtime_source_sha, args.build_id)
+    elif args.operation == "build":
+        build()
     elif args.operation == "candidates":
         candidates(args.project, args.region)
     elif args.operation == "pull":
