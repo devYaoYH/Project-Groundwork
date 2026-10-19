@@ -10,8 +10,9 @@ concurrent checkout mutations or mutable Docker image tags on one runner.
 Discovery still collects all registered packages, including newly added games.
 `scripts/ci_sharding.py` assigns every collected file exactly once using
 `tests/ci_durations.json`; unknown files receive a test-count estimate.
-The initial Python weights come from a local October 19 profile. Container
-weights are initial estimates and should be refined from actual CI artifacts.
+Weights come from the first passing Linux run of PR #32. Refresh them from
+CI artifacts after significant test changes; the bounded solver case uses its
+new focused timing instead of its previous 90-second duration.
 Weights only influence scheduling; they never determine which tests exist.
 
 The `test`, `runtime-containers`, and platform `validate` checks aggregate all
@@ -48,3 +49,7 @@ Full transport/protocol parity and packaging smoke coverage remain required.
 Calendar ordering tests skip unrelated optimal-schedule computation. Negotiation
 retains a full 1,000-pass integration regression and tests both nonpositive
 input values at the 999/1,000 boundary and graph execution-budget calculation.
+
+The scenario-reproducibility test still executes the real Negotiation solver and
+oracle with a fixed random seed and a bounded iteration budget. Optional project
+naming is stubbed so ordinary tests do not perform ADC discovery or provider calls.
