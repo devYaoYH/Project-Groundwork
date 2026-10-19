@@ -132,7 +132,7 @@ def test_science_history_covers_copied_inputs_and_ci_tests_real_pair():
     dockerfile = (root / "Dockerfile.runtime").read_text()
     assert "cloud_platform" not in dockerfile and "COPY deploy/" not in dockerfile and "COPY web/" not in dockerfile
     workflow = (root / ".github/workflows/platform.yml").read_text()
-    for source in ("Dockerfile.runtime", "scripts/install_workspace.py", "scripts/workspace.py", "a2a-engine", "a2a-agent", "a2a-judge", "expt-runner", "games", "experiments"):
+    for source in (".dockerignore", "Dockerfile.runtime", "scripts/install_workspace.py", "scripts/workspace.py", "a2a-engine", "a2a-agent", "a2a-judge", "expt-runner", "games", "experiments"):
         assert source in workflow.split("git log -1 --format=%H -- ")[1].split(')"')[0]
     assert "docker compose -f compose.platform.yml up --no-build --detach --wait" in workflow
     assert "deploy/verify_local.py --url http://localhost:8080" in workflow

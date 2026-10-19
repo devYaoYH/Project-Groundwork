@@ -47,7 +47,13 @@ def main():
         }
         with tempfile.TemporaryDirectory(prefix="groundwork-promotion-") as directory:
             context = Path(directory)
-            (context / "Dockerfile").write_text("FROM scratch\nCOPY marker /marker\n")
+            (context / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+            (context / ".dockerignore").write_text((ROOT / ".dockerignore").read_text())
+            bytecode = context / "deploy/__pycache__/probe.cpython-314.pyc"
+            bytecode.parent.mkdir(parents=True)
+            loose_bytecode = context / "deploy/probe.pyc"
+            bytecode.write_bytes(b"first compilation")
+            loose_bytecode.write_bytes(b"first compilation")
             for name, tag in local_tags.items():
                 (context / "marker").write_text(fixture + "-" + name)
                 docker(
@@ -60,6 +66,23 @@ def main():
                     str(context),
                 )
                 image_ids.append(images.image_id(tag))
+                if name == "platform":
+                    bytecode.write_bytes(b"different compilation")
+                    loose_bytecode.write_bytes(b"different compilation")
+                    docker(
+                        "build",
+                        "--builder",
+                        docker("context", "show"),
+                        "--provenance=false",
+                        "--tag",
+                        tag,
+                        str(context),
+                    )
+                    assert images.image_id(tag) == image_ids[-1]
+                    print(
+                        "Nested Python bytecode excluded; identical source reused the image cache",
+                        flush=True,
+                    )
             images.LOCAL_IMAGES = local_tags
             images.repositories = lambda project, region: {
                 name: address + "/" + name for name in local_tags

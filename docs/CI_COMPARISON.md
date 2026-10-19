@@ -95,6 +95,22 @@ step's platform image even though its command skips catalogue publication.
 No hosted rollout was performed. Benchmark-only registry Reader, manifest-upload,
 and exact-branch manual WIF grants are temporary and restored after the runs.
 
+### Cache invalidation caught by the repeat
+
+The identical `e309c09` repeat still reran `COPY .`, editable installation, and
+metadata exports, producing another configuration ID. A real Docker context probe
+confirmed the cause: the old bare `__pycache__` / `*.py[cod]` patterns did not
+exclude nested bytecode. The SDK's preparation imports generated `deploy/__pycache__`
+before Bake, with checkout-specific compilation metadata entering the image context.
+
+The follow-up makes both patterns recursive and disables bytecode generation in
+the candidate worker. The Linux registry fixture now changes nested bytecode and
+asserts the image ID stays cached. `.dockerignore` is included in scientific-source
+history because it changes image inputs; the default science source pin advances
+for this builder-input change while old pins remain available. Final corrected
+cache measurements are retained in PR #33's description, distinct from the earlier
+`e309c09` figures above.
+
 ### What the measurements suggest next
 
 The general PR path still ends with web (3m34s). The release path spends substantial

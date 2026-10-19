@@ -50,4 +50,5 @@ options:
     - BUILD_ID=$BUILD_ID
     - DOCKER_CONFIG=/builder/home/.docker
     - BUILDX_NO_DEFAULT_ATTESTATIONS=1
+    - PYTHONDONTWRITEBYTECODE=1
 timeout: 2400s
