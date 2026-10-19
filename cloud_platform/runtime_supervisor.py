@@ -134,6 +134,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--execution-dir", default="/execution")
     parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--wait-for-shutdown", action="store_true")
     parser.add_argument("--startup-timeout", type=float, default=120)
     args = parser.parse_args()
     root = Path(args.execution_dir).resolve()
@@ -147,6 +148,12 @@ def main():
     while not stopped[0]:
         if not args.loop and (root / "shutdown.json").exists():
             return 0
+        if args.wait_for_shutdown and not args.loop and last_id is not None:
+            # Runner completion precedes the worker's final evidence uploads.
+            # Keep the hosted peer alive until the worker finishes publication
+            # and explicitly shuts down the Job. Never accept another request.
+            time.sleep(.05)
+            continue
         try:
             pointer = json.loads((root / "request.json").read_text())
         except (FileNotFoundError, ValueError):
@@ -159,11 +166,13 @@ def main():
                 pass
             last_id = pointer["id"]
             if not args.loop:
+                if args.wait_for_shutdown:
+                    continue
                 return 0
         if not args.loop and time.monotonic() >= deadline:
             return 124
         time.sleep(.05)
-    return 0
+    return 130 if args.wait_for_shutdown else 0
 
 
 if __name__ == "__main__":

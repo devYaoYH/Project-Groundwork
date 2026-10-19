@@ -195,6 +195,41 @@ def test_duplicate_delivery_shutdown_exits_job_peer_without_runner(tmp_path):
         stop(peer)
 
 
+@pytest.mark.parametrize("worker_stops", [False, True])
+def test_job_peer_waits_for_final_publication_before_exiting(tmp_path, monkeypatch, worker_stops):
+    monkeypatch.setenv("PLATFORM_RUNTIME_WORKSPACE", str(tmp_path))
+    artifacts = ArtifactStore(backend="local", data_dir=tmp_path / "data")
+    bridge = RuntimeBridge(tmp_path / "execution", artifacts)
+    run = bridge.root / "run"
+    run.mkdir()
+    log = run / "runner.log"
+    log.touch()
+    process = bridge.start([sys.executable, "-c", "import time; time.sleep(.3)"], env={}, log_path=log,
+                           run_dir=run, launch_id="publication-barrier")
+    peer = subprocess.Popen([sys.executable, "-I", str(bridge.root / "runtime_supervisor.py"),
+                             "--execution-dir", str(bridge.root), "--wait-for-shutdown",
+                             "--startup-timeout", ".2"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        assert process.wait(timeout=5) == 0
+        # Finalization can exceed the startup deadline. Runner completion must
+        # not end the hosted container while final artifacts are still missing.
+        with pytest.raises(subprocess.TimeoutExpired):
+            peer.wait(timeout=.3)
+        assert not artifacts.keys("launches/publication-barrier/")
+        process.close()
+        if worker_stops:
+            peer.terminate()
+            assert peer.wait(timeout=5) == 130
+        else:
+            artifacts.put("launches/publication-barrier/detail.json", b'{"evidence_complete":true}')
+            bridge.shutdown()
+            assert peer.wait(timeout=5) == 0
+            assert artifacts.get("launches/publication-barrier/detail.json") == b'{"evidence_complete":true}'
+    finally:
+        process.close()
+        stop(peer)
+
+
 def test_wrong_pinned_runtime_identity_fails_before_running_science(tmp_path, monkeypatch):
     monkeypatch.setenv("PLATFORM_RUNTIME_WORKSPACE", str(tmp_path))
     bridge = RuntimeBridge(tmp_path / "execution", ArtifactStore(backend="local", data_dir=tmp_path / "data"))
