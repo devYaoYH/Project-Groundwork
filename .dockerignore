@@ -2,8 +2,8 @@
 .humanlayer
 .venv
 .pytest_cache
-__pycache__
-*.py[cod]
+**/__pycache__
+**/*.py[cod]
 .env*
 .platform-build/
 gha-creds-*.json

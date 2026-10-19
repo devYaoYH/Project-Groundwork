@@ -47,7 +47,13 @@ def main():
         }
         with tempfile.TemporaryDirectory(prefix="groundwork-promotion-") as directory:
             context = Path(directory)
-            (context / "Dockerfile").write_text("FROM scratch\nCOPY marker /marker\n")
+            (context / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+            (context / ".dockerignore").write_text((ROOT / ".dockerignore").read_text())
+            bytecode = context / "deploy/__pycache__/probe.cpython-314.pyc"
+            bytecode.parent.mkdir(parents=True)
+            loose_bytecode = context / "deploy/probe.pyc"
+            bytecode.write_bytes(b"first compilation")
+            loose_bytecode.write_bytes(b"first compilation")
             for name, tag in local_tags.items():
                 (context / "marker").write_text(fixture + "-" + name)
                 docker(
@@ -60,6 +66,23 @@ def main():
                     str(context),
                 )
                 image_ids.append(images.image_id(tag))
+                if name == "platform":
+                    bytecode.write_bytes(b"different compilation")
+                    loose_bytecode.write_bytes(b"different compilation")
+                    docker(
+                        "build",
+                        "--builder",
+                        docker("context", "show"),
+                        "--provenance=false",
+                        "--tag",
+                        tag,
+                        str(context),
+                    )
+                    assert images.image_id(tag) == image_ids[-1]
+                    print(
+                        "Nested Python bytecode excluded; identical source reused the image cache",
+                        flush=True,
+                    )
             images.LOCAL_IMAGES = local_tags
             images.repositories = lambda project, region: {
                 name: address + "/" + name for name in local_tags
@@ -118,6 +141,67 @@ def main():
                 raise AssertionError("Conflicting runtime content was accepted")
             assert not any(command[0] == "push" for command in commands)
             print("Conflicting published science content rejected before push", flush=True)
+
+            cloud = importlib.import_module("deploy.cloud_images")
+            cloud.ROOT = context
+            cloud.command = lambda *args, **kwargs: ""
+            cloud.candidate_repository = lambda *args: address + "/candidate-runtime"
+            candidate_tag = address + "/candidate-runtime:" + fixture
+            docker("tag", image_ids[1], candidate_tag)
+            docker("push", candidate_tag)
+            # Non-canonical JSON is valid registry content. Docker pull/tag/push
+            # repacks it, which changed real BuildKit candidate digests in Cloud Build.
+            manifest_url = "http://" + address + "/v2/candidate-runtime/manifests/" + fixture
+            request = Request(
+                manifest_url,
+                headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"},
+            )
+            with urlopen(request, timeout=5) as response:
+                raw_manifest = json.loads(response.read())
+            payload = (json.dumps(raw_manifest, indent=5) + "\n").encode()
+            request = Request(
+                manifest_url,
+                data=payload,
+                method="PUT",
+                headers={"Content-Type": "application/vnd.docker.distribution.manifest.v2+json"},
+            )
+            urlopen(request, timeout=5).close()
+            candidate = lookup("fixture", candidate_tag)
+            commands.clear()
+            cloud.promote(
+                "fixture",
+                "fixture",
+                source,
+                source,
+                result["platform-image"],
+                candidate,
+                "c" * 40,
+                image_ids[0],
+                image_ids[1],
+            )
+            promoted = (context / "promoted-runtime").read_text()
+            assert promoted.rpartition("@")[2] == candidate.rpartition("@")[2]
+            assert (
+                sum(command[:3] == ("buildx", "imagetools", "create") for command in commands) == 1
+            )
+            commands.clear()
+            cloud.promote(
+                "fixture",
+                "fixture",
+                source,
+                source,
+                result["platform-image"],
+                promoted,
+                "c" * 40,
+                image_ids[0],
+                image_ids[1],
+            )
+            assert not any(command[0] == "push" for command in commands)
+            print(
+                "Cloud candidate promoted with the identical manifest digest; old science reused",
+                flush=True,
+            )
+
     finally:
         subprocess.run(["docker", "rm", "-f", registry], capture_output=True, timeout=30)
         if image_ids:

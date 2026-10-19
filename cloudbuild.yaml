@@ -1,25 +1,49 @@
-# Deployment consumes validation outputs. Building or substituting images here
-# would invalidate the guarantee that the deployed artifacts passed CI.
+# Request 2: promote the exact tested artifacts, then optionally deploy. Never build.
 steps:
+  - name: docker:27.5.1-cli
+    id: docker-tools
+    entrypoint: sh
+    args:
+      - -ec
+      - |
+        mkdir -p /builder/home/bin /builder/home/.docker/cli-plugins
+        cp /usr/local/bin/docker /builder/home/bin/docker
+        cp /usr/local/libexec/docker/cli-plugins/docker-buildx /builder/home/.docker/cli-plugins/docker-buildx
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: validate-images
     entrypoint: bash
-    args: ['deploy/run_python.sh', 'deploy/validated_images.py', 'check', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}', '--validated-source-sha', '${_VALIDATED_SOURCE_SHA}', '--platform-image', '${_PLATFORM_IMAGE}', '--runtime-image', '${_RUNTIME_IMAGE}', '--runtime-source-sha', '${_RUNTIME_SOURCE_SHA}']
+    args:
+      - -ec
+      - |
+        export PATH="/builder/home/bin:$$PATH"
+        bash deploy/run_python.sh deploy/cloud_images.py promote
   - name: '${_PLATFORM_IMAGE}'
     id: publish-catalogue
-    entrypoint: python
-    args: ['-m', 'cloud_platform.publish_catalogue', '--project', '$PROJECT_ID', '--output', '.platform-build/catalogue-sha256']
+    entrypoint: sh
+    args:
+      - -ec
+      - |
+        if test '${_PUBLISH_ONLY}' != true; then
+          python -m cloud_platform.publish_catalogue --project '$PROJECT_ID' --output .platform-build/catalogue-sha256
+        fi
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: publish
     entrypoint: bash
     args:
-      - -c
+      - -ec
       - |
-        bash deploy/run_python.sh deploy/release.py --project '$PROJECT_ID' --region '${_REGION}' --image '${_PLATFORM_IMAGE}' --source-sha '${_SOURCE_SHA}' --runtime-image '${_RUNTIME_IMAGE}' --runtime-source-sha '${_RUNTIME_SOURCE_SHA}' --oauth-client-id '${_GOOGLE_OAUTH_CLIENT_ID}' --catalogue-sha256 "$$(cat .platform-build/catalogue-sha256)"
+        if test '${_PUBLISH_ONLY}' != true; then
+          bash deploy/run_python.sh deploy/release.py --project '$PROJECT_ID' --region '${_REGION}' --image '${_PLATFORM_IMAGE}' --source-sha '${_SOURCE_SHA}' --runtime-image "$$(cat .platform-build/promoted-runtime)" --runtime-source-sha '${_RUNTIME_SOURCE_SHA}' --oauth-client-id '${_GOOGLE_OAUTH_CLIENT_ID}' --catalogue-sha256 "$$(cat .platform-build/catalogue-sha256)"
+        fi
   - name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
     id: verify-hosted
     entrypoint: bash
-    args: ['deploy/run_python.sh', 'deploy/verify_hosted.py', '--project', '$PROJECT_ID', '--region', '${_REGION}', '--source-sha', '${_SOURCE_SHA}', '--verify-runtime-bindings']
+    args:
+      - -ec
+      - |
+        if test '${_PUBLISH_ONLY}' != true; then
+          bash deploy/run_python.sh deploy/verify_hosted.py --project '$PROJECT_ID' --region '${_REGION}' --source-sha '${_SOURCE_SHA}' --verify-runtime-bindings
+        fi
 substitutions:
   _REGION: us-central1
   _SOURCE_SHA: ''
@@ -27,8 +51,22 @@ substitutions:
   _PLATFORM_IMAGE: ''
   _RUNTIME_IMAGE: ''
   _RUNTIME_SOURCE_SHA: ''
+  _PLATFORM_CONFIG_ID: ''
+  _RUNTIME_CONFIG_ID: ''
   _GOOGLE_OAUTH_CLIENT_ID: ''
+  _PUBLISH_ONLY: 'false'
 serviceAccount: projects/$PROJECT_ID/serviceAccounts/groundwork-build@$PROJECT_ID.iam.gserviceaccount.com
 options:
   logging: CLOUD_LOGGING_ONLY
+  env:
+    - PROJECT_ID=$PROJECT_ID
+    - REGION=${_REGION}
+    - SOURCE_SHA=${_SOURCE_SHA}
+    - VALIDATED_SOURCE_SHA=${_VALIDATED_SOURCE_SHA}
+    - RUNTIME_SOURCE_SHA=${_RUNTIME_SOURCE_SHA}
+    - PLATFORM_IMAGE=${_PLATFORM_IMAGE}
+    - RUNTIME_IMAGE=${_RUNTIME_IMAGE}
+    - PLATFORM_CONFIG_ID=${_PLATFORM_CONFIG_ID}
+    - RUNTIME_CONFIG_ID=${_RUNTIME_CONFIG_ID}
+    - DOCKER_CONFIG=/builder/home/.docker
 timeout: 2400s

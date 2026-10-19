@@ -1,5 +1,16 @@
 # Platform deployment changelog
 
+## Cloud Build candidates with GitHub validation — 2026-10-19
+
+- Preserve PR #32 as the GitHub-builder alternative and implement PR #33 with
+  Cloud Build candidate construction and explicit registry caches.
+- Download candidate digests for GitHub tests, then submit promotion separately;
+  enforce source, image configuration and exact manifest-digest continuity.
+- Add publish-only comparison runs and retain stage, queue and step latencies,
+  including failures. Browser parallelism remains unchanged.
+- CI only reads registry artifacts; Cloud Build writes images, caches and a
+  dedicated candidate-manifest prefix. Live rollout requires these scoped grants.
+
 ## Deploy validated image artifacts — 2026-10-19
 
 - Resolve any existing science digest before validation; test the selected pair,
