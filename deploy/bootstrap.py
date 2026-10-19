@@ -52,13 +52,13 @@ def main():
     if not exists(["artifacts", "repositories", "describe", repository, "--project", project, "--location", region]):
         command(["artifacts", "repositories", "create", repository, "--project", project,
                  "--location", region, "--repository-format=docker", "--quiet"])
-    # Trusted main validation publishes the images it tested; Cloud Build only
-    # deploys their digests. Scope CI publication to these two repositories.
-    for identity in ("build", "ci"):
+    # Cloud Build alone writes images/caches; GitHub downloads candidates for tests.
+    for identity, role in (("build", "roles/artifactregistry.writer"),
+                           ("ci", "roles/artifactregistry.reader")):
         command(["artifacts", "repositories", "add-iam-policy-binding", repository,
                  "--project", project, "--location", region,
                  "--member", f"serviceAccount:{accounts[identity]}",
-                 "--role", "roles/artifactregistry.writer"], capture=True)
+                 "--role", role], capture=True)
     runtime_repository = "groundwork-runtime"
     if not exists(["artifacts", "repositories", "describe", runtime_repository, "--project", project, "--location", region]):
         command(["artifacts", "repositories", "create", runtime_repository, "--project", project,
@@ -66,10 +66,11 @@ def main():
     else:
         command(["artifacts", "repositories", "update", runtime_repository, "--project", project,
                  "--location", region, "--immutable-tags", "--quiet"])
-    for identity in ("build", "ci"):
+    for identity, role in (("build", "roles/artifactregistry.writer"),
+                           ("ci", "roles/artifactregistry.reader")):
         command(["artifacts", "repositories", "add-iam-policy-binding", runtime_repository,
                  "--project", project, "--location", region, "--member", f"serviceAccount:{accounts[identity]}",
-                 "--role", "roles/artifactregistry.writer"], capture=True)
+                 "--role", role], capture=True)
     artifact_bucket, source_bucket = f"{project}-groundwork-artifacts", f"{project}-groundwork-build-source"
     bucket(project, artifact_bucket, region)
     bucket(project, source_bucket, region)
@@ -86,6 +87,12 @@ def main():
     # do not include storage.buckets.get. Scope the extra read to this bucket.
     bucket_grant(project, source_bucket, f"serviceAccount:{accounts['ci']}", "roles/storage.legacyBucketReader")
     bucket_grant(project, source_bucket, f"serviceAccount:{accounts['build']}", "roles/storage.objectViewer")
+    # Candidate manifests only; the build cannot upload arbitrary source objects.
+    candidate_prefix = f"projects/_/buckets/{source_bucket}/objects/ci-image-builds/"
+    command(["storage", "buckets", "add-iam-policy-binding", f"gs://{source_bucket}",
+             "--project", project, "--member", f"serviceAccount:{accounts['build']}",
+             "--role", "roles/storage.objectCreator", "--condition",
+             f"expression=resource.name.startsWith('{candidate_prefix}'),title=groundwork-ci-images"], capture=True)
     session_secret = "groundwork-session"
     if not exists(["secrets", "describe", session_secret, "--project", project]):
         command(["secrets", "create", session_secret, "--project", project,

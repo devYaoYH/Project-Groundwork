@@ -118,6 +118,48 @@ def main():
                 raise AssertionError("Conflicting runtime content was accepted")
             assert not any(command[0] == "push" for command in commands)
             print("Conflicting published science content rejected before push", flush=True)
+
+            cloud = importlib.import_module("deploy.cloud_images")
+            cloud.ROOT = context
+            cloud.command = lambda *args, **kwargs: ""
+            cloud.candidate_repository = lambda *args: address + "/candidate-runtime"
+            candidate_tag = address + "/candidate-runtime:" + fixture
+            docker("tag", image_ids[1], candidate_tag)
+            docker("push", candidate_tag)
+            candidate = lookup("fixture", candidate_tag)
+            commands.clear()
+            cloud.promote(
+                "fixture",
+                "fixture",
+                source,
+                source,
+                result["platform-image"],
+                candidate,
+                "c" * 40,
+                image_ids[0],
+                image_ids[1],
+            )
+            promoted = (context / "promoted-runtime").read_text()
+            assert promoted.rpartition("@")[2] == candidate.rpartition("@")[2]
+            assert sum(command[0] == "push" for command in commands) == 1
+            commands.clear()
+            cloud.promote(
+                "fixture",
+                "fixture",
+                source,
+                source,
+                result["platform-image"],
+                promoted,
+                "c" * 40,
+                image_ids[0],
+                image_ids[1],
+            )
+            assert not any(command[0] == "push" for command in commands)
+            print(
+                "Cloud candidate promoted with the identical manifest digest; old science reused",
+                flush=True,
+            )
+
     finally:
         subprocess.run(["docker", "rm", "-f", registry], capture_output=True, timeout=30)
         if image_ids:

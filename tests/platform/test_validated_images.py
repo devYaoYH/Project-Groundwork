@@ -163,43 +163,19 @@ def test_deployment_rejects_source_skew_mutable_images_or_wrong_namespace(field,
         images.check_release(**args)
 
 
-def test_workflow_validates_selected_images_before_publishing_and_passes_digests():
+def test_workflow_validates_cloud_candidates_before_the_second_cloud_request():
     root = Path(__file__).resolve().parents[2]
     workflow = yaml.safe_load((root / ".github/workflows/platform.yml").read_text())
     jobs = workflow["jobs"]
     stack = jobs["platform-stack"]["steps"]
     names = [step.get("name", "") for step in stack]
-    assert names.index("Select the science image before validation") < names.index(
-        "Record the images entering validation"
-    )
-    assert names.index("Record the images entering validation") < names.index(
-        "Verify the paired local worker and science runtime"
-    )
-    assert names.index("Verify the paired local worker and science runtime") < names.index(
-        "Test the release images without rebuilding"
-    )
-    assert names.index("Test the release images without rebuilding") < names.index(
-        "Verify validation did not replace either image"
-    )
-    assert names.index("Verify validation did not replace either image") < names.index(
-        "Publish the validated images"
-    )
-    for step in stack:
-        if step.get("id") in {"runtime", "publish"} or step.get("uses", "").startswith(
-            "google-github-actions/"
-        ):
-            assert "github.event_name != 'pull_request'" in step["if"]
-    deploy = jobs["deploy"]
-    assert set(deploy["needs"]) == {"validate", "platform-stack"}
-    command = deploy["steps"][-1]
-    for field in (
-        "platform-image",
-        "runtime-image",
-        "runtime-source-sha",
-        "source-sha",
-    ):
-        assert "${{ needs.platform-stack.outputs." + field + " }}" in command["env"].values()
-    assert "validated_images.py check" in command["run"]
+    ordered = ["Build candidates and caches in Cloud Build", "Download the exact Cloud Build candidates",
+               "Verify the paired local worker and science runtime", "Test the release images without rebuilding",
+               "Verify validation did not replace either image"]
+    assert [names.index(name) for name in ordered] == sorted(names.index(name) for name in ordered)
+    assert set(jobs["deploy"]["needs"]) == {"validate", "platform-stack"}
+    assert any(step.get("uses") == "actions/download-artifact@v4" for step in jobs["deploy"]["steps"])
+    assert "deploy/latency.py submit publish" in str(jobs["deploy"]["steps"])
 
 
 def test_registry_replacement_after_push_aborts_without_a_deployment_record(recorded, monkeypatch):

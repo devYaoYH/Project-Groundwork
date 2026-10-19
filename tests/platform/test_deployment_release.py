@@ -139,7 +139,7 @@ def test_science_history_covers_copied_inputs_and_ci_tests_real_pair():
     build = yaml.safe_load((root / "cloudbuild.yaml").read_text())
     assert "_RUNTIME_SOURCE_SHA" in build["substitutions"]
     assert next(step for step in build["steps"] if step["id"] == "validate-images")
-    assert "Select the science image before validation" in workflow
+    assert "Download the exact Cloud Build candidates" in workflow
 
 
 @pytest.mark.parametrize("config_path", [".github/workflows/platform.yml", "deploy/cloudbuild-image.yaml"])
@@ -235,9 +235,9 @@ def test_build_publishes_tested_image_catalogue_before_api_rollout():
     publication = steps[order["publish-catalogue"]]
     assert publication["name"] == "${_PLATFORM_IMAGE}"
     assert "--image '${_PLATFORM_IMAGE}'" in steps[order["publish"]]["args"][-1]
-    assert "--runtime-image '${_RUNTIME_IMAGE}'" in steps[order["publish"]]["args"][-1]
-    assert publication["entrypoint"] == "python"
-    assert publication["args"][:2] == ["-m", "cloud_platform.publish_catalogue"]
+    assert "--runtime-image \"$$(cat .platform-build/promoted-runtime)\"" in steps[order["publish"]]["args"][-1]
+    assert publication["entrypoint"] == "sh"
+    assert "python -m cloud_platform.publish_catalogue" in publication["args"][-1]
     assert "--catalogue-sha256" in steps[order["publish"]]["args"][-1]
     assert ".platform-build/catalogue-sha256" in steps[order["publish"]]["args"][-1]
 

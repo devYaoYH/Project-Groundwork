@@ -64,6 +64,9 @@ tests/
   platform/test_validated_images.py
 deploy/
   validated_images.py             # tested image IDs, publication, digest-only handoff
+  cloud_images.py                 # candidate build manifest, downloads, promotion
+  cloudbuild-candidates.yaml       # Cloud Build request 1: build and cache
+  latency.py                      # stage durations and Cloud Build timing capture
 Dockerfile                        # original viewer and runner
 Dockerfile.platform               # control API/UI and infrastructure worker
 Dockerfile.runtime                # independently pinned scientific runtime
@@ -118,42 +121,54 @@ The platform deployment job depends on both `validate` and the image outputs
 from `platform-stack`, excludes PR events, and requires configured workload
 identity. PR validation never authenticates to GCP or publishes images.
 
-For a trusted release, `platform-stack` resolves the immutable science source tag
-before building. If it exists, the job pulls its digest and builds only the new
-control image; otherwise it builds both images. Compose verification therefore
-uses the same science image the release will deploy. Record both local image
-configuration IDs before testing and verify them again afterward. Trusted release
-runs also execute platform pytest in the built image and the packaged science
-smoke for newly built runtimes, preserving the previous Cloud Build checks.
-Previously published science images still receive Compose/bridge verification;
-the workflow does not assume they contain today's workspace smoke script.
+For a trusted release, `platform-stack` first submits
+`deploy/cloudbuild-candidates.yaml`. Cloud Build resolves the science source tag
+before building: an existing immutable runtime is retained; otherwise a candidate
+runtime is built. One Buildx/Bake builder runs the new image targets concurrently
+and writes a separate `mode=max` registry cache per image in the mutable
+`groundwork` repository. Fresh Cloud Build workers import these caches explicitly.
+Unvalidated science candidates never claim the immutable science source tag.
 
-After validation, publish those exact image IDs to Artifact Registry and check
-that each registry manifest references its tested configuration ID. A conflicting
-science source tag fails rather than replacing a pin or silently selecting an
-untested image. Platform publication tags include the source, run ID, and attempt;
-deployment receives immutable digests and the validated source SHA through job
-outputs. The `validated-images` artifact records the local IDs, source pins,
-validation status, and published digests for inspection.
+Cloud Build exports a source/build-bound manifest to the source bucket's
+`ci-image-builds/<build UUID>/` prefix. GitHub downloads this manifest and the
+images **by digest**, checks their configuration IDs, tags the pair locally, and
+runs Compose/bridge verification. Trusted runs also execute platform pytest in
+the candidate image and packaged smoke for newly built science images. Existing
+science images receive Compose verification without assuming today's smoke CLI.
+Both local image IDs must remain unchanged before the manifest is sealed.
 
-Platform-stack also runs a credential-free promotion check against a disposable
-loopback registry. Two tiny fixture images exercise real Docker publication,
-registry configuration-ID verification, digest handoff, reuse without a second
-science push, and rejection of conflicting science content. Its tags and registry
-are isolated from the actual validation images and removed afterward.
+The fail-closed `validate` gate must pass before a **second** Cloud Build request
+uses `cloudbuild.yaml`. It verifies source, namespace, configuration IDs and
+manifest digests; promotes new science to its immutable source tag; publishes the
+catalogue; deploys; and verifies hosted runtime bindings. Promotion copies image
+contents and preserves the tested digest. Conflicting concurrent science
+publication fails instead of substituting another artifact. The platform image
+already resides in its final repository and needs no copy. This request never
+builds images or writes build caches. Bootstrap retains its separate build path.
 
-`cloudbuild.yaml` is deploy-only: reject source mismatches, mutable references,
-or the wrong registry namespace; publish the catalogue from the selected platform
-image; deploy both digests; then verify the hosted release and runtime bindings.
-It never builds, substitutes, or retests a different image. The separate
-`deploy/cloudbuild-image.yaml` remains an initial-bootstrap build-only path.
-This reuse removes a rebuild cycle after merge; it does not promote PR artifacts
-across a potentially different merge revision.
+PRs retain credential-free local builds and never submit Cloud Build requests.
+The disposable registry check exercises both publication methods, including
+cross-repository candidate promotion and old-science reuse. The general CI
+workflow and browser scheduling are unchanged by the Cloud Build alternative.
 
-Before the first release with this flow, apply the updated `deploy/bootstrap.py`
-or its documented repository-scoped CI writer grants. WIF remains restricted to
-the trusted workflow/branches and push/manual events. This PR does not apply live
-IAM changes or deploy to GCP. See `deploy/README.md` for the rollout commands.
+Manual `workflow_dispatch` defaults to `publish_only: true`: it measures both
+requests and GitHub validation, including science promotion, while skipping
+catalogue publication, service deployment and hosted verification. Non-main
+verification branches always use this mode. Pushes to main perform full release.
+
+`deploy/latency.py` records failed and successful cloud submissions, source upload
+wall time, Cloud Build queue/execution time, each cloud step and image pull, and
+GitHub artifact download / Compose / image-test durations. The final `latencies`
+job uses the exact Actions attempt API to retain runner queues and step durations
+without mixing retry attempts. Inspect its `release-latencies` artifact and job
+summary. Missing or unexercised cloud stages are not zero-duration successes.
+See [the PR comparison](CI_COMPARISON.md) for measurements and interpretation.
+
+Bootstrap gives CI repository-scoped **Reader** access to both repositories and
+gives Cloud Build a conditional source-bucket object-creation grant only below
+`ci-image-builds/`. Cloud Build remains the image/cache writer. WIF restricts
+cloud requests to the trusted workflow, numeric repository/owner IDs and approved
+branches/events. See `deploy/README.md` for rollout commands.
 
 ## Host test environment and discovery
 
@@ -246,8 +261,9 @@ finished images to a registry.
 
 In `ci.yml`, `cache-write: ${{ matrix.shard == 1 }}` makes runtime shard 1 the
 viewer/agent writer. The other runtime shards and local-stack only import these
-scopes. In `platform.yml`, platform-stack sets `cache-write: "true"` for its
-separate pair. This removes redundant cache exports from sibling jobs; it does
+scopes. In `platform.yml`, credential-free platform-stack builds set `cache-write: "true"`
+for their separate pair. Trusted releases build that pair in Cloud Build with
+registry caches instead of the GitHub cache backend. This removes redundant cache exports from sibling jobs; it does
 not serialize jobs behind the writer. Shard 1 was selected to put export work
 on a relatively short test shard. Recheck that choice when timings or shard
 counts change; the writer still builds all images before running its tests.
