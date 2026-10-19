@@ -1,0 +1,60 @@
+schema_version: 1
+id: hurricane.tiny
+release: v2
+description: Three coastal managers, nine zones, one frozen storm; six rounds with a two-round lead time, bulletin, direct messages, live meetings and a shared board.
+engine:
+  environment_id: hurricane
+  defaults:
+    num_agents: 3
+    scenario_id: storm.central_city
+    num_rounds: 6
+    evacuation_lead_time: 2
+    ensemble_size: 5
+    recon_budget: 3
+    attention_budget: 3
+    meeting_turns: 2
+    meeting_attention_cost: 1
+    reply_turns: 1
+inputs:
+- id: storms-v1
+  path: ../hurricane/items/storms_v1.jsonl
+  sha256: 970b23a02dc21dfc1c8f3c5da78abd8575351a03461ecd6d267c294c36839540
+roles:
+- id: manager
+  count: 3
+  accepts:
+  - llm
+  - scripted
+  - human
+metrics:
+- name: total_cost
+  producer: environment
+  direction: minimize
+- name: regret
+  producer: environment
+  direction: minimize
+- name: population_exposed
+  producer: environment
+  direction: minimize
+- name: disclosure_rate
+  producer: environment
+  direction: maximize
+- name: estimate_error
+  producer: environment
+  direction: minimize
+- name: knowledge_common_fraction
+  producer: environment
+  direction: neutral
+- name: meetings_convened
+  producer: environment
+  direction: neutral
+item_policy:
+  mode: enumerate
+  bank_path: ../hurricane/items/storms_v1.jsonl
+  item_bank_sha256: 970b23a02dc21dfc1c8f3c5da78abd8575351a03461ecd6d267c294c36839540
+oracle_version: hit-zones-v1
+required_modalities:
+- text
+adapter_bindings:
+  model: engine.llm
+  communication: local.in_process

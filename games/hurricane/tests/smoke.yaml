@@ -1,0 +1,11 @@
+environment_id: hurricane
+num_agents: 3
+seed: 7
+num_rounds: 4
+agents:
+- type: scripted
+  role: manager
+- type: scripted
+  role: manager
+- type: scripted
+  role: manager
