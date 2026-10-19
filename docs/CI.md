@@ -48,6 +48,7 @@ not a guaranteed benchmark. Compare cold and warm cache runs separately.
     ci_sharding.py                # pytest collection and file scheduling
     ci_durations.json             # repository-relative file costs in seconds
     refresh_durations.py           # validated JUnit-to-weight refresh
+    verify_image_promotion.py      # credential-free registry round-trip fixtures
     tests/
       conftest.py                 # import path for colocated tooling
       test_ci.py                  # coverage, image reuse, and workflow invariants
@@ -134,6 +135,12 @@ untested image. Platform publication tags include the source, run ID, and attemp
 deployment receives immutable digests and the validated source SHA through job
 outputs. The `validated-images` artifact records the local IDs, source pins,
 validation status, and published digests for inspection.
+
+Platform-stack also runs a credential-free promotion check against a disposable
+loopback registry. Two tiny fixture images exercise real Docker publication,
+registry configuration-ID verification, digest handoff, reuse without a second
+science push, and rejection of conflicting science content. Its tags and registry
+are isolated from the actual validation images and removed afterward.
 
 `cloudbuild.yaml` is deploy-only: reject source mismatches, mutable references,
 or the wrong registry namespace; publish the catalogue from the selected platform

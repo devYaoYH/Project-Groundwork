@@ -80,6 +80,8 @@ jobs:
         with:
           targets: ${{ steps.runtime.outputs.existing == 'true' && 'control' || 'platform' }}
           cache-write: "true"
+      - name: Verify image promotion against a disposable registry
+        run: python .github/ci/verify_image_promotion.py
       - name: Record the images entering validation
         env:
           SOURCE_SHA: ${{ github.sha }}
