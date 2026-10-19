@@ -52,8 +52,15 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npm run test:browser
+      - run: npm run test:browser -- --reporter=dot,junit
         working-directory: web
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-timings
+          path: web/test-results/browser.xml
 
   python-tests:
     runs-on: ubuntu-latest
