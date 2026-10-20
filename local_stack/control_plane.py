@@ -51,6 +51,8 @@ from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace
 import yaml
 
+from local_stack.retries import retry_options, select_retry_configs
+
 
 _LIVE_RESULT = re.compile(r"INFO expt_runner: ok\s+(?P<episode>\S+)\s+->\s+(?P<uri>\S+)")
 _EPISODE_OPENED = re.compile(r"INFO expt_runner: opened\s+(?P<episode>\S+)\s+(?P<handle>\{.*\})")
@@ -889,8 +891,12 @@ class ControlPlane:
             launches = db.execute(
                 "SELECT id FROM launches WHERE experiment_id = ? ORDER BY created_at DESC", (experiment_id,)
             ).fetchall()
+        launch_details = [self.launch_detail(row["id"]) for row in launches]
         return {
             "experiment": asdict(experiment),
+            "retry_options": retry_options(
+                [detail["launch"] for detail in launch_details],
+                [attempt for detail in launch_details for attempt in detail["attempts"]]) if experiment.design_text else [],
             "cells": [
                 {"cell_id": row["cell_id"], "levels": json.loads(row["levels"]),
                  "episodes_planned": row["episodes_planned"]}
@@ -898,7 +904,7 @@ class ControlPlane:
             ],
             "cell_evidence": self._store().cell_evidence(experiment_id),
             "roster": [dict(row) for row in participants],
-            "launches": [self.launch_detail(row["id"]) for row in launches],
+            "launches": launch_details,
         }
 
     def validate_design_text(self, *, release_id: str, design_text: str) -> dict[str, Any]:
@@ -1017,7 +1023,9 @@ class ControlPlane:
     def launch_experiment(self, experiment_id: str, *, max_parallelism: int = 1,
                           smoke_test: bool = False, mode: str | None = None,
                           shard_index: int | None = None,
-                          shard_count: int | None = None) -> Launch:
+                          shard_count: int | None = None,
+                          retry_incomplete: bool = False,
+                          episode_ids: list[str] | None = None) -> Launch:
         """Launch direct YAML or a fixed design plan.
 
         A locked design consumes its persisted episode configs.  Smoke and
@@ -1036,6 +1044,12 @@ class ControlPlane:
         if shard_count is not None and (shard_index or 0) >= shard_count:
             raise ValueError("shard_index must be less than shard_count")
         experiment = self.experiment(experiment_id)
+        if episode_ids is not None and not retry_incomplete:
+            raise ValueError("episode_ids requires retry_incomplete")
+        if retry_incomplete and experiment.design_text is None:
+            raise ValueError("Selective retry requires a design experiment with a persisted execution plan")
+        if retry_incomplete and (shard_index is not None or shard_count is not None):
+            raise ValueError("Retry selects prior episodes and cannot be combined with sharding")
         execution_path: str | None = None
         design_configs: list[dict[str, Any]] | None = None
         design_bank: ItemBank | None = None
@@ -1047,6 +1061,15 @@ class ControlPlane:
             # Every compiled episode references one of these item ids.
             design_bank = self._item_bank(experiment.environment_id)
             design_configs = self._design_episode_configs(experiment, mode=mode)
+            if retry_incomplete:
+                with self._session() as db:
+                    prior_launches = [dict(row) for row in db.execute(
+                        "SELECT * FROM launches WHERE experiment_id = ?", (experiment_id,))]
+                    prior_attempts = [dict(row) for row in db.execute(
+                        "SELECT a.* FROM attempts a JOIN launches l ON l.id = a.launch_id "
+                        "WHERE l.experiment_id = ?", (experiment_id,))]
+                design_configs = select_retry_configs(design_configs, prior_launches, prior_attempts,
+                                                      mode=mode, episode_ids=episode_ids)
             effective_shard_count = shard_count or 1
             effective_shard_index = shard_index or 0
             design_configs = [
@@ -1093,6 +1116,12 @@ class ControlPlane:
             )
 
         with self._session() as db:
+            if retry_incomplete:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM launches WHERE experiment_id = ? AND status IN "
+                              "('QUEUED','DISPATCHING','DISPATCHED','RUNNING','CANCELLING') LIMIT 1",
+                              (experiment_id,)).fetchone():
+                    raise ValueError("Wait for active experiment launches to finish before retrying")
             if design_bank is not None:
                 self._ensure_items(
                     db,
@@ -1118,6 +1147,8 @@ class ControlPlane:
             )
             self._event(db, launch.id, "launch.queued", {
                 "episode_count": len(attempt_rows), "mode": mode,
+                "retry_incomplete": retry_incomplete,
+                "episode_ids": [row[0] for row in attempt_rows] if retry_incomplete else None,
             })
         self.launcher.launch(
             launch, experiment, lambda line: self._line(launch.id, line), smoke_test=mode == "smoke",

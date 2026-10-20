@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from local_stack.control_plane import ControlPlane, Launch
+from local_stack.retries import select_retry_configs
 from a2a_engine.experiment import expand_cells, load_experiment
 from a2a_engine.registry import get_environment_spec
 from a2a_engine.provenance import pinned_participants
@@ -340,6 +341,13 @@ class PlatformControl:
             seen = set()
             configs = [config for config in configs if not
                        (config["provenance"]["cell_id"] in seen or seen.add(config["provenance"]["cell_id"]))]
+        if body.get("episode_ids") is not None and body.get("retry_incomplete") is not True:
+            raise ValueError("episode_ids requires retry_incomplete")
+        if body.get("retry_incomplete") is True:
+            configs = select_retry_configs(
+                configs, self.repo.list("launches", owner_id=owner_id, experiment_id=identifier),
+                self.repo.list("attempts", owner_id=owner_id, experiment_id=identifier),
+                mode=mode, episode_ids=body.get("episode_ids"))
         if len(configs) > 100:
             raise ValueError("A launch is limited to 100 episodes")
         ordinal = self.repo.next_attempt(identifier)
@@ -378,7 +386,9 @@ class PlatformControl:
                     "image_digest": exp["image_digest"], **binding,
                     "source_snapshot_key": f"{prefix}/input.db", "snapshot_key": f"{prefix}/input.db",
                     "plan_key": f"{prefix}/plan.yaml", "episode_count": len(detail["attempts"]),
-                    "artifact_prefix": prefix, "dispatch_status": "PENDING"}
+                    "artifact_prefix": prefix, "dispatch_status": "PENDING",
+                    "retry_incomplete": body.get("retry_incomplete") is True,
+                    "retry_episode_ids": [config["episode_id"] for config in configs] if body.get("retry_incomplete") is True else None}
             # Plan files exist before admission; rejected launches remain unreferenced.
             self.repo.admit_launch(data)
             for attempt in detail["attempts"]:

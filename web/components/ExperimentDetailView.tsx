@@ -8,6 +8,7 @@ import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
 import { ReplicationHistory } from "./ReplicationHistory";
+import { RetryControls } from "./RetryControls";
 import { EpisodeSummary, ExperimentDetail, MetricSummary, prepareExperimentExport, getExperiment, listEpisodes } from "../lib/api";
 import { groupReplicationExecutions, replicationProgress } from "../lib/replications";
 import { useSession } from "./Session";
@@ -86,6 +87,7 @@ export function ExperimentDetailView() {
       <header className="page-heading page-heading-split">
         <div><h1>{experiment.name}</h1><p>Release <code>{experiment.release_id}</code> · {experiment.locked_at ? `locked ${new Date(experiment.locked_at).toLocaleString()}` : "draft — live execution is locked"}</p></div>
         <div className="launch-actions">
+          <RetryControls experimentId={experiment.id} options={detail.retry_options ?? []} />
           {isPlatform ? <button className="button" disabled={exporting} onClick={async () => {
             setExporting(true); setExportError(null);
             try {
@@ -138,6 +140,7 @@ export function ExperimentDetailView() {
           { label: "prior runs", render: (group) => <ReplicationHistory executions={group.priorExecutions} /> },
           { label: "item", className: "mono", render: (group) => group.latest.item_id ?? <span className="muted">-</span> },
           { label: "latest status", render: (group) => <Chip tone={EPISODE_TONE[group.latest.status] ?? "plain"}>{group.latest.status}</Chip> },
+          { label: "retry", render: (group) => group.latest.episode_id ? <RetryControls experimentId={experiment.id} options={detail.retry_options ?? []} episodeIds={[group.latest.episode_id]} label="Retry episode" /> : null },
         ]} />}
       </section>
     </>

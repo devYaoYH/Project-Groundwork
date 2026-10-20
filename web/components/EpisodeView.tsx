@@ -8,6 +8,7 @@ import { Chip } from "./Chip";
 import { ChatTranscript } from "./ChatTranscript";
 import { ConfigDisclosure } from "./ConfigDisclosure";
 import { Crumb } from "./Crumb";
+import { RetryControls } from "./RetryControls";
 import { EpisodeDetail, getEpisode } from "../lib/api";
 import { laneHue, projectChat, projectLanes, projectTranscript } from "../lib/lanes";
 
@@ -120,7 +121,9 @@ export function EpisodeView() {
             seed {String(record(episode.config).seed ?? provenance.seed ?? "-")}
           </p>
         </div>
-        <Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
+        <div className="launch-actions"><Chip tone={STATUS_TONE[status] ?? "plain"}>{status}</Chip>
+          {experimentId && text(provenance.episode_id) && status !== "COMPLETED" ? <RetryControls key={uid} experimentId={experimentId} episodeIds={[text(provenance.episode_id)!]} label="Retry episode" /> : null}
+        </div>
       </header>
 
       {scripted ? <p className="notice" role="note">Scripted seats · deterministic test policies, not a model conversation.</p> : null}
