@@ -9,15 +9,7 @@ Agents respond with structured JSON: {"thinking", "speech", "action"}.
 import asyncio
 import json
 import logging
-import random
 import re
-import time
-import urllib.error
-
-try:
-    import httpx
-except ImportError:
-    httpx = None
 
 from negotiation_game.backend.defaults import (
     API_BACKOFF_BASE,
@@ -44,10 +36,11 @@ NEGOTIATION_RETRY_POLICY = RetryPolicy(
     request_cooldown=API_REQUEST_COOLDOWN,
     on_exhausted="return_none",
 )
-from negotiation_game.backend.agents.api import call_llm_streaming
+from a2a_engine.llm.api import call_llm_streaming
 from negotiation_game.backend.agents.heuristic import HeuristicAgent
-from negotiation_game.backend.agents.model_config import get_model_config
+from a2a_engine.llm.model_config import get_model_config
 from negotiation_game.backend.agents.prompts import (
+    anthropic_streaming_messages,
     build_system_prompt,
     cheap_talk_prompt,
     decision_prompt,
@@ -55,8 +48,6 @@ from negotiation_game.backend.agents.prompts import (
 )
 
 log = logging.getLogger("negotiation")
-
-_HAS_HTTPX = httpx is not None
 
 LLM_MAX_TOKENS_FALLBACK = 4096
 
@@ -465,85 +456,8 @@ class LLMAgentBase:
             return ""
 
 
-class LLMAgent(LLMAgentBase):
-    """LLM agent using httpx (async HTTP client)."""
-
-    def __init__(self, api_base="https://api.openai.com/v1", api_key="",
-                 model="gpt-4o-mini", temperature=0.7):
-        if not _HAS_HTTPX:
-            raise ImportError("httpx is required for LLMAgent. Install it with: pip install httpx")
-        super().__init__(api_base=api_base, api_key=api_key, model=model,
-                         temperature=temperature, api_format="openai")
-
-    async def _call_api(self):
-        await self._rate_limit()
-
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        model_cfg = get_model_config(self.model)
-        payload = {
-            "model": self.model,
-            "messages": self._messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-            model_cfg.max_tokens_param: self.max_tokens,
-        }
-        if model_cfg.supports_temperature:
-            payload["temperature"] = self.temperature
-
-        t0 = time.monotonic()
-        chunks = []
-        usage = {}
-        model_name = self.model
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120, read=120)) as client:
-            async with client.stream(
-                "POST",
-                f"{self.api_base}/chat/completions",
-                headers=headers,
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                first_chunk = True
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    chunk = json.loads(data_str)
-                    if first_chunk:
-                        first_chunk = False
-                        if self._on_stream_start:
-                            await self._on_stream_start()
-                    model_name = chunk.get("model", model_name)
-                    if chunk.get("usage"):
-                        usage = chunk["usage"]
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        delta = choices[0].get("delta", {})
-                        content = delta.get("content")
-                        if content:
-                            chunks.append(content)
-        duration_s = round(time.monotonic() - t0, 3)
-        text = "".join(chunks).strip()
-        completion_details = usage.get("completion_tokens_details", {}) or {}
-        prompt_details = usage.get("prompt_tokens_details", {}) or {}
-        return {
-            "text": text,
-            "model": model_name,
-            "duration_s": duration_s,
-            "prompt_tokens": usage.get("prompt_tokens"),
-            "completion_tokens": usage.get("completion_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-            "reasoning_tokens": completion_details.get("reasoning_tokens"),
-            "cached_prompt_tokens": prompt_details.get("cached_tokens"),
-        }
-
-
 class LLMAgentStdlib(LLMAgentBase):
-    """LLM agent using urllib (no external dependencies). Falls back to heuristic on failure."""
+    """Legacy agent using the engine transport, with its historical fallback."""
 
     def __init__(self, api_base="", api_key="", model="gpt-4o-mini",
                  temperature=0.7, api_format="openai", max_tokens=None,
@@ -581,78 +495,50 @@ class LLMAgentStdlib(LLMAgentBase):
                      type(e).__name__, str(e), self.model, self.api_base)
             raise
 
-    # _request_openai and _request_anthropic return dicts, not strings
+    def _request(self, api_format, loop=None):
+        return call_llm_streaming(
+            api_format=api_format,
+            api_base=self.api_base,
+            api_key=self.api_key,
+            model=self.model,
+            messages=anthropic_streaming_messages(self._messages, api_format),
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            on_first_chunk=self._on_stream_start,
+            loop=loop,
+            vertex_adc_file=self.vertex_adc_file,
+            gcp_project=self.gcp_project,
+            gcp_location=self.gcp_location,
+        )
 
     def _request_openai(self, loop=None):
-        return call_llm_streaming(
-            api_format="openai",
-            api_base=self.api_base,
-            api_key=self.api_key,
-            model=self.model,
-            messages=self._messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            on_first_chunk=self._on_stream_start,
-            loop=loop,
-        )
+        return self._request("openai", loop)
 
     def _request_anthropic(self, loop=None):
-        return call_llm_streaming(
-            api_format="anthropic",
-            api_base=self.api_base,
-            api_key=self.api_key,
-            model=self.model,
-            messages=self._messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            on_first_chunk=self._on_stream_start,
-            loop=loop,
-        )
+        return self._request("anthropic", loop)
 
     def _request_vertexai(self, loop=None):
-        return call_llm_streaming(
-            api_format="vertexai",
-            api_base="",
-            api_key="",
-            model=self.model,
-            messages=self._messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            on_first_chunk=self._on_stream_start,
-            loop=loop,
-            vertex_adc_file=self.vertex_adc_file,
-            gcp_project=self.gcp_project,
-            gcp_location=self.gcp_location,
-        )
+        return self._request("vertexai", loop)
 
     def _request_vertexai_anthropic(self, loop=None):
-        return call_llm_streaming(
-            api_format="vertexai_anthropic",
-            api_base="",
-            api_key="",
-            model=self.model,
-            messages=self._messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            on_first_chunk=self._on_stream_start,
-            loop=loop,
-            vertex_adc_file=self.vertex_adc_file,
-            gcp_project=self.gcp_project,
-            gcp_location=self.gcp_location,
-        )
+        return self._request("vertexai_anthropic", loop)
 
     def _request_vertexai_openai(self, loop=None):
-        return call_llm_streaming(
-            api_format="vertexai_openai",
-            api_base="",
-            api_key="",
-            model=self.model,
-            messages=self._messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            on_first_chunk=self._on_stream_start,
-            loop=loop,
-            vertex_adc_file=self.vertex_adc_file,
-            gcp_project=self.gcp_project,
-            gcp_location=self.gcp_location,
-        )
+        return self._request("vertexai_openai", loop)
+
+
+class LLMAgent(LLMAgentStdlib):
+    """Compatibility name for the former HTTPX agent, using engine transport."""
+
+    def __init__(self, api_base="https://api.openai.com/v1", api_key="",
+                 model="gpt-4o-mini", temperature=0.7):
+        super().__init__(api_base=api_base, api_key=api_key, model=model,
+                         temperature=temperature, api_format="openai")
+        self._fallback = None
+
+    async def _call_api(self):
+        # The former HTTPX implementation also supported unauthenticated local
+        # OpenAI-compatible endpoints. Preserve that behavior for this class.
+        await self._rate_limit()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._request_openai, loop)

@@ -12,12 +12,11 @@ import math
 import os
 import random
 import re
-import ssl
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 
-import certifi
+from a2a_engine.llm.api import call_llm_oneshot
+from a2a_engine.llm.providers import LLM_PROVIDERS
 
 log = logging.getLogger("negotiation")
 
@@ -767,43 +766,31 @@ def name_projects(agent_projects: list[list[dict]]) -> list[list[dict]]:
         "Example: [\"Iron Forge\", \"Gold Rush\", \"Stone Keep\", \"Timber Vale\"]"
     )
 
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 1.0, "maxOutputTokens": 1024},
-    }
-    payload = json.dumps(body).encode()
-
-    # Try Vertex AI first (Cloud Run with ADC)
-    url = None
-    headers = {"Content-Type": "application/json"}
-
+    # Keep the legacy ADC-first choice; only credential failure selects API key.
     try:
         import google.auth
-        import google.auth.transport.requests
+        from google.auth.transport.requests import Request
         credentials, project = google.auth.default()
-        credentials.refresh(google.auth.transport.requests.Request())
-        token = credentials.token
-        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{project}/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
-        headers["Authorization"] = f"Bearer {token}"
+        credentials.refresh(Request())
+        settings = {"api_format": "vertexai", "api_base": "", "api_key": "",
+                    "gcp_project": project, "gcp_location": "us-central1"}
     except Exception:
-        # Fall back to API key
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key:
             return agent_projects
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        settings = {"api_format": "openai",
+                    "api_base": LLM_PROVIDERS["gemini"]["api_base"], "api_key": api_key}
 
-    ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
-            result = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        log.error("Project naming HTTP %d: %s", e.code, error_body)
+        text = call_llm_oneshot(
+            **settings, model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1.0, max_tokens=1024, timeout=15,
+        )
+    except Exception as exc:
+        log.error("Project naming failed: %s", type(exc).__name__)
         return agent_projects
 
-    # Parse response
-    text = result["candidates"][0]["content"]["parts"][0]["text"]
     # Strip markdown code fences if present
     text = text.strip()
     if text.startswith("```"):
@@ -925,7 +912,6 @@ def _build_oracle_prompt(
 
 def _call_llm(agent_config: dict, prompt: str) -> str:
     """Make a one-shot LLM call using the agent's config. Returns raw text."""
-    from negotiation_game.backend.agents.api import call_llm_oneshot
     from negotiation_game.backend.agents.factory import detect_provider, get_api_key_for_provider
 
     api_base = agent_config.get("api_base", "")

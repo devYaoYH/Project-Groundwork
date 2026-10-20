@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from negotiation_game.backend.agents.api import call_llm_oneshot
+from a2a_engine.llm.api import call_llm_oneshot
 from negotiation_game.backend.agents.factory import detect_provider, get_api_key_for_provider
 from negotiation_game.backend.defaults import LLM_PROVIDERS
 from negotiation_analysis.data_loader import add_common_args, load_dataset_from_args

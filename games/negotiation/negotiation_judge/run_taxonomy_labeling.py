@@ -34,7 +34,7 @@ from negotiation_game.backend.defaults import (
     API_BACKOFF_BASE,
     API_BACKOFF_MAX,
 )
-from negotiation_game.backend.agents.api import call_llm_oneshot_with_thinking
+from a2a_engine.llm.api import call_llm_oneshot_with_thinking
 
 logging.basicConfig(
     level=logging.INFO,

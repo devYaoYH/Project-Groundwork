@@ -1,4 +1,7 @@
-from a2a_engine.llm.api import call_llm_oneshot, call_llm_streaming, LLMClient
+from a2a_engine.llm.api import (
+    call_llm_oneshot, call_llm_oneshot_full, call_llm_oneshot_with_thinking,
+    call_llm_streaming, LLMClient,
+)
 from a2a_engine.llm.factory import make_llm_client, detect_provider, get_api_key_for_provider
 from a2a_engine.llm.model_config import ModelConfig, MODEL_REGISTRY, get_model_config
 from a2a_engine.llm.providers import (
@@ -11,6 +14,8 @@ from a2a_engine.llm.providers import (
 
 __all__ = [
     "call_llm_oneshot",
+    "call_llm_oneshot_full",
+    "call_llm_oneshot_with_thinking",
     "call_llm_streaming",
     "LLMClient",
     "make_llm_client",

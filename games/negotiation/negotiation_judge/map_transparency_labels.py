@@ -27,7 +27,7 @@ from negotiation_game.backend.defaults import REPO_ROOT, LLM_PROVIDERS
 from negotiation_judge.aggregate import build_alias_index
 from negotiation_judge.consolidate import load_taxonomy
 from negotiation_analysis.data_loader import load_experiment_data
-from negotiation_game.backend.agents.api import call_llm_oneshot
+from a2a_engine.llm.api import call_llm_oneshot
 
 logging.basicConfig(
     level=logging.INFO,

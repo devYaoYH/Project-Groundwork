@@ -86,6 +86,12 @@ Before opening a PR:
 field, because the resolved config is what lands in the trace. A knob read from
 an release variable at runtime is a knob nobody can recover afterwards.
 
+**Use the shared model API.** Route model calls, including judge and
+analysis/optimization scripts, through `a2a_engine.llm.api`. Use
+`make_llm_client`/`LLMClient` for agent clients or the `call_llm_*` helpers
+when the caller owns retries. Keep provider SDK and HTTP transports inside
+`a2a_engine.llm`.
+
 **Test protocols, not models.** Deterministic scripted agents let you assert
 exact outcomes and run in CI for free. Tests that call real models test the
 provider, not your environment.
