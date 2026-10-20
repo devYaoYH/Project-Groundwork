@@ -39,6 +39,9 @@ agents:
     model: claude-haiku-5-5
     api_format: vertexai_anthropic
     credential: vertexai_adc
+    capabilities:
+      input: [text, image]
+      evidence: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/haiku-5-5
     config:
       gcp_location: global
 
