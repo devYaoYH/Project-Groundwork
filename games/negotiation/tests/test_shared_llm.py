@@ -74,9 +74,16 @@ def test_compatibility_api_only_adapts_prompts(monkeypatch):
     assert calls[0]["messages"][0]["content"] == "instructions" + ANTHROPIC_JSON_SUFFIX
 
 
-def test_shared_registry_retains_vertex_maas_token_ceiling():
+@pytest.mark.parametrize("model", [
+    "meta/llama-4-maverick-17b-128e-instruct-maas",
+    "llama-4-maverick-17b-128e-instruct-maas",
+])
+def test_vertex_maas_model_ids_share_one_api_configuration(model):
+    from a2a_engine.llm.model_config import MODEL_REGISTRY
     from negotiation_game.backend.agents.model_config import get_model_config
-    assert get_model_config("meta/llama-4-maverick-17b-128e-instruct-maas").default_max_tokens == 8192
+    config = get_model_config(model)
+    assert config is MODEL_REGISTRY["meta/llama-4-maverick-17b-128e-instruct-maas"]
+    assert config.default_max_tokens == 8192
 
 
 @pytest.mark.parametrize("model", ["claude-haiku-4-5@20251001", "gemini-3-flash-preview"])

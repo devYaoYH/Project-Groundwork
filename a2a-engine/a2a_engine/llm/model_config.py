@@ -101,12 +101,8 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
     "claude-3-5-sonnet-20241022": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
     "claude-3-5-haiku-20241022": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
 
-    # Preserve the output ceiling used by legacy Negotiation's Vertex MaaS seats.
+    # Vertex AI Model Garden / OpenAI-compatible endpoint
     "meta/llama-4-maverick-17b-128e-instruct-maas": ModelConfig(
-        default_max_tokens=8192,
-        notes="Vertex AI Llama 4 Maverick output ceiling",
-    ),
-    "llama-4-maverick-17b-128e-instruct-maas": ModelConfig(
         default_max_tokens=8192,
         notes="Vertex AI Llama 4 Maverick output ceiling",
     ),
@@ -121,6 +117,11 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
     "claude-haiku-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=8192, supports_temperature=False),
     "claude-sonnet-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=False),
     "claude-opus-5-5": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=False),
+}
+
+# Alternate model IDs share API configuration; request model IDs stay unchanged.
+MODEL_ALIASES = {
+    "llama-4-maverick-17b-128e-instruct-maas": "meta/llama-4-maverick-17b-128e-instruct-maas",
 }
 
 # Fallback defaults for unknown models
@@ -160,6 +161,7 @@ def get_model_config(model_name: str) -> ModelConfig:
         >>> config.default_max_tokens
         8192
     """
+    model_name = MODEL_ALIASES.get(model_name, model_name)
     if model_name in MODEL_REGISTRY:
         return MODEL_REGISTRY[model_name]
 
