@@ -239,7 +239,7 @@ def _agent_fields(spec: Any) -> dict[str, Any]:
     """Pull the behavior-relevant fields off an agent spec (dict or model)."""
     if not isinstance(spec, dict):
         spec = getattr(spec, "model_dump", lambda: {})()
-    keep = ("type", "model", "api_format", "temperature", "max_tokens", "runtime", "harness", "capabilities", "required_modalities")
+    keep = ("type", "model", "credential", "api_format", "temperature", "max_tokens", "runtime", "harness", "capabilities", "required_modalities")
     if spec.get("runtime") == "external":
         keep = ("type", "runtime", "harness", "capabilities", "required_modalities")
     return {k: spec.get(k) for k in keep if spec.get(k) is not None}

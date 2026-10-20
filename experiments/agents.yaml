@@ -14,9 +14,8 @@
 # repository root and change it. That file is gitignored and shadows these
 # defaults entry by entry, so shared configs stay portable.
 #
-# `credential` names the release variable the binding needs, so a missing
-# key is reported by name before a run starts rather than as a 401 during it.
-# Put the values in .env; never here.
+# `credential` selects one access method: a named API key/token or Vertex ADC.
+# It is an enum selector, never a secret value. Put values in .env/runtime secrets.
 
 agents:
   gpt-mini:

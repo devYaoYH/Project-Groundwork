@@ -239,3 +239,35 @@ def test_long_lived_runtime_isolates_episode_attempt_sessions(remote_harness_v2)
         other_stage.__exit__(None, None, None)
     finally:
         harness.environment.registry.unregister(episode)
+
+
+def test_credential_probe_checks_only_the_selected_access_method(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from a2a_agent.runtime_v2 import AgentRuntimeV2
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-account")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    request = SimpleNamespace(query_params={"credential": "ANTHROPIC_AUTH_TOKEN"})
+    response = asyncio.run(AgentRuntimeV2.credentials(None, request))
+    assert json.loads(response.body) == {"credentials": {"ANTHROPIC_AUTH_TOKEN": False}}
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "selected-account")
+    response = asyncio.run(AgentRuntimeV2.credentials(None, request))
+    assert json.loads(response.body) == {"credentials": {"ANTHROPIC_AUTH_TOKEN": True}}
+    assert b"selected-account" not in response.body and b"unrelated-account" not in response.body
+    request.query_params["credential"] = "A2A_JOIN_TICKET"
+    assert asyncio.run(AgentRuntimeV2.credentials(None, request)).status_code == 400
+
+
+def test_vertex_credential_probe_checks_adc_without_an_anthropic_key(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from a2a_agent.runtime_v2 import AgentRuntimeV2
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("a2a_engine.llm.api._load_vertex_credentials", lambda path: (object(), "study-project"))
+    request = SimpleNamespace(query_params={"credential": "vertexai_adc"})
+    response = asyncio.run(AgentRuntimeV2.credentials(None, request))
+    assert json.loads(response.body) == {"credentials": {"vertexai_adc": True}}
+    request.query_params["provider"] = "anthropic"
+    assert asyncio.run(AgentRuntimeV2.credentials(None, request)).status_code == 400

@@ -10,6 +10,7 @@ import { AgentBinding, AgentPool, getAgentPool } from "../lib/api";
 import { useSession } from "./Session";
 
 function credentialState(agent: AgentBinding, platform: boolean) {
+  if (agent.credential === "vertexai_adc" || agent.api_format?.startsWith("vertexai")) return <Chip>Google ADC</Chip>;
   if (!agent.credential) return <span className="muted">none needed</span>;
   if (platform) return <Chip>platform managed</Chip>;
   return <span className="agent-credential"><code>{agent.credential}</code> <Chip tone={agent.credential_present ? "good" : "warn"}>{agent.credential_present ? "set" : "missing"}</Chip></span>;

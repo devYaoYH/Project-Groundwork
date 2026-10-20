@@ -305,3 +305,74 @@ def test_heuristic_child_policy_kind_is_game_independent(monkeypatch):
     assert captured["env"]["A2A_POLICY_KIND"] == "heuristic"
     assert captured["command"][captured["command"].index("--harness") + 1] == "scripted"
     assert "A2A_MODEL_CONFIG" not in captured["env"]
+
+
+def test_explicit_vertex_child_receives_adc_settings_without_provider_keys(monkeypatch):
+    from types import SimpleNamespace
+
+    from a2a_engine.agent_pool import AgentPoolEntry
+    from a2a_engine.llm.factory import make_llm_client
+
+    spec = AgentPoolEntry(
+        model="claude-sonnet-4-6",
+        credential="vertexai_adc",
+        api_format="vertexai_anthropic",
+        config={"gcp_location": "global"},
+    ).as_agent_config()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "unrelated-oauth-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/private/test-adc.json")
+    captured = {}
+
+    def launch(command, **options):
+        captured.update(options)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("a2a_engine.remote.seats.subprocess.Popen", launch)
+    LocalProcessLauncher("http://127.0.0.1:1/join", "private-test-ticket", spec)
+    child = captured["env"]
+    assert child["GOOGLE_CLOUD_PROJECT"] == "test-project"
+    assert child["GOOGLE_APPLICATION_CREDENTIALS"] == "/private/test-adc.json"
+    assert all(
+        key not in child for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY")
+    )
+    config = json.loads(child["A2A_MODEL_CONFIG"])
+    assert config["gcp_location"] == "global" and config["credential"] == "vertexai_adc"
+    client = make_llm_client(config)
+    assert client.api_format == "vertexai_anthropic" and client.api_key == ""
+
+
+@pytest.mark.parametrize(
+    "selected,unrelated",
+    [
+        ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+        ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_child_receives_only_its_selected_access_credential(monkeypatch, selected, unrelated):
+    from types import SimpleNamespace
+
+    from a2a_agent.seat_plugins import PolicyContext
+    from a2a_engine.agent_pool import AgentPoolEntry
+
+    spec = AgentPoolEntry(model="claude-haiku-5-5", credential=selected).as_agent_config()
+    monkeypatch.setenv(selected, "selected-account")
+    monkeypatch.setenv(unrelated, "unrelated-account")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider")
+    captured = {}
+
+    def launch(command, **options):
+        captured.update(options)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("a2a_engine.remote.seats.subprocess.Popen", launch)
+    LocalProcessLauncher("http://127.0.0.1:1/join", "private-test-ticket", spec)
+    child = captured["env"]
+    assert child[selected] == "selected-account"
+    assert unrelated not in child and "OPENAI_API_KEY" not in child
+    config = json.loads(child["A2A_MODEL_CONFIG"])
+    assert config["credential"] == selected and "source" not in config
+    config["type"] = "llm"
+    assert PolicyContext(config).model_client().api_key == "selected-account"

@@ -100,6 +100,14 @@ hosted platform's durable event bridge instead requires an infrastructure ACK
 before continuing, and final evidence must be published before a launch succeeds.
 Do not turn hosted fail-closed writes into an optional mirror.
 
+## Adding a model endpoint
+
+Follow [the endpoint onboarding checklist](docs/AGENT_CONFIGURATION.md#onboard-a-model-endpoint)
+through explicit credential selectors and provider routing, API parameter
+rules, shared agent bindings, CLI/design resolution, and runtime credentials. Updating the model registry alone does not
+publish a choice in the Agents screen. Rebuild the selected platform and runtime
+images before verifying container availability.
+
 ## Adding a storage backend
 
 Implement `put_episode` / `get_episode` / `list_episodes` / `check` and call

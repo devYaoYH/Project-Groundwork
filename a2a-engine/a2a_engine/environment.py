@@ -17,6 +17,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
+from .llm.credentials import ModelCredential
+
 
 _ID = re.compile(r"^[a-z][a-z0-9_.-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -337,13 +339,22 @@ class AgentConfig(_StrictModel):
     required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     asset_root: str | None = None
     model: str | None = None
+    credential: ModelCredential | None = None
     api_format: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_model_access(self):
+        if "credential" in self.config:
+            raise ValueError("credential must be declared once at the agent level, not inside config")
+        from .llm.factory import provider_for_config
+        provider_for_config({**self.model_dump(exclude_none=True, exclude={"config"}), **self.config})
+        return self
+
     def as_game_config(self) -> dict[str, Any]:
-        base = self.model_dump(exclude={"role", "config"}, exclude_none=True)
+        base = self.model_dump(mode="json", exclude={"role", "config"}, exclude_none=True)
         if "runtime" not in self.model_fields_set:
             base.pop("runtime", None)
         for key in ("capabilities", "required_modalities", "asset_root"):

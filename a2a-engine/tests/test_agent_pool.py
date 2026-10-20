@@ -18,7 +18,7 @@ def write_pool(path, body):
 
 
 def test_entry_drops_pool_only_fields_from_the_game_config():
-    """`description` and `credential` describe the binding, not the agent."""
+    """Descriptions stay pool-only; the access method is frozen into the plan."""
     entry = AgentPoolEntry(
         description="notes", model="gpt-5-mini", api_format="openai",
         credential="OPENAI_API_KEY", config={"reasoning": "low"},
@@ -27,7 +27,7 @@ def test_entry_drops_pool_only_fields_from_the_game_config():
     config = entry.as_agent_config()
 
     assert config == {"type": "llm", "model": "gpt-5-mini",
-                      "api_format": "openai", "reasoning": "low"}
+                      "api_format": "openai", "reasoning": "low", "credential": "OPENAI_API_KEY"}
 
 
 def test_local_bindings_shadow_shared_defaults_by_name(tmp_path, monkeypatch):
@@ -159,3 +159,87 @@ def test_runtime_harness_survive_pool_hydration_and_external_needs_no_key(monkey
     assert pool.entry("local").harness == "scripted"
     with pytest.raises(ValueError):
         AgentPoolEntry(config={"runtime": "unknown"}).as_agent_config()
+
+
+def test_same_haiku_model_can_bind_to_three_exclusive_accounting_paths(monkeypatch):
+    from a2a_engine.llm.factory import make_llm_client
+    from a2a_engine.manifest import EpisodeManifest
+    from a2a_engine.provenance import pinned_participants
+    from expt_runner.run_experiment import _check_api_keys
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-account-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat-oauth-account")
+    pool = AgentPool(agents={
+        "api": AgentPoolEntry(model="claude-haiku-5-5", credential="ANTHROPIC_API_KEY"),
+        "oauth": AgentPoolEntry(model="claude-haiku-5-5", credential="ANTHROPIC_AUTH_TOKEN"),
+        "vertex": AgentPoolEntry(model="claude-haiku-5-5", credential="vertexai_adc",
+            api_format="vertexai_anthropic", config={"gcp_project": "study-project", "gcp_location": "global"}),
+    })
+    direct, oauth, vertex = hydrate_participants(["api", "oauth", "vertex"], pool)
+    assert direct["model"] == oauth["model"] == vertex["model"]
+    assert all("source" not in cfg for cfg in (direct, oauth, vertex))
+    direct_client, oauth_client, vertex_client = map(make_llm_client, (direct, oauth, vertex))
+    assert direct_client.api_key == "api-account-key" and direct_client.api_format == "anthropic"
+    assert oauth_client.api_key == "sk-ant-oat-oauth-account" and oauth_client.api_format == "anthropic"
+    assert vertex_client.api_key == "" and vertex_client.api_format == "vertexai_anthropic"
+    assert vertex_client.gcp_project == "study-project"
+    assert len({pinned_participants({"agents": [cfg]})[0]["config_sha256"] for cfg in (direct, oauth, vertex)}) == 3
+    manifest = EpisodeManifest.from_run(config={"agents": [direct, oauth, vertex]}, experiment_name="credential-test", cell_id="one", episode_idx=0, episode_uid="test")
+    assert [agent.model_dump()["credential"] for agent in manifest.agents] == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "vertexai_adc"]
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    # An available token must not replace the selected API key.
+    assert make_llm_client(direct).api_key == ""
+    with pytest.raises(EnvironmentError, match="ANTHROPIC_API_KEY"):
+        _check_api_keys({"agents": [direct]}, mode="live")
+    _check_api_keys({"agents": [oauth, vertex]}, mode="live")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-account-key")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN")
+    assert make_llm_client(oauth).api_key == ""
+    with pytest.raises(EnvironmentError, match="ANTHROPIC_AUTH_TOKEN"):
+        _check_api_keys({"agents": [oauth]}, mode="live")
+
+
+@pytest.mark.parametrize("config", [
+    {"credential": "vertexai_adc"},
+    {"credential": "vertexai_adc", "api_format": "anthropic"},
+    {"credential": "ANTHROPIC_API_KEY", "api_format": "vertexai_anthropic"},
+    {"credential": "ANTHROPIC_AUTH_TOKEN", "api_format": "vertexai_anthropic"},
+    {"credential": "A2A_JOIN_TICKET"},
+    {"credential": "vertexai_adc", "config": {"credential": "ANTHROPIC_API_KEY", "api_format": "anthropic"}},
+    {"credential": ["ANTHROPIC_API_KEY", "vertexai_adc"]},
+    {"credential": "ANTHROPIC_API_KEY", "config": {"api_key": "inline-secret"}},
+    {"credential": "ANTHROPIC_AUTH_TOKEN", "config": {"adc_file": "/private/adc.json"}},
+])
+def test_invalid_access_methods_are_rejected_at_both_typed_boundaries(config):
+    from a2a_engine.environment import AgentConfig
+    for model in (AgentPoolEntry, AgentConfig):
+        with pytest.raises(ValueError):
+            model.model_validate({"model": "claude-haiku-5-5", **config})
+
+
+def test_single_credential_enum_is_the_only_access_selector_in_the_schema():
+    from a2a_engine.environment import AgentConfig
+    from a2a_engine.llm.credentials import ModelCredential
+    for model in (AgentPoolEntry, AgentConfig):
+        schema = model.model_json_schema()
+        assert "source" not in schema["properties"]
+        assert schema["$defs"]["ModelCredential"]["enum"] == [item.value for item in ModelCredential]
+
+
+def test_legacy_inline_config_keeps_pr30_oauth_fallback(monkeypatch):
+    from a2a_engine.llm.factory import make_llm_client
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat-legacy-account")
+    legacy = make_llm_client({"model": "claude-haiku-5-5"})
+    assert legacy.api_key == "sk-ant-oat-legacy-account"
+    assert legacy.api_format == "anthropic"
+
+
+def test_credential_selectors_round_trip_through_resolved_yaml():
+    import yaml
+    from a2a_engine.environment import AgentConfig
+    for model, method in ((AgentPoolEntry, "as_agent_config"), (AgentConfig, "as_game_config")):
+        entry = model(model="claude-haiku-5-5", credential="vertexai_adc", api_format="vertexai_anthropic")
+        resolved = getattr(entry, method)()
+        assert type(resolved["credential"]) is str
+        assert yaml.safe_load(yaml.safe_dump(resolved)) == resolved

@@ -40,11 +40,11 @@ def require_modalities(required, capabilities, *, api_format=None, runtime="in_p
 
 
 def validate_seat(spec, required):
-    api_format = spec.get("api_format")
-    if api_format is None and spec.get("model"):
-        from .llm.factory import detect_provider
-        from .llm.providers import LLM_PROVIDERS
-        api_format = LLM_PROVIDERS.get(detect_provider(spec["model"]), {}).get("api_format")
+    from .llm.factory import provider_for_config
+    from .llm.providers import LLM_PROVIDERS
+
+    provider = provider_for_config(spec)
+    api_format = spec.get("api_format") or LLM_PROVIDERS.get(provider, {}).get("api_format")
     require_modalities(required, spec.get("capabilities"), api_format=api_format,
                        runtime=spec.get("runtime", "in_process"), llm=spec.get("type", "llm") == "llm")
 

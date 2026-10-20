@@ -3,11 +3,19 @@
 import os
 
 from a2a_engine.llm.api import LLMClient
+from a2a_engine.llm.credentials import ModelCredential
 from a2a_engine.llm.providers import LLM_PROVIDERS
 
 
-def detect_provider(model: str) -> str | None:
-    """Detect provider key from a model name. Returns None if unknown."""
+def detect_provider(model: str, api_format: str | None = None) -> str | None:
+    """Resolve explicit Vertex routing first, then infer from the model name."""
+    vertex_provider = {
+        "vertexai": "gemini_vertexai",
+        "vertexai_anthropic": "claude_vertexai",
+        "vertexai_openai": "vertexai_openai",
+    }.get(api_format)
+    if vertex_provider:
+        return vertex_provider
     m = model.lower()
     if m == "gemini-3-flash-preview" or m.startswith("publishers/google/models/gemini-3"):
         return "gemini_vertexai"
@@ -52,13 +60,45 @@ def env_var_for_provider(provider: str) -> str:
     return PROVIDER_ENV_VARS.get(provider, "")
 
 
-def get_api_key_for_provider(provider: str) -> str:
-    """Read the API key for a provider from release."""
+def get_api_key_for_provider(provider: str, credential: str | None = None) -> str:
+    """Read a named credential, or retain legacy provider credential lookup."""
+    if credential is not None:
+        selected = ModelCredential(credential)
+        return os.environ.get(selected.env_var, "") if selected.env_var else ""
     key = os.environ.get(env_var_for_provider(provider), "")
     if not key and provider == "anthropic":
         # An `ant auth` OAuth access token; the request layer sends it as a bearer token.
         key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
     return key
+
+
+def provider_for_config(cfg: dict) -> str | None:
+    """The credential selector fixes both routing and authentication."""
+    credential, api_format = cfg.get("credential"), cfg.get("api_format")
+    if credential is None:
+        return detect_provider(cfg.get("model") or "gpt-4o-mini", api_format)
+    selected = ModelCredential(credential)
+    if cfg.get("api_key") is not None:
+        raise ValueError("credential selects runtime authentication; inline api_key is not allowed")
+    if selected is ModelCredential.VERTEXAI_ADC:
+        provider = {"vertexai": "gemini_vertexai", "vertexai_anthropic": "claude_vertexai",
+                    "vertexai_openai": "vertexai_openai"}.get(api_format)
+        if not provider:
+            raise ValueError("credential vertexai_adc requires an explicit Vertex api_format")
+        return provider
+    if any(cfg.get(key) is not None for key in ("adc_file", "vertex_adc_file", "gcp_project", "gcp_location")):
+        raise ValueError("Google ADC settings require credential vertexai_adc")
+    provider = selected.provider
+    expected = LLM_PROVIDERS[provider]["api_format"]
+    if api_format and api_format != expected:
+        raise ValueError(f"credential {selected.value!r} requires api_format {expected!r}")
+    return provider
+
+
+def credential_env_for_config(cfg: dict) -> str | None:
+    """Derive the environment variable from the single credential selector."""
+    selected = cfg.get("credential")
+    return ModelCredential(selected).env_var if selected is not None else None
 
 
 def make_llm_client(cfg: dict) -> LLMClient:
@@ -72,16 +112,18 @@ def make_llm_client(cfg: dict) -> LLMClient:
     api_key = cfg.get("api_key")
     api_format = cfg.get("api_format")
 
-    provider = detect_provider(model)
+    provider = provider_for_config(cfg)
     if provider and provider in LLM_PROVIDERS:
         p = LLM_PROVIDERS[provider]
         api_base = api_base or p["api_base"]
         api_format = api_format or p["api_format"]
         if not api_key:
-            api_key = get_api_key_for_provider(provider)
+            api_key = get_api_key_for_provider(provider, credential_env_for_config(cfg))
 
-    from a2a_engine.modalities import validate_seat
-    validate_seat({**cfg, "api_format": api_format or "openai"}, cfg.get("required_modalities", ["text"]))
+    from a2a_engine.modalities import require_modalities
+    require_modalities(cfg.get("required_modalities", ["text"]), cfg.get("capabilities"),
+                       api_format=api_format or "openai", runtime=cfg.get("runtime", "in_process"),
+                       llm=cfg.get("type", "llm") == "llm")
     return LLMClient(
         api_format=api_format or "openai",
         api_base=api_base or "",

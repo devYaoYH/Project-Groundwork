@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .llm.credentials import ModelCredential
 
 SHARED_POOL_RELATIVE = Path("experiments/agents.yaml")
 LOCAL_POOL_NAME = "agents.local.yaml"
@@ -38,21 +40,25 @@ class AgentPoolEntry(BaseModel):
     required_modalities: list[str] = Field(default_factory=lambda: ["text"])
     asset_root: str | None = None
     model: str | None = None
+    credential: ModelCredential | None = None
     api_format: str | None = None
     api_base: str | None = None
-    # Named rather than inferred from the model string: inference is what makes
-    # a missing key surface as an opaque 401 instead of a named variable.
-    # ``None`` means the binding needs no release key (ADC, or a scripted
-    # agent that calls nothing).
-    credential: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_model_access(self):
+        if "credential" in self.config:
+            raise ValueError("credential must be declared once at the agent level, not inside config")
+        from .llm.factory import provider_for_config
+        provider_for_config({**self.model_dump(exclude_none=True, exclude={"config"}), **self.config})
+        return self
+
     def as_agent_config(self) -> dict[str, Any]:
         """The agent dict a environment receives, with pool-only fields dropped."""
         fields = self.model_dump(
-            exclude={"description", "credential", "config"}, exclude_none=True,
+            mode="json", exclude={"description", "config"}, exclude_none=True,
         )
         if "runtime" not in self.model_fields_set:
             fields.pop("runtime", None)
@@ -82,11 +88,15 @@ class AgentPool(BaseModel):
 
     def missing_credentials(self, names: list[str]) -> list[str]:
         """Release variables these bindings need that are not set."""
-        missing = {
-            entry.credential
-            for entry in (self.entry(name) for name in names)
-            if entry.as_agent_config().get("runtime", "in_process") != "external" and entry.credential and not os.environ.get(entry.credential)
-        }
+        missing = set()
+        for name in names:
+            entry = self.entry(name)
+            config = entry.as_agent_config()
+            from .llm.factory import credential_env_for_config
+            reference = credential_env_for_config(config)
+            if (config.get("runtime", "in_process") != "external"
+                    and reference and not os.environ.get(reference)):
+                missing.add(reference)
         return sorted(missing)
 
 

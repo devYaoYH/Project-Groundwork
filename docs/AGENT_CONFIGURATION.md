@@ -1,7 +1,7 @@
 # Agent configuration
 
 Agent configuration belongs in an experiment's resolved YAML. The runner writes
-that configuration into every trace and removes credential fields from the
+that configuration into every trace and removes secret values from the
 manifest, so collaborators can reproduce a run without sharing secrets. New
 typed experiments bind each agent to a role declared by `ReleaseDeclaration`;
 legacy `defaults.agents` remains supported during migration.
@@ -63,36 +63,53 @@ agents and require no provider access.
 
 ## Credentials and endpoints
 
-Put credentials in `.env` (or the deployment release), never committed
-YAML. `make_llm_client` infers a provider from `model` unless you override it.
+`model` identifies the model; one nonsecret `credential` enum selects its access
+method. Put secret values in `.env` or injected runtime secrets, never YAML.
 
-| Model / configuration | API format | Credential source |
+| `credential` | Provider / `api_format` | Runtime authentication |
 |---|---|---|
-| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | `openai` | `OPENAI_API_KEY` |
-| `claude-*` | `anthropic` | `ANTHROPIC_API_KEY` |
-| `gemini-*` | OpenAI-compatible | `GOOGLE_API_KEY` |
-| model identifier containing `/` | OpenAI-compatible | `OPENROUTER_API_KEY` |
-| `llama`, `mistral`, `qwen` | OpenAI-compatible | `OLLAMA_API_KEY` (usually optional locally) |
-| Vertex model | `vertexai`, `vertexai_anthropic`, or `vertexai_openai` | ADC plus `GOOGLE_CLOUD_PROJECT` |
+| `ANTHROPIC_API_KEY` | Anthropic / `anthropic` | Only `ANTHROPIC_API_KEY` |
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic / `anthropic` | Only `ANTHROPIC_AUTH_TOKEN` |
+| `vertexai_adc` | Vertex / `vertexai`, `vertexai_anthropic`, or `vertexai_openai` | Google ADC |
+| `OPENAI_API_KEY` | OpenAI / `openai` | Only `OPENAI_API_KEY` |
+| `OPENROUTER_API_KEY` | OpenRouter / `openai` | Only `OPENROUTER_API_KEY` |
+| `GOOGLE_API_KEY` | Gemini / `openai` | Only `GOOGLE_API_KEY` |
+| `OLLAMA_API_KEY` | Ollama / `openai` | Only `OLLAMA_API_KEY`, if the server requires it |
 
-Use explicit fields only when inference is not enough:
+The selector determines routing and authentication together; a missing key/token,
+IAM failure, or quota error never switches accounts. Declare it once at the agent
+level. Unknown/multiple selectors, nested `config.credential`, conflicting formats,
+inline key overrides, and ADC options on key/token bindings fail validation.
+The shared definition is `a2a_engine.llm.credentials.ModelCredential`.
+
+For example, a private Vertex binding in `agents.local.yaml` can select its own
+project without changing the runtime's ADC identity:
 
 ```yaml
 agents:
-  - type: llm
-    model: my-local-model
-    api_format: openai
-    api_base: http://host.docker.internal:11434/v1
-    api_key: ${OLLAMA_API_KEY:-ollama}
-    temperature: 0.0
-    max_tokens: 1024
-    rating_player_id: my-local-model-baseline
+  claude-lab:
+    type: llm
+    model: claude-sonnet-4-6
+    credential: vertexai_adc
+    api_format: vertexai_anthropic
+    config: {gcp_project: your-lab-project, gcp_location: global}
 ```
 
-`api_format` supports `openai`, `anthropic`, `vertexai`,
-`vertexai_anthropic`, and `vertexai_openai`. Vertex-only fields are
-`gcp_project`, `gcp_location`, and `vertex_adc_file` (or `adc_file`). They are
-optional integrations, not part of the local stack.
+Vertex requires an explicit Vertex `api_format`; `gcp_project` otherwise comes
+from ADC or `GOOGLE_CLOUD_PROJECT`. Optional `vertex_adc_file` (alias `adc_file`)
+selects a private ADC file. Set `api_base` for local servers or custom endpoints.
+Resolved plans retain the selector and project/location. Local children receive
+only the selected key/token or ADC settings; isolated services check the same
+selector. The Agents page labels ADC explicitly. See the
+[onboarding checklist](#onboard-a-model-endpoint) for publication and deployment.
+
+Legacy inline configurations without `credential` retain model inference and
+direct Anthropic's `ANTHROPIC_API_KEY` then `ANTHROPIC_AUTH_TOKEN` lookup. Explicit
+OAuth selection also forwards the token to local children; legacy children
+forward only the API-key variable. Tokens beginning `sk-ant-oat` retain Bearer
+and `oauth-2025-04-20` headers. Existing pool entries with standard variable names
+now freeze that selection; custom variable names are not enum members. Hosted
+secret wiring supplies API keys only. Frozen plans and runtime pins stay intact.
 
 ## Reproducibility and checks
 
@@ -162,9 +179,8 @@ agents:
     credential: OPENROUTER_API_KEY
 ```
 
-`credential` names the release variable the binding needs, so a missing key
-is reported by name before a run starts rather than as a 401 during it. Values
-go in `.env`.
+Bindings retain their [credential selector](#credentials-and-endpoints) during
+hydration; secret values stay in the runtime environment.
 
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
@@ -194,3 +210,32 @@ Image input requires explicit `capabilities.input: [text, image]` and a
 provider adapter. Unknown support remains text-only. See
 [MULTIMODAL_INPUTS.md](MULTIMODAL_INPUTS.md) for agent-pool, design-roster, and
 remote runtime examples.
+
+## Onboard a model endpoint
+
+The model registry controls request parameters; the agent pool supplies published
+UI/CLI choices. Complete both paths when adding an endpoint:
+
+1. **Resolve access.** Follow [credential selection](#credentials-and-endpoints).
+   Existing adapters need configuration; new protocols need `llm/api.py` support.
+   New access methods also need `llm/credentials.py` and factory resolution.
+2. **Register API quirks.** Update `llm/model_config.py` for token limits or
+   unsupported parameters; check outgoing payloads with mocked HTTP.
+3. **Publish a binding.** Add a distinct name to `experiments/agents.yaml` with
+   `model`, `credential`, `api_format`, and a description. Preserve existing names
+   and targets. Use `agents.local.yaml` for private routes; `A2A_AGENT_POOL` replaces
+   pool discovery rather than merging with the shared pool.
+4. **Check resolution.** CLI `participants: [gpt-mini, gpt-mini]` and UI roster
+   `binding: gpt-mini` must freeze concrete model/adapter/credential settings,
+   without secrets. Match the release's seat count. Existing locked experiments
+   retain their plans and runtime pins; create or fork a design for new bindings.
+5. **Configure and publish the runtime.** Supply the selected key/token or ADC,
+   model access, and runtime IAM separately; see [hosted setup](../deploy/README.md).
+   Rebuild both selected images following [installation](INSTALLATION.md#refresh-and-stop).
+   Check `GET /api/agent-pool` and the Agents page; they consume the pool directly,
+   with no frontend model list. Hosted publication requires a release.
+
+Run `python -m pytest a2a-engine/tests/test_agent_pool.py cloud_platform/tests/test_viewer.py`
+and a scripted `a2a-run EXPERIMENT --smoke-test` with SQLite readback. These prove
+configuration/execution plumbing, not live access. `--dry-run` can call providers;
+use it only when provider-backed validation is requested.

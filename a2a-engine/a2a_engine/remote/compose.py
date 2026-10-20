@@ -12,7 +12,8 @@ from .network import NetworkPolicy
 from .seats import descriptor_path, validate_runtimes, write_descriptor
 from .server import EnvironmentApp, ManagedEpisode, RuntimeManager
 
-MODEL_FIELDS = frozenset({"type", "model", "api_base", "api_format", "temperature", "max_tokens", "capabilities"})
+MODEL_FIELDS = frozenset({"type", "model", "credential", "gcp_project", "gcp_location",
+                          "api_base", "api_format", "temperature", "max_tokens", "capabilities"})
 _managers = set()
 _manager_lock = threading.RLock()
 
@@ -50,14 +51,16 @@ def cancel_active_episodes():
                     episode.close()
 
 
-def credential_present(provider, seat):
+def credential_present(provider, seat, credential=None):
     if not provider or not 0 <= seat < 5:
         return False
     try:
         with httpx.Client(timeout=3, trust_env=False, follow_redirects=False) as client:
-            response = client.get(f"http://runtime-seat-{seat}:8001/credentials")
+            params = {"credential": credential} if credential else {"provider": provider}
+            response = client.get(f"http://runtime-seat-{seat}:8001/credentials", params=params)
             response.raise_for_status()
-            return response.json().get("providers", {}).get(provider) is True
+            group, key = ("credentials", credential) if credential else ("providers", provider)
+            return response.json().get(group, {}).get(key) is True
     except (httpx.HTTPError, ValueError):
         return False
 
@@ -107,8 +110,9 @@ class ComposeRuntimeManager(RuntimeManager):
                 if not response.json().get("healthy"):
                     raise RuntimeError("agent service is not healthy")
                 if not scripted and remote[seat].get("type") == "llm":
-                    from a2a_engine.llm.factory import detect_provider
-                    if not credential_present(detect_provider(remote[seat].get("model", "")), seat):
+                    from a2a_engine.llm.factory import provider_for_config
+                    provider = provider_for_config(remote[seat])
+                    if not credential_present(provider, seat, remote[seat].get("credential")):
                         raise ValueError("agent service provider credential is unavailable")
         episode = self.environment.registry.provision(uuid.uuid4().hex, remote,
             environment_id=config["environment_id"], join_timeout_s=config.get("join_timeout_s", 10))

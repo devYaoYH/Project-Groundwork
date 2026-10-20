@@ -137,3 +137,26 @@ def test_reentrant_cancellation_owns_descriptor_before_writer_returns(tmp_path, 
             {"type": "scripted", "runtime": "external"}]}, scripted=True)
     assert not list(tmp_path.glob("seat-*/*.json"))
     assert manager.cancelled and not manager.episodes
+
+
+@pytest.mark.parametrize("account", [
+    {"credential": "vertexai_adc", "api_format": "vertexai_anthropic", "gcp_project": "study-project", "gcp_location": "global"},
+    {"api_format": "anthropic", "credential": "ANTHROPIC_API_KEY"},
+])
+def test_compose_preserves_credential_selection_in_private_policy(tmp_path, monkeypatch, account):
+    import json
+    from a2a_engine.remote import compose
+
+    manager = descriptor_manager(tmp_path, monkeypatch)
+    checked = []
+    monkeypatch.setattr(compose, "credential_present", lambda provider, seat, credential=None: checked.append((provider, credential)) or True)
+    runtime = manager.provision({"environment_id": "word_guess", "agents": [
+        {"type": "llm", "model": "claude-haiku-5-5", "runtime": "external", **account},
+    ]})
+    try:
+        policy = json.loads(runtime.descriptors[0].read_text())["policy"]
+        assert all(policy[key] == value for key, value in account.items())
+        expected = ("claude_vertexai", "vertexai_adc") if account["credential"] == "vertexai_adc" else ("anthropic", "ANTHROPIC_API_KEY")
+        assert checked == [expected]
+    finally:
+        runtime.close()

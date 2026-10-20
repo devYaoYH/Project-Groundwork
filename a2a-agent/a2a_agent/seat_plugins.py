@@ -9,6 +9,9 @@ ENTRY_POINT_GROUP = "a2a_agent.seats"
 POLICY_FIELDS = {
     "type",
     "model",
+    "credential",
+    "gcp_project",
+    "gcp_location",
     "api_base",
     "api_format",
     "temperature",
