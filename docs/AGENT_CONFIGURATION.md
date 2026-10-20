@@ -182,6 +182,12 @@ agents:
 Bindings retain their [credential selector](#credentials-and-endpoints) during
 hydration; secret values stay in the runtime environment.
 
+The shared `haiku-5.5-vertex` binding selects `claude-haiku-5-5` with
+`credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location
+`global`. It declares text input only. Existing Haiku 4.5 bindings stay unchanged;
+Sonnet and Opus 5.5 remain unpublished. See [Vertex setup](../deploy/README.md#vertex-ai-adc)
+for model enablement and runtime permissions.
+
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
 (`deepseek/deepseek-v4.1-flash`, verified text and image input), and `haiku-or`.
@@ -212,8 +218,6 @@ provider adapter. Unknown support remains text-only. See
 remote runtime examples.
 
 ## Onboard a model endpoint
-
-For a concrete Vertex rollout, see [Haiku 5.5 onboarding](HAIKU_VERTEX.md).
 
 The model registry controls request parameters; the agent pool supplies published
 UI/CLI choices. Complete both paths when adding an endpoint:

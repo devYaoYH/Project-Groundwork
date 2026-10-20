@@ -137,8 +137,26 @@ by bootstrap and available only to the control API.
 
 ### Vertex AI ADC
 
-For the Haiku binding, prediction-only IAM setup, model enablement, and runtime
-verification, follow [Haiku 5.5 on Vertex AI](../docs/HAIKU_VERTEX.md).
+Vertex bindings authenticate with the runtime's ADC, without Anthropic secrets.
+Enable the Vertex AI API and selected partner model in the target project. For
+Haiku 5.5, enable `anthropic-932.cloudpartnerservices.goog` and complete any access
+requirements on its [model card](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/haiku-5-5).
+
+The runtime identity (`groundwork-worker@PROJECT_ID.iam.gserviceaccount.com` in
+this deployment) needs `aiplatform.endpoints.predict` and `serviceusage.services.use`.
+Fresh bootstrap accepts `--vertex-adc`; an administrator can apply only that setup
+in an existing deployment with:
+
+```bash
+python -c "from deploy.bootstrap import enable_vertex_adc; enable_vertex_adc('PROJECT_ID', 'RUNTIME_SERVICE_ACCOUNT')"
+```
+
+The helper enables Vertex and creates/updates a prediction-only role. It does not
+enable partner products or grant impersonation. Host ADC is not mounted into
+Docker automatically. Verify access under the actual runtime identity; project
+model enablement, IAM, and quota are separate prerequisites. Follow the
+[onboarding checklist](../docs/AGENT_CONFIGURATION.md#onboard-a-model-endpoint)
+for rebuild/release and validation.
 
 ### Google sign-in and first release
 
