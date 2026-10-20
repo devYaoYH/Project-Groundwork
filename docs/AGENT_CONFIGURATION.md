@@ -245,3 +245,10 @@ Run `python -m pytest a2a-engine/tests/test_agent_pool.py cloud_platform/tests/t
 and a scripted `a2a-run EXPERIMENT --smoke-test` with SQLite readback. These prove
 configuration/execution plumbing, not live access. `--dry-run` can call providers;
 use it only when provider-backed validation is requested.
+
+After building the web export, run `npm run test:browser -- tests/agent-pool.spec.ts`
+from `web/`. This reads `experiments/agents.yaml` and checks every published binding
+in the API and Agents page, plus selection of every text-capable model in the
+Word Guess roster. The test server pins the shared pool to exclude private local
+overrides. These checks make no provider requests; protocol/authentication behavior
+belongs in the mocked client tests, and live access requires separate validation.
