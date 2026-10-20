@@ -192,6 +192,8 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
     assert entry["api_format"] == "vertexai_anthropic"
     assert "source" not in entry
     assert entry["credential"] == "vertexai_adc"
+    assert set(entry["capabilities"]["input"]) == {"text", "image"}
+    assert entry["capabilities"]["evidence"]
     assert entry["credential_present"] is None
 
     workspace = Path(__file__).resolve().parents[2]
@@ -213,4 +215,5 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
         assert all(agent["api_format"] == "vertexai_anthropic" for agent in config["agents"])
         assert all(agent["gcp_location"] == "global" for agent in config["agents"])
         assert all(agent["credential"] == "vertexai_adc" for agent in config["agents"])
+        assert all(agent["capabilities"] == entry["capabilities"] for agent in config["agents"])
         assert all("api_key" not in agent and "source" not in agent for agent in config["agents"])

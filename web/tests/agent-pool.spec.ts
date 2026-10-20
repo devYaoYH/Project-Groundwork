@@ -70,3 +70,20 @@ for (const [name, binding] of textModels) {
     // Selecting a roster is provider-free; do not submit a live launch.
   });
 }
+
+
+for (const [environment, seats] of [
+  ["tangram_reference", ["Director", "Matcher"]],
+  ["map_director", ["Giver", "Follower"]],
+] as const) {
+  test(`Haiku image support makes every ${environment} seat selectable`, async ({ page }) => {
+    await page.goto(`/environments/${environment}/play/`);
+    await page.getByLabel("Run with", { exact: true }).selectOption("live");
+    for (const seat of seats) {
+      const picker = page.getByLabel(seat, { exact: true });
+      await picker.selectOption("haiku-5.5-vertex");
+      await expect(picker).toHaveValue("haiku-5.5-vertex");
+    }
+    await expect(page.getByRole("button", { name: "Run episode", exact: true })).toBeEnabled();
+  });
+}

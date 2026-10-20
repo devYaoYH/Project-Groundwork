@@ -184,7 +184,7 @@ hydration; secret values stay in the runtime environment.
 
 The shared `haiku-5.5-vertex` binding selects `claude-haiku-5-5` with
 `credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location
-`global`. It declares text input only. Existing Haiku 4.5 bindings stay unchanged;
+`global`. It accepts text and images. Existing Haiku 4.5 bindings stay unchanged;
 Sonnet and Opus 5.5 remain unpublished. See [Vertex setup](../deploy/README.md#vertex-ai-adc)
 for model enablement and runtime permissions.
 
