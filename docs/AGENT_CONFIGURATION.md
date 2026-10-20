@@ -182,6 +182,12 @@ agents:
 Bindings retain their [credential selector](#credentials-and-endpoints) during
 hydration; secret values stay in the runtime environment.
 
+The shared `haiku-5.5-vertex` binding selects `claude-haiku-5-5` with
+`credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location
+`global`. It declares text input only. Existing Haiku 4.5 bindings stay unchanged;
+Sonnet and Opus 5.5 remain unpublished. See [Vertex setup](../deploy/README.md#vertex-ai-adc)
+for model enablement and runtime permissions.
+
 The shipped pool includes three OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
 (`deepseek/deepseek-v4.1-flash`, verified text and image input), and `haiku-or`.
@@ -239,3 +245,10 @@ Run `python -m pytest a2a-engine/tests/test_agent_pool.py cloud_platform/tests/t
 and a scripted `a2a-run EXPERIMENT --smoke-test` with SQLite readback. These prove
 configuration/execution plumbing, not live access. `--dry-run` can call providers;
 use it only when provider-backed validation is requested.
+
+After building the web export, run `npm run test:browser -- tests/agent-pool.spec.ts`
+from `web/`. This reads `experiments/agents.yaml` and checks every published binding
+in the API and Agents page, plus selection of every text-capable model in the
+Word Guess roster. The test server pins the shared pool to exclude private local
+overrides. These checks make no provider requests; protocol/authentication behavior
+belongs in the mocked client tests, and live access requires separate validation.

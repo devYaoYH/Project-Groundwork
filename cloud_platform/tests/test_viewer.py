@@ -172,3 +172,45 @@ def test_original_ui_assets_do_not_publish_workspace_files(platform):
     assert client.get("/environment-replays/negotiation/").status_code == 200
     assert client.get("/environment-replays/negotiation/").headers["x-frame-options"] == "SAMEORIGIN"
     assert client.get("/environment-assets/negotiation/webapp/static/styles/base.css").status_code == 200
+
+
+def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
+    """The Agents API and design compiler must agree on published bindings."""
+    from pathlib import Path
+    import yaml
+
+    app, control, _ = platform
+    alice = sign_in(app, "Alice")
+    name = "haiku-5.5-vertex"
+    response = alice.get("/api/agent-pool")
+    assert response.status_code == 200
+    entries = {entry["name"]: entry for entry in response.json()["agents"]}
+    assert name in entries
+    assert not {"sonnet-5.5", "opus-5.5"} & entries.keys()
+    entry = entries[name]
+    assert entry["model"] == "claude-haiku-5-5"
+    assert entry["api_format"] == "vertexai_anthropic"
+    assert "source" not in entry
+    assert entry["credential"] == "vertexai_adc"
+    assert entry["credential_present"] is None
+
+    workspace = Path(__file__).resolve().parents[2]
+    design = yaml.safe_load((workspace / "local_stack/tests/buyer_seller_design_smoke.yaml").read_text())
+    for participant in design["roster"]:
+        participant.update(kind="llm", binding=name)
+    releases = alice.get("/api/releases").json()["releases"]
+    release = next(row for row in releases if row["environment_id"] == "buyer_seller")
+    result = alice.post("/api/experiments", json={
+        "name": name, "release_id": release["id"], "design_text": yaml.safe_dump(design),
+    })
+    assert result.status_code == 201, result.text
+    experiment = result.json()
+    assert experiment["locked_at"]
+    plan = json.loads(control.artifacts.get(experiment["frozen_plan_key"]))
+    assert plan
+    for config in plan:
+        assert [agent["model"] for agent in config["agents"]] == [entry["model"]] * 2
+        assert all(agent["api_format"] == "vertexai_anthropic" for agent in config["agents"])
+        assert all(agent["gcp_location"] == "global" for agent in config["agents"])
+        assert all(agent["credential"] == "vertexai_adc" for agent in config["agents"])
+        assert all("api_key" not in agent and "source" not in agent for agent in config["agents"])
