@@ -16,6 +16,66 @@ concurrency:
   group: platform-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.5'
+          terraform_wrapper: false
+      - run: terraform -chdir=deploy/terraform fmt -check -recursive
+      - run: terraform -chdir=deploy/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=deploy/terraform validate
+      - run: terraform -chdir=deploy/terraform test
+
+  infrastructure:
+    # No path filter: refresh/apply on every eligible production release.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.publish_only)) &&
+      vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    needs: terraform-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_provider_secret_names: ${{ vars.GCP_PROVIDER_SECRET_NAMES || '[]' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the administrator-provisioned infrastructure configuration
+        env:
+          INFRA_PROVIDER: ${{ vars.GCP_INFRA_WORKLOAD_IDENTITY_PROVIDER }}
+          INFRA_ACCOUNT: ${{ vars.GCP_INFRA_SERVICE_ACCOUNT }}
+          STATE_BUCKET: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+        run: |
+          test -n "$INFRA_PROVIDER"
+          test -n "$INFRA_ACCOUNT"
+          test -n "$STATE_BUCKET"
+          test -n "$TF_VAR_project_id"
+          test -n "$TF_VAR_region"
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_INFRA_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_INFRA_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.5'
+          terraform_wrapper: false
+      - name: Initialize the locked remote state
+        env:
+          STATE_BUCKET: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+        run: >-
+          terraform -chdir=deploy/terraform init -input=false -lockfile=readonly
+          -backend-config="bucket=$STATE_BUCKET" -backend-config="prefix=groundwork/iam"
+      - name: Reconcile managed IAM before application rollout
+        run: terraform -chdir=deploy/terraform apply -auto-approve -input=false -lock-timeout=5m
+
   platform-tests:
     runs-on: ubuntu-latest
     steps:
@@ -154,17 +214,29 @@ jobs:
 
   validate:
     if: always()
-    needs: [platform-tests, platform-stack]
+    needs: [platform-tests, platform-stack, terraform-validate]
     runs-on: ubuntu-latest
     steps:
-      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success
+      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success && test "$TERRAFORM_RESULT" = success
         env:
           TEST_RESULT: ${{ needs.platform-tests.result }}
           STACK_RESULT: ${{ needs.platform-stack.result }}
+          TERRAFORM_RESULT: ${{ needs.terraform-validate.result }}
 
   deploy:
-    if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
-    needs: [validate, platform-stack]
+    # always() handles an intentionally skipped infrastructure job in publish-only
+    # runs. Explicit results and cancelled() keep all failures/cancellations closed.
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' &&
+      needs.validate.result == 'success' && needs.platform-stack.result == 'success' &&
+      ((github.ref == 'refs/heads/main' &&
+        !(github.event_name == 'workflow_dispatch' && inputs.publish_only) &&
+        needs.infrastructure.result == 'success') ||
+       ((github.ref != 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.publish_only)) &&
+        needs.infrastructure.result == 'skipped'))
+    needs: [validate, platform-stack, infrastructure]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -209,7 +281,7 @@ jobs:
 
   latencies:
     if: always()
-    needs: [platform-tests, platform-stack, validate, deploy]
+    needs: [platform-tests, platform-stack, terraform-validate, infrastructure, validate, deploy]
     runs-on: ubuntu-latest
     permissions:
       contents: read
