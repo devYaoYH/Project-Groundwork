@@ -443,6 +443,64 @@ def call_llm_oneshot(
     asset_root: str | None = None,
 ) -> str:
     """Non-streaming LLM call returning text."""
+    return call_llm_oneshot_full(
+        api_format=api_format, api_base=api_base, api_key=api_key,
+        model=model, messages=messages, max_tokens=max_tokens,
+        temperature=temperature, timeout=timeout, thinking_budget=thinking_budget,
+        vertex_adc_file=vertex_adc_file, gcp_project=gcp_project,
+        gcp_location=gcp_location, capabilities=capabilities, asset_root=asset_root,
+    )["text"]
+
+
+def call_llm_oneshot_with_thinking(
+    api_format: str,
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    timeout: int = 300,
+    thinking_budget: int | None = None,
+    vertex_adc_file: str | None = None,
+    gcp_project: str | None = None,
+    gcp_location: str | None = None,
+    capabilities=None,
+    asset_root: str | None = None,
+) -> tuple[str, str | None]:
+    """One-shot completion returning text and optional provider thinking."""
+    result = call_llm_oneshot_full(
+        api_format=api_format, api_base=api_base, api_key=api_key,
+        model=model, messages=messages, max_tokens=max_tokens,
+        temperature=temperature, timeout=timeout, thinking_budget=thinking_budget,
+        vertex_adc_file=vertex_adc_file, gcp_project=gcp_project,
+        gcp_location=gcp_location, capabilities=capabilities, asset_root=asset_root,
+    )
+    return result["text"], result["thinking"]
+
+
+def call_llm_oneshot_full(
+    api_format: str,
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    timeout: int = 300,
+    thinking_budget: int | None = None,
+    vertex_adc_file: str | None = None,
+    gcp_project: str | None = None,
+    gcp_location: str | None = None,
+    capabilities=None,
+    asset_root: str | None = None,
+) -> dict:
+    """One-shot completion with text, thinking, duration and provider response.
+
+    Uses the same admission, conversion and tracing as text-only calls. The
+    response is intended for callers that explicitly persist judge evidence.
+    Retry policy remains with the caller, as for the other low-level functions.
+    """
     modalities = content_modalities(messages)
     require_modalities(modalities, capabilities, api_format=api_format)
     image_input = "image" in modalities
@@ -452,25 +510,30 @@ def call_llm_oneshot(
     converted = provider_messages(messages, api_format, asset_root)
     span = _start_chat_span(model, api_base, messages, temperature, effective_max, stream=False)
     messages = converted
+    response_metadata = {}
+    thinking = None
+    t0 = time.monotonic()
     try:
         with _otel_trace.use_span(span, end_on_exit=False, record_exception=not image_input,
                                   set_status_on_exception=not image_input):
             if api_format == "anthropic":
                 text = _oneshot_anthropic(api_base, api_key, model, messages, effective_max,
-                                          temperature, timeout, model_cfg)
+                                          temperature, timeout, model_cfg, response_metadata=response_metadata)
             elif api_format == "vertexai_anthropic":
-                text, _ = _oneshot_vertexai_anthropic(model, messages, effective_max,
+                text, thinking = _oneshot_vertexai_anthropic(model, messages, effective_max,
                                                       temperature, timeout, model_cfg,
                                                       adc_file=vertex_adc_file,
                                                       project=gcp_project,
-                                                      location=gcp_location)
+                                                      location=gcp_location,
+                                            response_metadata=response_metadata)
             elif api_format == "vertexai":
-                text, _ = _oneshot_vertexai(model, messages, effective_max, temperature,
+                text, thinking = _oneshot_vertexai(model, messages, effective_max, temperature,
                                             thinking_budget,
                                             timeout=timeout,
                                             adc_file=vertex_adc_file,
                                             project=gcp_project,
-                                            location=gcp_location)
+                                            location=gcp_location,
+                                            response_metadata=response_metadata)
             elif api_format == "vertexai_openai":
                 text = _oneshot_openai(_vertexai_openai_base_url(
                                            project=gcp_project,
@@ -478,12 +541,14 @@ def call_llm_oneshot(
                                            adc_file=vertex_adc_file),
                                        _get_vertexai_access_token(vertex_adc_file),
                                        model, messages, effective_max, temperature,
-                                       timeout, model_cfg)
+                                       timeout, model_cfg, response_metadata=response_metadata)
             else:
                 text = _oneshot_openai(api_base, api_key, model, messages, effective_max,
-                                       temperature, timeout, model_cfg)
+                                       temperature, timeout, model_cfg, response_metadata=response_metadata)
         _finish_chat_span(span, response_model=model, output_text=text)
-        return text
+        return {"text": text, "thinking": thinking,
+                "duration_s": round(time.monotonic() - t0, 3),
+                "response": response_metadata}
     except BaseException as exc:
         _record_chat_error(span, exc, image_input=image_input)
         if image_input and isinstance(exc, Exception):
@@ -649,6 +714,7 @@ def _oneshot_vertexai_anthropic(
     adc_file: str | None = None,
     project: str | None = None,
     location: str | None = None,
+    response_metadata: dict | None = None,
 ):
     project, location = _get_vertexai_project_location(
         "claude_vertexai",
@@ -682,6 +748,8 @@ def _oneshot_vertexai_anthropic(
         except Exception:
             log.error("VERTEX ANTHROPIC API ERROR HTTP %d", e.code)
         raise
+    if response_metadata is not None:
+        response_metadata.update(data)
     duration_s = round(time.monotonic() - t0, 3)
     text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
     thinking = "".join(b.get("thinking", "") for b in data.get("content", []) if b.get("type") == "thinking").strip() or None
@@ -769,6 +837,7 @@ def _oneshot_vertexai(
     project: str | None = None,
     location: str | None = None,
     timeout: float = 300,
+    response_metadata: dict | None = None,
 ):
     client = _get_vertexai_client(project=project, location=location, adc_file=adc_file, timeout=timeout)
     system_instruction, contents = _messages_to_vertexai(messages)
@@ -783,8 +852,12 @@ def _oneshot_vertexai(
 
     t0 = time.monotonic()
     response = client.models.generate_content(model=model, contents=contents, config=gen_config)
+    if response_metadata is not None:
+        response_metadata.update(response.model_dump(mode="json", exclude_none=True))
     duration_s = round(time.monotonic() - t0, 3)
-    parts = response.candidates[0].content.parts if response.candidates else []
+    candidate = response.candidates[0] if response.candidates else None
+    content = getattr(candidate, "content", None)
+    parts = getattr(content, "parts", None) or []
     text = "".join(p.text for p in parts if p.text and not p.thought).strip()
     thinking = "".join(p.text for p in parts if p.text and p.thought).strip() or None
     log.info("  <- vertexai %d chars in %.1fs", len(text), duration_s)
@@ -1120,7 +1193,7 @@ def _stream_anthropic(api_base, api_key, model, messages, max_tokens,
 # ===================================================================
 
 def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
-                       temperature, timeout, model_cfg):
+                       temperature, timeout, model_cfg, *, response_metadata=None):
     url = f"{api_base.rstrip('/')}/messages"
     system_text = ""
     api_messages = []
@@ -1138,11 +1211,13 @@ def _oneshot_anthropic(api_base, api_key, model, messages, max_tokens,
                                  headers=_anthropic_headers(api_key), method="POST")
     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as resp:
         data = json.loads(resp.read())
+    if response_metadata is not None:
+        response_metadata.update(data)
     return "".join(b["text"] for b in data.get("content", []) if b.get("type") == "text").strip()
 
 
 def _oneshot_openai(api_base, api_key, model, messages, max_tokens,
-                    temperature, timeout, model_cfg):
+                    temperature, timeout, model_cfg, *, response_metadata=None):
     url = f"{api_base.rstrip('/')}/chat/completions"
     body: dict = {"model": model, model_cfg.max_tokens_param: max_tokens, "messages": messages}
     if model_cfg.supports_temperature and temperature is not None:
@@ -1154,6 +1229,8 @@ def _oneshot_openai(api_base, api_key, model, messages, max_tokens,
     with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as resp:
         raw = resp.read()
     data = json.loads(raw)
+    if response_metadata is not None:
+        response_metadata.update(data)
     choice = data.get("choices", [{}])[0]
     message = choice.get("message", {})
     if message.get("refusal"):

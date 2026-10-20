@@ -100,6 +100,18 @@ ANTHROPIC_JSON_SUFFIX = (
     "'thinking' (string), 'speech' (string), and 'action' (null or object)."
 )
 
+
+def anthropic_streaming_messages(messages: list[dict], api_format: str) -> list[dict]:
+    """Apply the legacy Anthropic JSON instruction without mutating history."""
+    if api_format != "anthropic":
+        return messages
+    return [
+        {**message, "content": message["content"] + ANTHROPIC_JSON_SUFFIX}
+        if message["role"] == "system" else message
+        for message in messages
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Helper: build the full system prompt
 # ---------------------------------------------------------------------------

@@ -101,6 +101,16 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
     "claude-3-5-sonnet-20241022": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
     "claude-3-5-haiku-20241022": ModelConfig(max_tokens_param="max_tokens", supports_temperature=True),
 
+    # Preserve the output ceiling used by legacy Negotiation's Vertex MaaS seats.
+    "meta/llama-4-maverick-17b-128e-instruct-maas": ModelConfig(
+        default_max_tokens=8192,
+        notes="Vertex AI Llama 4 Maverick output ceiling",
+    ),
+    "llama-4-maverick-17b-128e-instruct-maas": ModelConfig(
+        default_max_tokens=8192,
+        notes="Vertex AI Llama 4 Maverick output ceiling",
+    ),
+
     # Anthropic Claude 4 family
     "claude-sonnet-4-5-20250929": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=8192, supports_temperature=True),
     "claude-sonnet-4-6": ModelConfig(max_tokens_param="max_tokens", default_max_tokens=16000, supports_temperature=True),

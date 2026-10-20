@@ -378,7 +378,9 @@ def run_gepa(args: argparse.Namespace) -> None:
     context = _build_context(seeds)
     (out_dir / "context.txt").write_text(context, encoding="utf-8")
 
-    lm = dspy.LM(
+    from a2a_engine.llm.dspy import EngineLM
+
+    lm = EngineLM(
         args.model,
         max_tokens=args.proposer_max_tokens,
         temperature=args.temperature,
@@ -442,7 +444,9 @@ def run_reflective_gepa(args: argparse.Namespace) -> None:
     context = _build_context(args.seeds)
     (out_dir / "context.txt").write_text(context, encoding="utf-8")
 
-    lm = dspy.LM(
+    from a2a_engine.llm.dspy import EngineLM
+
+    lm = EngineLM(
         args.model,
         max_tokens=args.proposer_max_tokens,
         temperature=args.temperature,
@@ -499,7 +503,9 @@ def run_single_proposal(args: argparse.Namespace) -> None:
     context = _build_context(args.seeds)
     (out_dir / "context.txt").write_text(context, encoding="utf-8")
 
-    lm = dspy.LM(
+    from a2a_engine.llm.dspy import EngineLM
+
+    lm = EngineLM(
         args.model,
         max_tokens=args.proposer_max_tokens,
         temperature=args.temperature,

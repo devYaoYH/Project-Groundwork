@@ -23,7 +23,7 @@ import time
 import urllib.error
 from pathlib import Path
 
-from negotiation_game.backend.agents import api as llm_api
+from a2a_engine.llm import api as llm_api
 from negotiation_game.backend.defaults import API_BACKOFF_BASE, API_BACKOFF_MAX, API_MAX_RETRIES, LLM_PROVIDERS, REPO_ROOT
 from negotiation_judge.run_taxonomy_game_labeling import (
     auxiliary_columns,
@@ -49,28 +49,6 @@ ANTHROPIC_VERTEX_PROVIDER = "anthropic_vertexai"
 DEFAULT_MAX_TOKENS = 32768
 
 
-def response_to_dict(response) -> dict:
-    for method_name in ("model_dump", "to_json_dict"):
-        method = getattr(response, method_name, None)
-        if method is None:
-            continue
-        try:
-            if method_name == "model_dump":
-                return method(mode="json", exclude_none=True)
-            return method()
-        except TypeError:
-            try:
-                return method()
-            except Exception:
-                pass
-        except Exception:
-            pass
-    try:
-        return json.loads(response.model_dump_json(exclude_none=True))
-    except Exception:
-        return {"repr": repr(response)}
-
-
 def call_vertexai_full(
     model: str,
     messages: list[dict],
@@ -78,47 +56,11 @@ def call_vertexai_full(
     temperature: float,
     thinking_budget: int | None,
 ) -> dict:
-    client = llm_api._get_vertexai_client()
-    system_instruction, contents = llm_api._messages_to_vertexai(messages)
-
-    config_kwargs = {"max_output_tokens": max_tokens, "temperature": temperature}
-    if system_instruction:
-        config_kwargs["system_instruction"] = system_instruction
-    if thinking_budget is not None and thinking_budget > 0:
-        config_kwargs["thinking_config"] = llm_api._google_genai.types.ThinkingConfig(
-            include_thoughts=True,
-            thinking_budget=thinking_budget,
-        )
-    gen_config = llm_api._google_genai.types.GenerateContentConfig(**config_kwargs)
-
-    t0 = time.monotonic()
-    response = client.models.generate_content(model=model, contents=contents, config=gen_config)
-    duration_s = round(time.monotonic() - t0, 3)
-    parts = response.candidates[0].content.parts if response.candidates and response.candidates[0].content else []
-    parts = parts or []
-    text = "".join(part.text for part in parts if getattr(part, "text", None) and not getattr(part, "thought", False)).strip()
-    thinking = "".join(part.text for part in parts if getattr(part, "text", None) and getattr(part, "thought", False)).strip() or None
-    return {
-        "text": text,
-        "thinking": thinking,
-        "duration_s": duration_s,
-        "response": response_to_dict(response),
-    }
-
-
-def messages_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]:
-    """Split OpenAI-style messages into Anthropic system + messages payload."""
-    system_parts: list[str] = []
-    anthropic_messages: list[dict] = []
-    for message in messages:
-        role = message["role"]
-        content = message["content"]
-        if role == "system":
-            system_parts.append(content)
-        elif role in ("user", "assistant"):
-            anthropic_messages.append({"role": role, "content": content})
-    system = "\n\n".join(system_parts) if system_parts else None
-    return system, anthropic_messages
+    return llm_api.call_llm_oneshot_full(
+        api_format="vertexai", api_base="", api_key="", model=model,
+        messages=messages, max_tokens=max_tokens, temperature=temperature,
+        thinking_budget=thinking_budget if thinking_budget and thinking_budget > 0 else None,
+    )
 
 
 def call_anthropic_vertex_full(
@@ -127,49 +69,18 @@ def call_anthropic_vertex_full(
     max_tokens: int,
     temperature: float,
 ) -> dict:
-    """Call Anthropic Claude through Vertex AI using ADC."""
-    try:
-        from anthropic import AnthropicVertex
-    except ImportError as exc:
-        raise RuntimeError(
-            "anthropic[vertex] is required for Claude-on-Vertex runs. "
-            "Run with: uv run --with 'anthropic[vertex]' ..."
-        ) from exc
-
+    """Preserve the batch job's Google project/region selection through engine."""
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project_id:
-        provider_cfg = LLM_PROVIDERS.get("gemini_vertexai", {})
-        project_id = provider_cfg.get("gcp_project")
+        project_id = LLM_PROVIDERS.get("gemini_vertexai", {}).get("gcp_project")
     if not project_id:
         raise RuntimeError("GOOGLE_CLOUD_PROJECT is required for Claude-on-Vertex runs.")
-    region = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-    system, anthropic_messages = messages_to_anthropic(messages)
-    client = AnthropicVertex(project_id=project_id, region=region)
-
-    kwargs = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": anthropic_messages,
-        "temperature": temperature,
-    }
-    if system:
-        kwargs["system"] = system
-
-    t0 = time.monotonic()
-    response = client.messages.create(**kwargs)
-    duration_s = round(time.monotonic() - t0, 3)
-    text_parts = [
-        block.text
-        for block in response.content
-        if getattr(block, "type", None) == "text" and getattr(block, "text", None)
-    ]
-    text = "".join(text_parts).strip()
-    return {
-        "text": text,
-        "thinking": None,
-        "duration_s": duration_s,
-        "response": response_to_dict(response),
-    }
+    return llm_api.call_llm_oneshot_full(
+        api_format="vertexai_anthropic", api_base="", api_key="", model=model,
+        messages=messages, max_tokens=max_tokens, temperature=temperature,
+        gcp_project=project_id,
+        gcp_location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+    )
 
 
 def call_model_full(

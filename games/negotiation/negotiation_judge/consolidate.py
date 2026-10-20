@@ -10,7 +10,8 @@ from pathlib import Path
 from json_repair import repair_json
 
 from negotiation_game.backend.defaults import API_MAX_RETRIES, API_BACKOFF_BASE, API_BACKOFF_MAX
-from negotiation_game.backend.agents.api import call_llm_streaming
+from a2a_engine.llm.api import call_llm_streaming
+from negotiation_game.backend.agents.prompts import anthropic_streaming_messages
 from negotiation_judge.schema import GameJudgment, RoundJudgment, Taxonomy, CanonicalPattern
 from negotiation_judge.prompts import build_consolidation_prompt, build_alias_mapping_prompt
 from negotiation_judge.judge import TokenBudgetExceeded
@@ -221,7 +222,7 @@ def _call_with_backoff(
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
-                messages=messages,
+                messages=anthropic_streaming_messages(messages, api_format),
                 max_tokens=65536,
                 temperature=temperature,
                 thinking_config=thinking_config,

@@ -16,7 +16,8 @@ import urllib.error
 from json_repair import repair_json
 
 from negotiation_game.backend.defaults import API_MAX_RETRIES, API_BACKOFF_BASE, API_BACKOFF_MAX, API_REQUEST_COOLDOWN
-from negotiation_game.backend.agents.api import call_llm_streaming
+from a2a_engine.llm.api import call_llm_streaming
+from negotiation_game.backend.agents.prompts import anthropic_streaming_messages
 from negotiation_judge.schema import (
     GameJudgment,
     JudgeGameContext,
@@ -241,7 +242,7 @@ def _call_with_backoff(
                 api_base=api_base,
                 api_key=api_key,
                 model=model,
-                messages=messages,
+                messages=anthropic_streaming_messages(messages, api_format),
                 max_tokens=JUDGE_MAX_TOKENS,
                 temperature=temperature,
                 thinking_config=thinking_config,
