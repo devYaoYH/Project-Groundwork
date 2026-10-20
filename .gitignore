@@ -32,3 +32,14 @@ web/lib/environment-ids.json
 site/games.json
 .ruff_cache/
 dist/
+
+# Terraform state, plans and local deployment configuration are private.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+*.tfbackend
+crash.log
+gha-creds-*.json
