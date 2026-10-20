@@ -237,6 +237,13 @@ class Repository:
                     return existing
                 if quota.get("active", 0) >= max_active:
                     raise ValueError("concurrent launch limit reached")
+                if data.get("retry_incomplete"):
+                    from google.cloud.firestore_v1.base_query import FieldFilter
+                    launches = self.client.collection("groundwork_launches").where(
+                        filter=FieldFilter("owner_id", "==", owner)).stream(transaction=transaction)
+                    if any(row.to_dict().get("experiment_id") == data["experiment_id"] and
+                           row.to_dict().get("status") in ACTIVE for row in launches):
+                        raise ValueError("Wait for active experiment launches to finish before retrying")
                 transaction.create(launch_ref, record)
                 transaction.set(quota_ref, {**quota, "active": quota.get("active", 0) + 1})
                 return record
@@ -250,6 +257,12 @@ class Repository:
             quota = json.loads(row[0]) if row else {"active": 0}
             if quota.get("active", 0) >= max_active:
                 raise ValueError("concurrent launch limit reached")
+            if data.get("retry_incomplete"):
+                launches = (json.loads(row[0]) for row in db.execute(
+                    "SELECT data FROM documents WHERE kind='launches'"))
+                if any(row.get("owner_id") == owner and row.get("experiment_id") == data["experiment_id"]
+                       and row.get("status") in ACTIVE for row in launches):
+                    raise ValueError("Wait for active experiment launches to finish before retrying")
             db.execute("INSERT INTO documents VALUES ('launches',?,?)", (identifier, json.dumps(record)))
             db.execute("INSERT INTO documents VALUES ('quotas',?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data", (owner, json.dumps({**quota, "active": quota.get("active", 0) + 1})))
         return record

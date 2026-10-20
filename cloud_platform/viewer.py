@@ -19,6 +19,7 @@ from a2a_engine.registry import get_environment_spec
 from a2a_engine.storage.sqlite import SQLiteEpisodeStore
 from a2a_engine.stream_projection import project_events_to_trace, projection_summary
 from local_stack.control_plane import ControlPlane
+from local_stack.retries import retry_options
 from cloud_platform.frozen import open_frozen_control
 
 
@@ -135,6 +136,7 @@ class Viewer:
         launches = self.control.repo.list("launches", owner_id=owner, experiment_id=identifier)
         launches.sort(key=lambda row: row.get("created_at", ""), reverse=True)
         return {**dimensions, "experiment": record, "cell_evidence": evidence,
+                "retry_options": retry_options(launches, attempts),
                 "launches": [self.launch(launch["id"], owner) for launch in launches]}
 
     @staticmethod

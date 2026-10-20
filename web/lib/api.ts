@@ -303,11 +303,18 @@ export type LaunchLog = {
 };
 
 export type ExperimentDetail = {
+  retry_options?: RetryOption[];
   experiment: Experiment;
   cells: CompiledPlan["cells"];
   cell_evidence: CellEvidence[];
   roster: { participant_id: string; kind: string; binding: string | null; role: string | null; config_sha256: string }[];
   launches: { launch: Launch; progress: { planned: number; completed: number; failed: number; by_cell: { cell_id: string; planned: number; completed: number; failed: number }[] } }[];
+};
+
+export type RetryOption = {
+  mode: Launch["mode"];
+  episode_ids: string[];
+  max_parallelism: number;
 };
 
 export type LaunchDetail = {
@@ -460,7 +467,7 @@ export function lockExperiment(id: string, designSha256: string): Promise<Experi
 export function launchExperiment(
   experimentId: string,
   mode: Launch["mode"],
-  options: { maxParallelism?: number; shardIndex?: number; shardCount?: number } = {},
+  options: { maxParallelism?: number; shardIndex?: number; shardCount?: number; retryIncomplete?: boolean; episodeIds?: string[] } = {},
 ): Promise<Launch> {
   return request<Launch>("/api/launches", {
     method: "POST",
@@ -470,6 +477,8 @@ export function launchExperiment(
       max_parallelism: options.maxParallelism,
       shard_index: options.shardIndex,
       shard_count: options.shardCount,
+      retry_incomplete: options.retryIncomplete,
+      episode_ids: options.episodeIds,
     }),
   });
 }

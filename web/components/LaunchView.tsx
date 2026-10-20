@@ -7,7 +7,8 @@ import { useEffect, useState } from "react";
 import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
-import { getLaunch, LaunchDetail, streamLaunchEvents } from "../lib/api";
+import { RetryControls } from "./RetryControls";
+import { getExperiment, getLaunch, LaunchDetail, type RetryOption, streamLaunchEvents } from "../lib/api";
 import { ACTIVE_LAUNCH_STATUSES, boundedLaunchDetail, LaunchStreamError, updateLaunchDetail } from "../lib/launch-stream";
 import { notifySessionExpired } from "../lib/session";
 
@@ -23,6 +24,22 @@ export function LaunchView() {
   const [error, setError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [connection, setConnection] = useState("Connecting live logs…");
+  const [retryOptions, setRetryOptions] = useState<RetryOption[]>([]);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const experimentId = detail?.launch.experiment_id;
+  const launchStatus = detail?.launch.status;
+  useEffect(() => {
+    let cancelled = false;
+    setRetryOptions([]); setRetryError(null);
+    if (experimentId && launchStatus && !ACTIVE_LAUNCH_STATUSES.has(launchStatus)) {
+      getExperiment(experimentId).then(next => {
+        if (!cancelled) setRetryOptions(next.retry_options ?? []);
+      }).catch(reason => {
+        if (!cancelled) setRetryError(reason instanceof Error ? reason.message : "Unable to check retry availability");
+      });
+    }
+    return () => { cancelled = true; };
+  }, [id, experimentId, launchStatus]);
   useEffect(() => {
     if (!id) return;
     setDetail(null); setError(null); setStreamError(null); setConnection("Connecting live logs…");
@@ -111,7 +128,8 @@ export function LaunchView() {
   ].filter(row => row.source || row.image);
   return <>
     <Crumb items={[{ label: "experiments", href: "/experiments/" }, { label: "experiment", href: `/experiment/?id=${encodeURIComponent(launch.experiment_id)}` }, { label: "launch" }]} />
-    <header className="page-heading page-heading-split"><div><h1>Launch inspection</h1><p className="mono">{launch.id}</p></div><Chip tone={STATUS_TONE[launch.status] ?? "plain"}>{launch.status}</Chip></header>
+    <header className="page-heading page-heading-split"><div><h1>Launch inspection</h1><p className="mono">{launch.id}</p></div><div className="launch-actions"><Chip tone={STATUS_TONE[launch.status] ?? "plain"}>{launch.status}</Chip>{!ACTIVE_LAUNCH_STATUSES.has(launch.status) ? <RetryControls key={launch.id} experimentId={launch.experiment_id} options={retryOptions.filter(option => option.mode === launch.mode)} episodeIds={attempts.map(attempt => attempt.episode_id)} /> : null}</div></header>
+    {retryError ? <p className="notice notice-error" role="alert">{retryError}</p> : null}
     {launch.error ? <p className="notice notice-error">{launch.error}</p> : null}
     {detail.provisional ? <p className="notice notice-muted">Live progress is provisional. Episode traces and downloadable results become available once the launch finishes saving.</p> : null}
     {launch.live_logs === false && ACTIVE_LAUNCH_STATUSES.has(launch.status) ? <p className="notice notice-muted">This launch used an earlier worker; runner logs become available after completion. New launches use the current worker without changing the experiment runtime.</p> : null}
@@ -127,6 +145,7 @@ export function LaunchView() {
       { label: "trace history", render: (attempt) => <Link className="text-link" href={`/episodes/?cell_id=${encodeURIComponent(attempt.cell_id)}`}>View cell traces</Link> },
       { label: "status", render: (attempt) => <Chip tone={STATUS_TONE[attempt.status] ?? "plain"}>{attempt.status}</Chip> },
       { label: "diagnostic", render: (attempt) => attempt.error ?? (attempt.status === "DRY_RUN" ? "Validated by runner; no episode trace is persisted." : attempt.episode_uri ?? "-") },
+      { label: "retry", render: (attempt) => !ACTIVE_LAUNCH_STATUSES.has(launch.status) ? <RetryControls key={launch.id} experimentId={launch.experiment_id} options={retryOptions.filter(option => option.mode === launch.mode)} episodeIds={[attempt.episode_id]} label="Retry episode" /> : null },
     ]} /></section>
     <section className="card section-card"><div className="section-heading"><h2>Runner log</h2><p role="status">{connection}. Showing up to 1,000 recent lines; persisted logs remain available after the launch ends.</p></div>{detail.logs_truncated ? <p className="notice notice-muted">Earlier output is omitted here. Download the results after completion for the full runner log.</p> : null}{streamError ? <p className="notice notice-error" role="alert">{streamError} Existing output is preserved.</p> : null}{logs.length ? <pre className="runner-log" aria-label="Runner output">{logs.map((entry) => `[${timestamp(entry.created_at)}] ${entry.payload.line ?? ""}`).join("\n")}</pre> : <p className="empty-state">{ACTIVE_LAUNCH_STATUSES.has(launch.status) ? launch.status === "RUNNING" ? "Runner active. Waiting for its first output." : "Waiting for the runner to start. Output will appear here as it is written." : "No runner output was recorded for this launch."}</p>}</section>
   </>;
