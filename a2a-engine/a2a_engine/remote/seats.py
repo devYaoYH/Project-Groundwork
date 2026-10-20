@@ -84,7 +84,12 @@ class LocalProcessLauncher:
             "scripted" if spec.get("type") == "scripted" or heuristic else "structured_output"
         )
         if harness == "structured_output":
-            from a2a_engine.llm.factory import ADC_PROVIDERS, provider_for_config, credential_env_for_config, env_var_for_provider
+            from a2a_engine.llm.factory import (
+                ADC_PROVIDERS,
+                credential_env_for_config,
+                env_var_for_provider,
+                provider_for_config,
+            )
             from a2a_engine.manifest import redact_config
 
             provider = provider_for_config(spec)
