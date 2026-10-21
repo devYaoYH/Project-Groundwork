@@ -41,6 +41,11 @@ def condition(expression, context):
     ),
 )
 def test_reconciliation_runs_on_every_eligible_production_event(event, ref, publish, configured):
+    """Revoked grants need repair even when no Terraform files changed.
+
+    Keep that repair independent of slow image builds, while ensuring PR and
+    publish-only runs cannot reach the IAM mutation job.
+    """
     context = {
         "github.event_name": event,
         "github.ref": ref,
@@ -73,6 +78,11 @@ def test_reconciliation_runs_on_every_eligible_production_event(event, ref, publ
 def test_publication_requires_successful_gates_and_the_correct_infrastructure_result(
     event, ref, publish
 ):
+    """Handle intentional skips without letting failed production gates pass.
+
+    GitHub's skipped-dependency handling can block publish-only runs; bypassing
+    it with always() must still reject failures and cancellations explicitly.
+    """
     production = ref == "refs/heads/main" and not (event == "workflow_dispatch" and publish)
     for validation, stack, infrastructure, cancelled, configured in itertools.product(
         ["success", "failure", "skipped", "cancelled"],
@@ -104,6 +114,11 @@ def test_publication_requires_successful_gates_and_the_correct_infrastructure_re
 
 
 def test_infrastructure_credentials_state_and_plans_do_not_enter_image_artifacts():
+    """Keep IAM authority and Terraform data outside the image publication path.
+
+    Separate credentials limit privilege sharing, while locking and refresh
+    prevent concurrent state writes and missed IAM drift.
+    """
     job = JOBS["infrastructure"]
     auth = next(
         step for step in job["steps"] if step.get("uses") == "google-github-actions/auth@v3"
@@ -132,6 +147,11 @@ def test_infrastructure_credentials_state_and_plans_do_not_enter_image_artifacts
     ["INFRA_PROVIDER", "INFRA_ACCOUNT", "STATE_BUCKET", "TF_VAR_project_id", "TF_VAR_region"],
 )
 def test_production_configuration_fails_closed_before_authentication(missing):
+    """Missing setup must stop releases before credential or backend defaults apply.
+
+    Otherwise a partial installation could use an unintended identity, project
+    or state location instead of the administrator's explicit configuration.
+    """
     guard = JOBS["infrastructure"]["steps"][1]
     env = {
         **os.environ,
@@ -153,6 +173,11 @@ def test_production_configuration_fails_closed_before_authentication(missing):
 
 @pytest.mark.parametrize("result", ["failure", "skipped", "cancelled"])
 def test_terraform_validation_is_a_required_release_gate(result):
+    """Passing application tests cannot compensate for unvalidated infrastructure.
+
+    The aggregate gate must reject skipped or cancelled Terraform checks as well
+    as failures, rather than reporting a misleading successful release check.
+    """
     gate = JOBS["validate"]["steps"][0]
     env = {
         **os.environ,
