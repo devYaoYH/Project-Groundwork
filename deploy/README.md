@@ -86,8 +86,8 @@ HttpOnly application session. Production refuses development login.
 
 ## Hosted resources
 
-The default target is `cicl-487801`, region `us-central1`. Bootstrap creates only
-Groundwork-named resources:
+The default target is `cicl-487801`, region `us-central1`. The hosted deployment
+uses Groundwork-named resources:
 
 - `groundwork-control` Cloud Run control service, publicly reachable login and
   assets, with application authentication on private API routes.
@@ -109,7 +109,8 @@ Groundwork-named resources:
   can access experiment data; CI has short-lived build submission credentials.
   Build can deploy services and Jobs but cannot change project IAM.
 
-Run as a project administrator:
+Run resource creation as a project administrator, then complete the
+[Terraform IAM setup and adoption](terraform/README.md) before releasing:
 
 ```sh
 python deploy/bootstrap.py --project cicl-487801 --region us-central1
@@ -117,8 +118,8 @@ python deploy/bootstrap.py --project cicl-487801 --region us-central1
 
 Before the first deployment of independent worker/runtime versions, rerun
 bootstrap to create the immutable-tag `groundwork-runtime` Artifact Registry
-repository and grant the build identity create/read access restricted to the
-`platform/runtime-bindings/` artifact prefix. Subsequent releases discover and
+repository, then reconcile Terraform to grant build create/read access restricted
+to the `platform/runtime-bindings/` artifact prefix. Subsequent releases discover and
 retain the existing digest-pinned legacy runtime images automatically.
 Catalog publication uses an exact-object JSON API upload with a generation-zero
 precondition; the build identity does not need bucket-wide object listing.
@@ -128,8 +129,10 @@ default. Hosted source commits, image digests and binding catalogs enforce the
 immutable runtime history described above.
 
 No provider secret is created with an empty value. To enable a provider, add a
-Secret Manager secret with its real value, then grant `groundwork-worker` the
-`roles/secretmanager.secretAccessor` role **on that secret**. Supported names are
+Secret Manager secret with its real value, then declare its name in Terraform
+`provider_secret_names` and the GitHub `GCP_PROVIDER_SECRET_NAMES` JSON list. Terraform grants `groundwork-worker`
+`roles/secretmanager.secretAccessor` **on that secret** and build metadata Viewer.
+Supported names are
 `groundwork-openai-api-key`, `groundwork-anthropic-api-key`,
 `groundwork-google-api-key`, and `groundwork-openrouter-api-key`. These references
 are scoped to launch Jobs, never the control API. `groundwork-session` is generated
@@ -144,15 +147,12 @@ requirements on its [model card](https://docs.cloud.google.com/gemini-enterprise
 
 The runtime identity (`groundwork-worker@PROJECT_ID.iam.gserviceaccount.com` in
 this deployment) needs `aiplatform.endpoints.predict` and `serviceusage.services.use`.
-Fresh bootstrap accepts `--vertex-adc`; an administrator can apply only that setup
-in an existing deployment with:
-
-```bash
-python -c "from deploy.bootstrap import enable_vertex_adc; enable_vertex_adc('PROJECT_ID', 'RUNTIME_SERVICE_ACCOUNT')"
-```
-
-The helper enables Vertex and creates/updates a prediction-only role. It does not
-enable partner products or grant impersonation. Host ADC is not mounted into
+Terraform now owns the prediction-only custom role and worker membership and
+reconciles them on every production release. The former `--vertex-adc` bootstrap
+flag and `enable_vertex_adc` IAM writer are retired; follow the
+[existing-role adoption instructions](terraform/README.md#initial-setup-and-adoption-administrator-once-per-project)
+before the first Terraform-enabled release. Terraform enables Vertex without
+enabling partner products or granting impersonation. Host ADC is not mounted into
 Docker automatically. Verify access under the actual runtime identity; project
 model enablement, IAM, and quota are separate prerequisites. Follow the
 [onboarding checklist](../docs/AGENT_CONFIGURATION.md#onboard-a-model-endpoint)
@@ -210,18 +210,8 @@ remain available for older revisions and rollback. Item banks, workflows and
 oracle execution still use the matching packaged game assets; private compiler
 snapshots remain unchanged.
 
-Before merging the first release using this workflow, apply the updated bootstrap
-(or the following equivalent IAM setup) with an administrator account. This is a
-one-time deployment prerequisite, not a game-author step:
-
-```sh
-gcloud iam roles create groundworkCataloguePublisher --project cicl-487801 \
-  --title='Groundwork catalogue publisher' --stage=GA \
-  --permissions=datastore.entities.create,datastore.entities.get
-gcloud projects add-iam-policy-binding cicl-487801 \
-  --member=serviceAccount:groundwork-build@cicl-487801.iam.gserviceaccount.com \
-  --role=projects/cicl-487801/roles/groundworkCataloguePublisher --condition=None
-```
+The catalogue custom role and build membership are managed by
+[Terraform](terraform/README.md), with imports for existing deployments.
 
 The publisher role has no update, delete, or list permission. Firestore server
 IAM is database-scoped, so its get permission can read a private document if its
@@ -243,15 +233,18 @@ python deploy/configure_github.py \
   --oauth-client-id CLIENT.apps.googleusercontent.com
 ```
 
-This writes nonsecret repository variables and provisions Workload Identity
-Federation restricted to the numeric repository and owner IDs, the platform
+After the administrator provisions `groundwork-infra` and its versioned state
+bucket and adopts existing IAM, this writes nonsecret repository variables and
+provisions Workload Identity Federation restricted to the numeric repository and owner IDs, the platform
 workflow, and `main` push/manual events. No service-account key is stored in
 GitHub. Pull requests run platform tests without cloud credentials. Trusted main
 pushes submit a Cloud Build candidate request, download the exact output digests
 for GitHub validation, then submit a second Cloud Build request for promotion and
 deployment. Cloud Build owns image builds and registry cache writes; GitHub needs
-only registry Reader access. All checked-in game
-packages declaring `a2a_engine.environments` are automatically installed. The
+only registry Reader access. Production IAM reconciliation uses the dedicated
+infrastructure account with IAM-management permissions and a separate main-only
+federation pool; application identities do not gain IAM administration. All
+checked-in game packages declaring `a2a_engine.environments` are automatically installed. The
 image first installs those packages, then exports route IDs from the same
 registered release declarations used by the API catalog. Next builds static
 environment and item pages from that generated JSON, so adding a trusted game
@@ -280,20 +273,11 @@ Partial/failed attempts retain their records separately in
 diagnostic artifact ID and retains provenance and timing data in
 `release-latencies`.
 
-Before using the flow, apply the updated bootstrap or these narrowly scoped grants:
-
-```sh
-for repository in groundwork groundwork-runtime; do
-  gcloud artifacts repositories add-iam-policy-binding "$repository" \
-    --project cicl-487801 --location us-central1 \
-    --member serviceAccount:groundwork-ci@cicl-487801.iam.gserviceaccount.com \
-    --role roles/artifactregistry.reader
-done
-gcloud storage buckets add-iam-policy-binding gs://cicl-487801-groundwork-build-source \
-  --member serviceAccount:groundwork-build@cicl-487801.iam.gserviceaccount.com \
-  --role roles/storage.objectCreator \
-  --condition="expression=resource.name.startsWith('projects/_/buckets/cicl-487801-groundwork-build-source/objects/ci-image-builds/'),title=groundwork-ci-images"
-```
+Before using the flow, complete [Terraform setup and adoption](terraform/README.md).
+Terraform owns the repository-scoped CI Reader and conditional candidate-manifest
+grant formerly written by bootstrap. Routine production releases reconcile IAM
+alongside building/testing, then wait for both successful validation and apply.
+Publish-only runs skip infrastructure reconciliation and hosted rollout.
 
 If PR #32's CI Writer grants were previously applied, remove those two Writer
 bindings after adding Reader; adding Reader alone does not revoke Writer.
@@ -343,8 +327,9 @@ python deploy/latency.py submit publish --project cicl-487801 --region us-centra
 Omit `--publish-only` only for an authorized hosted release and supply
 `GOOGLE_OAUTH_CLIENT_ID`. Do not fabricate validation records to skip tests.
 
-Workload Identity Federation permits impersonation of `groundwork-ci`; API
-permissions still come from that service account's roles. Bootstrap grants CI
+Workload Identity Federation permits application impersonation of `groundwork-ci`
+and infrastructure impersonation of `groundwork-infra` through separate pools; API
+permissions still come from that service account's roles. Terraform grants CI
 Cloud Build submission, use of the build identity, access to its source bucket,
 repository-scoped Artifact Registry Reader on `groundwork` and
 `groundwork-runtime`, and `roles/serviceusage.serviceUsageConsumer`. Its source-bucket access includes

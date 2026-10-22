@@ -173,7 +173,7 @@ def test_workflow_validates_cloud_candidates_before_the_second_cloud_request():
                "Verify the paired local worker and science runtime", "Test the release images without rebuilding",
                "Verify validation did not replace either image"]
     assert [names.index(name) for name in ordered] == sorted(names.index(name) for name in ordered)
-    assert set(jobs["deploy"]["needs"]) == {"validate", "platform-stack"}
+    assert set(jobs["deploy"]["needs"]) == {"validate", "platform-stack", "infrastructure"}
     assert any(step.get("uses") == "actions/download-artifact@v4" for step in jobs["deploy"]["steps"])
     assert "deploy/latency.py submit publish" in str(jobs["deploy"]["steps"])
 
