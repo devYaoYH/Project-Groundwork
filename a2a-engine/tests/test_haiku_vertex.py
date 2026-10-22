@@ -75,7 +75,7 @@ def test_haiku_55_participants_use_vertex_adc_without_an_anthropic_key(tmp_path,
     assert pool.entry("haiku-5.5-vertex").credential == "vertexai_adc"
     assert "haiku-5.5" not in pool.agents
     assert not {"sonnet-5.5", "opus-5.5"} & pool.agents.keys()
-    assert pool.entry("haiku").model == "claude-haiku-4-5-20251001"
+    assert pool.entry("haiku").model == "anthropic/claude-haiku-5.5"
     # An inline direct Anthropic configuration keeps its existing route.
     assert detect_provider("claude-haiku-5-5") == "anthropic"
     assert make_llm_client({"model": "claude-haiku-5-5"}).api_format == "anthropic"

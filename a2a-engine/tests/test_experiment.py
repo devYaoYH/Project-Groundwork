@@ -260,5 +260,5 @@ def test_a_pool_backed_experiment_hydrates_to_concrete_models():
     spec = load_experiment(workspace / "games/word-guess/experiments/pool_example.yaml")
 
     models = [agent["model"] for agent in spec.defaults["agents"]]
-    assert models == ["gpt-5-mini", "claude-haiku-4-5-20251001"]
+    assert models == ["gpt-5-mini", "anthropic/claude-haiku-5.5"]
     assert "participants" not in spec.defaults

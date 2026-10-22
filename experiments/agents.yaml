@@ -26,13 +26,17 @@ agents:
     credential: OPENAI_API_KEY
 
   haiku:
-    description: Anthropic API, Claude Haiku 4.5.
+    description: Claude Haiku 5.5 via OpenRouter.
     type: llm
-    model: claude-haiku-4-5-20251001
-    api_format: anthropic
-    credential: ANTHROPIC_API_KEY
+    model: anthropic/claude-haiku-5.5
+    api_format: openai
+    api_base: https://openrouter.ai/api/v1
+    credential: OPENROUTER_API_KEY
+    capabilities:
+      input: [text, image]
+      evidence: https://openrouter.ai/anthropic/claude-haiku-5.5
 
-  # Haiku 5.5 uses Vertex ADC; the existing Haiku 4.5 routes stay stable.
+  # Optional Vertex ADC route; the default Haiku binding uses OpenRouter.
   haiku-5.5-vertex:
     description: Claude Haiku 5.5 via Vertex AI, using Google ADC.
     type: llm
@@ -71,16 +75,18 @@ agents:
     temperature: 0.2
     max_tokens: 4096
 
-  # The same logical Haiku as above, routed through OpenRouter instead of the
-  # Anthropic API. Useful for comparing routes, and an example of why the pool
-  # exists: `haiku` and `haiku-or` differ only in how they are reached.
+  # Keep the existing OpenRouter name for experiments that select it.
+  # Both Haiku names now resolve to Haiku 5.5 through OpenRouter.
   haiku-or:
-    description: Claude Haiku 4.5 via OpenRouter.
+    description: Claude Haiku 5.5 via OpenRouter (alias of haiku).
     type: llm
-    model: anthropic/claude-haiku-4.5
+    model: anthropic/claude-haiku-5.5
     api_format: openai
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY
+    capabilities:
+      input: [text, image]
+      evidence: https://openrouter.ai/anthropic/claude-haiku-5.5
 
   # Calls no provider, so it needs no credential. Useful for holding a seat in
   # a line-up while only some positions are model-backed.

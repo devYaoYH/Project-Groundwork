@@ -174,24 +174,27 @@ def test_original_ui_assets_do_not_publish_workspace_files(platform):
     assert client.get("/environment-assets/negotiation/webapp/static/styles/base.css").status_code == 200
 
 
-def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
+@pytest.mark.parametrize("name", ["haiku", "haiku-or", "haiku-5.5-vertex"])
+def test_haiku_55_choice_freezes_to_a_concrete_model(platform, name):
     """The Agents API and design compiler must agree on published bindings."""
     from pathlib import Path
     import yaml
 
     app, control, _ = platform
     alice = sign_in(app, "Alice")
-    name = "haiku-5.5-vertex"
     response = alice.get("/api/agent-pool")
     assert response.status_code == 200
     entries = {entry["name"]: entry for entry in response.json()["agents"]}
     assert name in entries
     assert not {"sonnet-5.5", "opus-5.5"} & entries.keys()
     entry = entries[name]
-    assert entry["model"] == "claude-haiku-5-5"
-    assert entry["api_format"] == "vertexai_anthropic"
+    vertex = name == "haiku-5.5-vertex"
+    assert entry["model"] == ("claude-haiku-5-5" if vertex else "anthropic/claude-haiku-5.5")
+    assert entry["api_format"] == ("vertexai_anthropic" if vertex else "openai")
     assert "source" not in entry
-    assert entry["credential"] == "vertexai_adc"
+    assert entry["credential"] == ("vertexai_adc" if vertex else "OPENROUTER_API_KEY")
+    if not vertex:
+        assert entry["api_base"] == "https://openrouter.ai/api/v1"
     assert set(entry["capabilities"]["input"]) == {"text", "image"}
     assert entry["capabilities"]["evidence"]
     assert entry["credential_present"] is None
@@ -212,8 +215,11 @@ def test_haiku_55_vertex_choice_freezes_to_a_concrete_model(platform):
     assert plan
     for config in plan:
         assert [agent["model"] for agent in config["agents"]] == [entry["model"]] * 2
-        assert all(agent["api_format"] == "vertexai_anthropic" for agent in config["agents"])
-        assert all(agent["gcp_location"] == "global" for agent in config["agents"])
-        assert all(agent["credential"] == "vertexai_adc" for agent in config["agents"])
+        assert all(agent["api_format"] == entry["api_format"] for agent in config["agents"])
+        assert all(agent["credential"] == entry["credential"] for agent in config["agents"])
+        if vertex:
+            assert all(agent["gcp_location"] == "global" for agent in config["agents"])
+        else:
+            assert all(agent["api_base"] == entry["api_base"] for agent in config["agents"])
         assert all(agent["capabilities"] == entry["capabilities"] for agent in config["agents"])
         assert all("api_key" not in agent and "source" not in agent for agent in config["agents"])
