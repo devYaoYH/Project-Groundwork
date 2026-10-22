@@ -170,10 +170,10 @@ that file is gitignored and shadows the shared defaults entry by entry, so the
 experiment config stays portable.
 
 ```yaml
-# agents.local.yaml — same logical name, different route
+# agents.local.yaml — override the shared endpoint for a logical name
 agents:
   haiku:
-    model: anthropic/claude-haiku-4.5
+    model: anthropic/claude-haiku-5.5
     api_format: openai
     api_base: https://openrouter.ai/api/v1
     credential: OPENROUTER_API_KEY
@@ -182,21 +182,26 @@ agents:
 Bindings retain their [credential selector](#credentials-and-endpoints) during
 hydration; secret values stay in the runtime environment.
 
-The shared `haiku-5.5-vertex` binding selects `claude-haiku-5-5` with
-`credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location
-`global`. It accepts text and images. Existing Haiku 4.5 bindings stay unchanged;
-Sonnet and Opus 5.5 remain unpublished. See [Vertex setup](../deploy/README.md#vertex-ai-adc)
-for model enablement and runtime permissions.
+The shared `haiku` and `haiku-or` bindings replace Haiku 4.5 with
+`anthropic/claude-haiku-5.5` through OpenRouter, using `api_format: openai`,
+`api_base: https://openrouter.ai/api/v1`, and `credential: OPENROUTER_API_KEY`.
+Both accept text and images. New resolutions use these settings; existing locked
+experiments retain their concrete model, endpoint, and runtime pins. Private
+`agents.local.yaml` overrides still take precedence.
 
-The shipped pool includes three OpenRouter bindings: `ds-flash`
+The optional `haiku-5.5-vertex` binding selects `claude-haiku-5-5` with
+`credential: vertexai_adc`, `api_format: vertexai_anthropic`, and location
+`global`. It also accepts text and images. Sonnet and Opus 5.5 remain unpublished.
+See [Vertex setup](../deploy/README.md#vertex-ai-adc) for model enablement and
+runtime permissions.
+
+The shipped pool includes four OpenRouter bindings: `ds-flash`
 (`deepseek/deepseek-v4-flash`), `ds-v4.1-flash`
-(`deepseek/deepseek-v4.1-flash`, verified text and image input), and `haiku-or`.
+(`deepseek/deepseek-v4.1-flash`, verified text and image input), `haiku`, and its `haiku-or` alias.
 One `OPENROUTER_API_KEY`
 reaches many vendors cheaply, which makes it the practical way to explore a
-line-up before committing to a provider. `haiku` and `haiku-or` are the same
-model by two routes, which is the clearest illustration of why the pool is a
-layer rather than a lookup table. Any OpenRouter model id works: copy an entry
-and change `model`.
+line-up before committing to a provider. Any OpenRouter model id works: copy an
+entry and change `model`.
 
 Three rules keep a line-up unambiguous:
 

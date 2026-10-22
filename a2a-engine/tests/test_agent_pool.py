@@ -108,7 +108,7 @@ def test_openrouter_entries_carry_the_routing_a_client_needs():
     workspace = Path(__file__).resolve().parents[2]
     pool = load_agent_pool(workspace / "experiments")
 
-    for name in ("ds-flash", "haiku-or"):
+    for name in ("ds-flash", "haiku", "haiku-or"):
         entry = pool.entry(name)
         assert entry.api_base == "https://openrouter.ai/api/v1"
         assert entry.api_format == "openai"
@@ -129,9 +129,8 @@ def test_shipped_deepseek_41_binding_admits_image_seats():
     assert entry.credential == "OPENROUTER_API_KEY"
 
 
-def test_one_logical_agent_can_be_reached_by_two_routes():
-    """`haiku` and `haiku-or` are the same model on different paths — the whole
-    reason the pool is a layer rather than a lookup."""
+def test_both_shared_haiku_names_use_the_replacement_openrouter_model():
+    """Existing participant names pick up the replacement when resolved anew."""
     from pathlib import Path
 
     workspace = Path(__file__).resolve().parents[2]
@@ -139,9 +138,11 @@ def test_one_logical_agent_can_be_reached_by_two_routes():
 
     direct, routed = pool.entry("haiku"), pool.entry("haiku-or")
 
-    assert direct.api_format == "anthropic" and routed.api_format == "openai"
-    assert direct.credential != routed.credential
-    assert direct.api_base is None and routed.api_base
+    assert direct.as_agent_config() == routed.as_agent_config()
+    assert direct.model == "anthropic/claude-haiku-5.5"
+    assert direct.credential == "OPENROUTER_API_KEY"
+    assert all("4.5" not in (entry.model or "") and "4-5" not in (entry.model or "")
+               for entry in pool.agents.values())
 
 
 def test_runtime_harness_survive_pool_hydration_and_external_needs_no_key(monkeypatch):

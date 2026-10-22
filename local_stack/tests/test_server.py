@@ -1024,7 +1024,8 @@ def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeyp
     """A live launch fails inside an HTTP client when a key is absent, so the
     line-up and its credential state have to be inspectable before launch."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused-anthropic-key")
 
     workspace = Path(__file__).resolve().parents[2]
     control = ControlPlane(tmp_path / "a2a.db", workspace=workspace)
@@ -1032,13 +1033,17 @@ def test_experiment_agents_reports_models_and_credential_state(tmp_path, monkeyp
 
     assert report["declares_agents"] is True
     assert report["ready_for_live"] is False
-    assert report["missing_credentials"] == ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+    assert set(report["missing_credentials"]) == {"OPENAI_API_KEY", "OPENROUTER_API_KEY"}
     models = {agent["model"] for agent in report["agents"]}
-    assert "gpt-4o-mini" in models
-    assert {agent["provider"] for agent in report["agents"]} == {"openai", "anthropic"}
+    assert models == {"gpt-4o-mini", "anthropic/claude-haiku-5.5"}
+    assert {agent["provider"] for agent in report["agents"]} == {"openai", "openrouter"}
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    report = control.experiment_agents("games/word-guess/experiments/example.yaml")
+    assert set(report["missing_credentials"]) == {"OPENROUTER_API_KEY"}
+    assert report["ready_for_live"] is False
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     assert control.experiment_agents("games/word-guess/experiments/example.yaml")["ready_for_live"] is True
 
 
