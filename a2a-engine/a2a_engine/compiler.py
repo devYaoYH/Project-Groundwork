@@ -488,6 +488,24 @@ def _base_config(declaration: ReleaseDeclaration, design: Design, *,
                 f"roster[{index}].binding", str(exc)
             )]) from exc
         defaults["agents"][index] = effective
+    # An LLM binding that is neither a pool agent nor a model string a provider
+    # recognises compiles to an empty base URL and fails mid-episode. Name the
+    # binding here instead.
+    from .llm.factory import provider_for_config
+    for index, (participant, agent) in enumerate(zip(design.roster, defaults["agents"])):
+        if participant.kind != "llm" or participant.runtime == "external" or not agent.get("model"):
+            continue
+        if agent.get("api_base") or provider_for_config(agent) is not None:
+            continue
+        available = ", ".join(sorted(
+            name for name, entry in (agent_pool.agents.items() if agent_pool else ())
+            if entry.type == "llm"
+        ))
+        raise DesignValidationError([ValidationIssue(
+            f"roster[{index}].binding",
+            f"{participant.binding!r} is not a configured agent or a recognised model"
+            + (f"; configured agents: {available}" if available else ""),
+        )])
     return defaults
 
 

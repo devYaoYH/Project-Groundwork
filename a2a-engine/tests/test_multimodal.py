@@ -181,7 +181,7 @@ def test_typed_release_and_role_compilation_reject_incompatible_seat(bank, tmp_p
     release_path.write_text(yaml.safe_dump(raw))
     release = load_release_declaration(release_path)
     design = Design(release="fixture", units={"episodes_per_cell": 1}, seed={"root": 1},
-                    roster=[{"id": "viewer", "role": "viewer", "binding": "arbitrary-vision-name", "api_format": "openai"}])
+                    roster=[{"id": "viewer", "role": "viewer", "binding": "vendor/arbitrary-vision-name", "api_format": "openai"}])
     assert any(issue.path.endswith("capabilities") for issue in validate(design, release, bank))
     design.roster[0].capabilities = CAPS
     config = compile(design, release, bank, experiment_id="fixture", experiment_name="fixture").preview_episode_config

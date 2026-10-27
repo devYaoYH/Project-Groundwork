@@ -29,12 +29,12 @@ function initialDesign(detail: EnvironmentDetail) {
     release: `${detail.environment_id}@${detail.release.version}`,
     parameters,
     units: { episodes_per_cell: 1 },
-    roster: detail.roles.flatMap((role) => Array.from({ length: role.count }, (_, index) => ({
-      id: `${role.id}_${index + 1}`,
-      role: role.id,
-      kind: role.accepts.includes("scripted") ? "scripted" : role.accepts[0],
-      binding: "baseline",
-    }))),
+    roster: detail.roles.flatMap((role) => Array.from({ length: role.count }, (_, index) => {
+      const kind = role.accepts.includes("scripted") ? "scripted" : role.accepts[0];
+      // "baseline" names a scripted strategy, not a model. A role that accepts
+      // no scripted participant starts unbound so the author picks an agent.
+      return { id: `${role.id}_${index + 1}`, role: role.id, kind, binding: kind === "scripted" ? "baseline" : "" };
+    })),
     seed: { root: 1 },
   });
 }
