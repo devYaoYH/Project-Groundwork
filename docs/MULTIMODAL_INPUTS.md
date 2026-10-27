@@ -135,11 +135,17 @@ Traces, manifests, configs, SQLite/cloud persistence and replay preserve image
 references, MIME metadata, and digests. Inline `data` is removed from persisted
 schemas and events; provider telemetry records media metadata, never base64.
 `A2A_CAPTURE_CONTENT=false` continues to suppress provider input/output content.
-Provider HTTP error bodies are not logged because they may echo image bytes.
-Image-call exception spans also omit provider messages and stack traces while
-retaining the exception type. Image provider errors exposed to callers retain
-safe status/retry metadata and suppress provider diagnostic text, so retry logs
-and ancestor spans cannot reintroduce the image payload.
+Provider HTTP failures expose a bounded JSON `error.message` (or top-level
+`message`) in the owner-visible runner log, including the frontend's launch log
+and event stream. For example, a 401 can report `API key expired.`. Raw response
+bodies and extra metadata are omitted because they may echo the submitted
+request. The diagnostic redacts the active API key, common credential formats,
+URLs, data URLs and long encoded data, removes control characters, and caps the
+message at 1,000 characters. Malformed, non-JSON, unreadable or oversized bodies
+retain the generic HTTP failure. Image-call exception spans and caller errors
+carry the sanitized detail with the exception type and status/retry metadata;
+image-call exception stack traces remain omitted. This requires a runtime built
+with this change; existing frozen experiments retain their pinned runtime.
 Replay resolves the recorded digest against the packaged release asset store;
 retain that store with the release/trace bundle. It never substitutes a caption.
 

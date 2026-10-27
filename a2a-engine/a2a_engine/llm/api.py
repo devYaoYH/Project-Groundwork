@@ -56,6 +56,7 @@ except ImportError:
     _gcp_load_credentials_from_file = None
     _GcpRequest = None
 
+from a2a_engine.llm.errors import provider_error_detail
 from a2a_engine.llm.model_config import get_model_config
 
 
@@ -141,14 +142,16 @@ def _finish_chat_span(span, *, response_model: str | None = None,
             pass
 
 
-def _record_chat_error(span, exc: BaseException, *, image_input: bool = False) -> None:
+def _record_chat_error(span, exc: BaseException, *, image_input: bool = False,
+                       detail: str | None = None) -> None:
     span.set_status(Status(StatusCode.ERROR))
     span.set_attribute("error.type", type(exc).__name__)
     if image_input:
         # Provider diagnostics may echo submitted bytes. Keep the exception type
         # while overriding both attributes that can contain the provider body.
         span.record_exception(exc, attributes={
-            "exception.message": "Image provider request failed; diagnostic content omitted",
+            "exception.message": (f"Image provider request failed: {detail}" if detail else
+                                  "Image provider request failed; diagnostic content omitted"),
             "exception.stacktrace": "",
         })
     else:
@@ -372,9 +375,12 @@ def call_llm_streaming(
         )
         return result
     except BaseException as exc:
-        _record_chat_error(span, exc, image_input=image_input)
+        detail = provider_error_detail(exc, api_key=api_key)
+        if detail:
+            log.error("Provider request failed (HTTP %s): %s", exc.code, detail)
+        _record_chat_error(span, exc, image_input=image_input, detail=detail)
         if image_input and isinstance(exc, Exception):
-            raise ImageProviderError(exc) from None
+            raise ImageProviderError(exc, detail=detail) from None
         raise
     finally:
         span.end()
@@ -550,9 +556,12 @@ def call_llm_oneshot_full(
                 "duration_s": round(time.monotonic() - t0, 3),
                 "response": response_metadata}
     except BaseException as exc:
-        _record_chat_error(span, exc, image_input=image_input)
+        detail = provider_error_detail(exc, api_key=api_key)
+        if detail:
+            log.error("Provider request failed (HTTP %s): %s", exc.code, detail)
+        _record_chat_error(span, exc, image_input=image_input, detail=detail)
         if image_input and isinstance(exc, Exception):
-            raise ImageProviderError(exc) from None
+            raise ImageProviderError(exc, detail=detail) from None
         raise
     finally:
         span.end()
