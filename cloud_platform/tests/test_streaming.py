@@ -99,3 +99,38 @@ def test_stream_stops_reading_on_disconnect_and_session_expiry():
         assert len(frames) == 2 and "event: auth.expired" in frames[-1]
 
     asyncio.run(check())
+
+
+def test_provider_error_detail_is_available_in_owner_log_api_and_event_stream(platform, monkeypatch, caplog):
+    from io import BytesIO
+    from urllib.error import HTTPError
+    import pytest
+    from a2a_engine.llm import api
+
+    def expired_key(*args, **kwargs):
+        raise HTTPError("https://fixture.invalid", 401, "Unauthorized", {},
+                        BytesIO(b'{"error":{"message":"API key expired.","metadata":{"key":"private-key"}}}'))
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", expired_key)
+    with pytest.raises(HTTPError):
+        api.call_llm_oneshot(api_format="openai", api_base="https://fixture.invalid", api_key="private-key",
+                             model="fixture", messages=[{"role": "user", "content": "hello"}])
+    line = next(record.getMessage() for record in caplog.records if "API key expired." in record.getMessage())
+
+    app, control, _ = platform
+    alice, bob = sign_in(app, "Alice"), sign_in(app, "Bob")
+    experiment = create_experiment(alice)
+    launch = alice.post("/api/launches", json={"experiment_id": experiment["id"], "mode": "smoke"}).json()
+    identifier = launch["id"]
+    key = f"launches/{identifier}/detail.json"
+    control.artifacts.put(key, json.dumps({"attempts": [], "progress": {},
+                                         "runner_logs": [event(1, line)]}).encode())
+    control.repo.claim("launches", identifier, {"QUEUED"}, {"status": "FAILED", "detail_key": key})
+    detail = alice.get(f"/api/launches/{identifier}").json()
+    assert "API key expired." in detail["runner_logs"][0]["payload"]["line"]
+    stream = alice.get(f"/api/launches/{identifier}/events")
+    assert stream.status_code == 200
+    assert "event: runner.log" in stream.text and "API key expired." in stream.text
+    assert "private-key" not in stream.text
+    assert bob.get(f"/api/launches/{identifier}").status_code == 404
+    assert bob.get(f"/api/launches/{identifier}/events").status_code == 404

@@ -501,3 +501,73 @@ def test_image_provider_retry_logs_and_exhaustion_preserve_policy_without_bytes(
     assert encoded not in str(error.value)
     assert encoded not in error.value.failure.error_message
     assert encoded not in caplog.text
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("api_format", ["openai", "anthropic"])
+@pytest.mark.parametrize("image_input", [False, True])
+def test_http_error_body_reaches_logs_and_image_failures_without_request_echo(
+    bank, monkeypatch, caplog, stream, api_format, image_input,
+):
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from a2a_engine.llm.retry import ImageProviderError, is_retryable
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(api, "get_tracer", lambda: provider.get_tracer("provider-errors"))
+    encoded = base64.b64encode(PNG).decode()
+    key = "fixture-secret-key"
+    requests = []
+
+    def fail(request, **kwargs):
+        requests.append(request)
+        payload = {"error": {"message": "API key expired.",
+                              "metadata": {"request": encoded, "key": key}}}
+        raise HTTPError(request.full_url, 401, "Unauthorized", {}, BytesIO(json.dumps(payload).encode()))
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", fail)
+    invoke = api.call_llm_streaming if stream else api.call_llm_oneshot
+    try:
+        with pytest.raises(ImageProviderError if image_input else HTTPError) as failure:
+            invoke(api_format=api_format, api_base="https://fixture.invalid", api_key=key, model="fixture",
+                   messages=message(bank) if image_input else [{"role": "user", "content": "hello"}],
+                   capabilities=CAPS, asset_root=str(bank.asset_store.root), max_tokens=20, temperature=0)
+        assert len(requests) == 1
+        assert not is_retryable(failure.value)
+        assert "Provider request failed (HTTP 401): API key expired." in caplog.text
+        span = exporter.get_finished_spans()[0]
+        output = caplog.text + str(failure.value) + str(span.events)
+        if image_input:
+            assert "API key expired." in str(failure.value)
+            assert "API key expired." in span.events[0].attributes["exception.message"]
+            assert failure.value.status_code == 401
+        assert encoded not in output and key not in output
+    finally:
+        provider.shutdown()
+
+
+def test_image_rate_limit_body_keeps_retry_after_and_failure_detail(bank, monkeypatch, caplog):
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from a2a_engine.llm.retry import RetryPolicy, RetryExhausted, retry_after_seconds
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise HTTPError("https://fixture.invalid", 429, "Too Many Requests", {"Retry-After": "0"},
+                        BytesIO(b'{"error":{"message":"Rate limit exceeded; try again later."}}'))
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", fail)
+    client = api.LLMClient(model="fixture", api_base="https://fixture.invalid", capabilities=CAPS, asset_root=str(bank.asset_store.root),
+                           retry=RetryPolicy(max_attempts=2, backoff_base=0, jitter_ratio=0, retry_after_jitter_ratio=0))
+    with pytest.raises(RetryExhausted) as failure:
+        client.oneshot(message(bank))
+    assert len(calls) == 2
+    assert retry_after_seconds(failure.value.last_exception) == 0
+    assert "Rate limit exceeded; try again later." in failure.value.failure.error_message
+    assert "Rate limit exceeded; try again later." in caplog.text

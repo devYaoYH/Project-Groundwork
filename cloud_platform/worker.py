@@ -40,6 +40,38 @@ class _LiveDetailPublisher:
         self.key = f"launches/{launch_id}/live-detail.json"
         self.offset = 0
         self.pending = b""
+        self.runner_line = 0
+        self.mirror_warning_logged = False
+
+    def _line(self, line):
+        self._mirror_line(line)
+        self.control._line(self.launch_id, line)
+
+    def _mirror_line(self, line):
+        # The worker owns infrastructure logging even for older pinned runtimes.
+        # A standalone JSON stdout line is ingested by Cloud Run as a structured
+        # log without an SDK, extra credentials, or changes to the runtime image.
+        if self.worker.artifacts.backend != "gcp":
+            return
+        self.runner_line += 1
+        level = re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ "
+                         r"(DEBUG|INFO|WARNING|ERROR|CRITICAL) [^:]+: ", line)
+        entry = {"component": "groundwork.runner", "launch_id": self.launch_id,
+                 "runner_line": self.runner_line, "severity": level[1] if level else "INFO"}
+        for variable, field in (("CLOUD_RUN_JOB", "job_name"), ("CLOUD_RUN_EXECUTION", "execution_name")):
+            if os.getenv(variable):
+                entry[field] = os.environ[variable]
+        # JSON escaping can multiply the byte size. Keep even fully escaped
+        # chunks comfortably below Cloud Logging's 256 KiB entry limit.
+        parts = [line[start:start + 16384] for start in range(0, len(line), 16384)] or [""]
+        try:
+            for index, part in enumerate(parts, 1):
+                print(json.dumps({**entry, "message": part, "line_part": index, "line_parts": len(parts)}), flush=True)
+        except Exception:
+            # Operator visibility must not stop inference or evidence publication.
+            if not self.mirror_warning_logged:
+                self.mirror_warning_logged = True
+                logging.warning("runner stdout mirror unavailable for launch %s; file logs preserved", self.launch_id)
 
     def consume_logs(self, *, final=False):
         try:
@@ -56,16 +88,16 @@ class _LiveDetailPublisher:
                 lines = (self.pending + chunk).split(b"\n")
                 self.pending = lines.pop()
                 for line in lines:
-                    self.control._line(self.launch_id, line.decode("utf-8", errors="replace").rstrip("\r"))
+                    self._line(line.decode("utf-8", errors="replace").rstrip("\r"))
                 # A malformed endless stdout line must not grow worker memory.
                 # The complete bytes still remain in immutable runner.log.
                 if len(self.pending) > 64 * 1024:
-                    self.control._line(self.launch_id, self.pending[:64 * 1024].decode("utf-8", errors="replace") + " [long line truncated]")
+                    self._line(self.pending[:64 * 1024].decode("utf-8", errors="replace") + " [long line truncated]")
                     self.pending = b""
                 if not final or not chunk:
                     break
         if final and self.pending:
-            self.control._line(self.launch_id, self.pending.decode("utf-8", errors="replace"))
+            self._line(self.pending.decode("utf-8", errors="replace"))
             self.pending = b""
 
     def publish(self):
