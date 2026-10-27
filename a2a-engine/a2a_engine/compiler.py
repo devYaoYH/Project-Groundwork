@@ -18,7 +18,15 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .agent_pool import AgentPool
-from .design import Design, DesignValidationError, ParticipantConfig, ValidationIssue
+from .design import (
+    AgentReference,
+    Design,
+    DesignValidationError,
+    ModelBinding,
+    ParticipantConfig,
+    TypedParticipantConfig,
+    ValidationIssue,
+)
 from .environment import ParameterConfig, ReleaseDeclaration
 from .items import Item, ItemBank
 from .provenance import build_provenance
@@ -77,6 +85,7 @@ def validate(
     bank: ItemBank,
     *,
     release_id: str | None = None,
+    allow_unbound: bool = False,
 ) -> list[ValidationIssue]:
     """Return every semantic error without compiling a partial plan."""
 
@@ -86,7 +95,7 @@ def validate(
     parameters = {parameter.name: parameter for parameter in declaration.parameters}
     _validate_release_reference(design, declaration, release_id, issues)
     _validate_dispositions(design, parameters, bank, issues)
-    _validate_roster(design, declaration, issues)
+    _validate_roster(design, declaration, issues, allow_unbound=allow_unbound)
     communication = declaration.engine.defaults.get("communication", {}) if declaration.engine else {}
     if "communication_topology" in design.parameters and "topology" in communication:
         issues.append(ValidationIssue("parameters.communication_topology", "profile conflicts with direct communication.topology"))
@@ -277,13 +286,16 @@ def _validate_dispositions(
 
 
 def _validate_roster(
-    design: Design, declaration: ReleaseDeclaration, issues: list[ValidationIssue]
+    design: Design, declaration: ReleaseDeclaration, issues: list[ValidationIssue], *,
+    allow_unbound: bool = False,
 ) -> None:
     ids = [participant.id for participant in design.roster]
     if len(ids) != len(set(ids)):
         issues.append(ValidationIssue("roster", "participant ids must be unique"))
     for index, participant in enumerate(design.roster):
-        if participant.kind != "human" and participant.runtime != "external" and not participant.binding:
+        unbound_draft = allow_unbound and design.schema_version == 2 and not participant.binding_name
+        if (participant.kind != "human" and participant.runtime != "external"
+                and not participant.binding_name and not unbound_draft):
             issues.append(ValidationIssue(
                 f"roster[{index}].binding", "a non-human participant needs a binding"
             ))
@@ -291,7 +303,7 @@ def _validate_roster(
             issues.append(ValidationIssue(f"roster[{index}].runtime", "remote runtimes are supported only by calendar"))
         if declaration.environment_id == "calendar" and participant.kind == "human":
             issues.append(ValidationIssue(f"roster[{index}].kind", "human is not yet supported"))
-        if participant.runtime == "local_process" and participant.kind == "scripted" and participant.binding not in {None, "baseline"}:
+        if participant.runtime == "local_process" and participant.kind == "scripted" and participant.binding_name not in {None, "baseline"}:
             issues.append(ValidationIssue(f"roster[{index}].binding", "local_process supports the baseline scripted binding only"))
     declared_roles = {role.id: role for role in declaration.roles}
     required_counts = Counter({role.id: role.count for role in declaration.roles})
@@ -320,19 +332,27 @@ def _validate_roster(
         if (
             participant.kind == "scripted"
             and participant.runtime != "external"
-            and participant.binding
+            and participant.binding_name
             and role.scripted_bindings
-            and participant.binding not in role.scripted_bindings
+            and participant.binding_name not in role.scripted_bindings
         ):
             supported = ", ".join(sorted(role.scripted_bindings))
             issues.append(ValidationIssue(
                 f"roster[{index}].binding",
-                f"unsupported scripted binding {participant.binding!r}; supported bindings: {supported}",
+                f"unsupported scripted binding {participant.binding_name!r}; supported bindings: {supported}",
             ))
         from .modalities import validate_seat
+        # A typed reference inherits provider/capability settings from the pool;
+        # validate its effective config after resolution in _base_config.
+        unbound_draft = allow_unbound and design.schema_version == 2 and not participant.binding_name
+        if unbound_draft or isinstance(participant.binding, AgentReference):
+            continue
+        model_config = (
+            participant.binding.as_agent_config() if isinstance(participant.binding, ModelBinding) else {}
+        )
         try:
-            validate_seat({"type": participant.kind, "model": participant.binding,
-                           "runtime": participant.runtime, "api_format": participant.api_format,
+            validate_seat({**model_config, "type": participant.kind, "model": participant.binding_name,
+                           "runtime": participant.runtime, "api_format": participant.api_format or model_config.get("api_format"),
                            "capabilities": participant.capabilities},
                           declaration.required_modalities | role.required_modalities)
         except ValueError as exc:
@@ -461,25 +481,42 @@ def _base_config(declaration: ReleaseDeclaration, design: Design, *,
             **({"runtime": participant.runtime} if "runtime" in participant.model_fields_set else {}),
             **({"harness": participant.harness} if participant.harness else {}),
             **(
-                {"model": participant.binding}
-                if participant.kind == "llm" and participant.binding
-                else ({"binding": participant.binding} if participant.binding else {})
+                {"model": participant.binding_name}
+                if participant.kind == "llm" and participant.binding_name
+                else ({"binding": participant.binding_name} if participant.binding_name else {})
             ),
         }
         for participant in design.roster
     ]
-    # A design roster names workspace bindings. Resolve them before provenance
-    # is stamped and the plan is frozen, never when replaying a locked plan.
-    # Concrete model bindings remain supported for existing authored designs.
+    # Version 2 references resolve only against the pool. Legacy strings keep
+    # their original interpretation so existing designs retain their digests.
     for index, (participant, agent) in enumerate(zip(design.roster, defaults["agents"])):
-        if participant.kind != "llm" or agent_pool is None or participant.binding not in agent_pool.agents:
+        if participant.kind != "llm":
             continue
-        resolved = agent_pool.entry(participant.binding).as_agent_config()
-        if resolved.get("type") != "llm" or not resolved.get("model"):
+        if isinstance(participant.binding, ModelBinding):
+            resolved = {"type": "llm", **participant.binding.as_agent_config()}
+        elif isinstance(participant.binding, AgentReference):
+            if agent_pool is None or participant.binding_name not in agent_pool.agents:
+                available = ", ".join(sorted(agent_pool.agents)) if agent_pool else "none"
+                raise DesignValidationError([ValidationIssue(
+                    f"roster[{index}].binding",
+                    f"unknown agent reference {participant.binding_name!r}; configured agents: {available}",
+                )])
+            resolved = agent_pool.entry(participant.binding_name).as_agent_config()
+        elif agent_pool is not None and participant.binding_name in agent_pool.agents:
+            resolved = agent_pool.entry(participant.binding_name).as_agent_config()
+        else:
+            continue
+        model = resolved.get("model")
+        if resolved.get("type") != "llm" or not isinstance(model, str) or not model.strip():
             raise DesignValidationError([ValidationIssue(
                 f"roster[{index}].binding", "the selected binding must configure an LLM model"
             )])
-        effective = {**resolved, **agent, "model": resolved["model"]}
+        effective = {**resolved, **agent, "model": model}
+        if design.schema_version == 2 and effective.get("harness") not in {None, "structured_output"}:
+            raise DesignValidationError([ValidationIssue(
+                f"roster[{index}].binding", "the selected LLM binding requires a structured_output harness"
+            )])
         from .modalities import validate_seat
         try:
             validate_seat(effective, _seat_requirements(participant, declaration))
@@ -503,7 +540,7 @@ def _base_config(declaration: ReleaseDeclaration, design: Design, *,
         ))
         raise DesignValidationError([ValidationIssue(
             f"roster[{index}].binding",
-            f"{participant.binding!r} is not a configured agent or a recognised model"
+            f"{participant.binding_name!r} is not a configured agent or a recognised model"
             + (f"; configured agents: {available}" if available else ""),
         )])
     return defaults
@@ -514,13 +551,13 @@ def _seat_requirements(participant, declaration):
         (role.required_modalities for role in declaration.roles if role.id == participant.role), set())
 
 
-def _runtime_agent_type(participant: ParticipantConfig, declaration: ReleaseDeclaration) -> str:
-    if participant.kind != "scripted" or not participant.role or not participant.binding:
+def _runtime_agent_type(participant: ParticipantConfig | TypedParticipantConfig, declaration: ReleaseDeclaration) -> str:
+    if participant.kind != "scripted" or not participant.role or not participant.binding_name:
         return participant.kind
     role = next((role for role in declaration.roles if role.id == participant.role), None)
     if role is None:
         return participant.kind
-    return role.scripted_bindings.get(participant.binding, participant.kind)
+    return role.scripted_bindings.get(participant.binding_name, participant.kind)
 
 
 def _trace_release(declaration: ReleaseDeclaration, release_id: str) -> dict[str, Any]:

@@ -13,10 +13,11 @@ export type ClientDisposition = {
 };
 
 export type ClientDesign = {
+  schema_version?: number;
   release?: string;
   parameters?: Record<string, ClientDisposition>;
   units?: { episodes_per_cell?: number };
-  roster?: { id?: string; role?: string | null; kind?: string; binding?: string | null; runtime?: string; harness?: string | null; capabilities?: { input?: string[]; evidence?: string }; api_format?: string }[];
+  roster?: { id?: string; role?: string | null; kind?: string; binding?: unknown; runtime?: string; harness?: string | null; capabilities?: { input?: string[]; evidence?: string }; api_format?: string }[];
   seed?: { mode?: string; root?: number };
 };
 
@@ -35,6 +36,9 @@ export function parseClientDesign(text: string): ClientDesign | null {
 export function validateClientDesign(design: ClientDesign | null, detail: EnvironmentDetail): ClientIssue[] {
   if (!design) return [{ path: "$", message: "Invalid YAML." }];
   const issues: ClientIssue[] = [];
+  if (design.schema_version !== undefined && ![1, 2].includes(design.schema_version)) {
+    issues.push({ path: "schema_version", message: "Supported design schema versions are 1 and 2." });
+  }
   const parameters = design.parameters ?? {};
   // The declaration is an API response too: a release that answers with a
   // missing collection must produce validation issues, never a crash in the
@@ -112,6 +116,41 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
     issues.push({ path: "roster", message: `Release requires ${expectedRoleCount} participants.` });
   }
   roster.forEach((participant, index) => {
+    const binding = participant.binding;
+    let bindingName = typeof binding === "string" ? binding : undefined;
+    let inheritsCapabilities = false;
+    if (design.schema_version === 2) {
+      const path = `roster[${index}].binding`;
+      if (!["llm", "scripted", "human"].includes(participant.kind ?? "")) {
+        issues.push({ path: `roster[${index}].kind`, message: "Choose llm, scripted, or human." });
+      }
+      bindingName = undefined;
+      if (binding !== undefined && binding !== null) {
+        if (participant.kind === "human") {
+          issues.push({ path, message: "A human participant has no model or strategy binding." });
+        } else if (typeof binding !== "object" || Array.isArray(binding)) {
+          issues.push({ path, message: "Use a typed agent, model, or strategy binding." });
+        } else {
+          const typed = binding as Record<string, unknown>;
+          inheritsCapabilities = participant.kind === "llm" && typed.kind === "agent" && !participant.capabilities;
+          const allowed = participant.kind === "llm" ? ["agent", "model"] : ["strategy"];
+          if (!allowed.includes(String(typed.kind))) {
+            issues.push({ path, message: `This participant requires a ${allowed.join(" or ")} binding.` });
+          } else {
+            const name = typed.kind === "model" ? typed.model : typed.name;
+            if (typeof name === "string" && name.trim()) bindingName = name;
+            else issues.push({ path, message: "The binding needs a nonblank name or model." });
+            if (typed.kind === "model" && !MODEL_CREDENTIALS.includes(String(typed.credential))) {
+              issues.push({ path: `${path}.credential`, message: "Select a model credential method; secret values belong in the runtime environment." });
+            }
+          }
+        }
+      }
+      const expectedHarness = participant.kind === "llm" ? "structured_output" : "scripted";
+      if (participant.harness && (participant.kind === "human" || participant.harness !== expectedHarness)) {
+        issues.push({ path: `roster[${index}].harness`, message: "The harness must match the participant kind." });
+      }
+    }
     const runtime = participant.runtime === undefined ? "in_process" : participant.runtime;
     if (!["in_process", "local_process", "external"].includes(runtime)) {
       issues.push({ path: `roster[${index}].runtime`, message: "Unknown or unsupported runtime." });
@@ -124,17 +163,17 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
     if (participant.kind === "human" && detail.environment_id === "calendar") {
       issues.push({ path: `roster[${index}].kind`, message: "Human is not yet supported." });
     }
-    if (runtime === "local_process" && participant.kind === "scripted" && participant.binding && participant.binding !== "baseline") {
+    if (runtime === "local_process" && participant.kind === "scripted" && bindingName && bindingName !== "baseline") {
       issues.push({ path: `roster[${index}].binding`, message: "Local process supports the baseline scripted binding only." });
     }
-    if (participant.kind !== "human" && runtime !== "external" && !participant.binding) {
+    if (participant.kind !== "human" && runtime !== "external" && !bindingName) {
       issues.push({ path: `roster[${index}].binding`, message: "A non-human participant needs a binding." });
     }
     const role = typeof participant.role === "string" ? rolesById.get(participant.role) : undefined;
     const required = [...(detail.required_modalities ?? ["text"]), ...(role?.required_modalities ?? ["text"])];
     const inputs = Array.isArray(participant.capabilities?.input) ? participant.capabilities.input : ["text"];
     const evidence = typeof participant.capabilities?.evidence === "string" ? participant.capabilities.evidence.trim() : "";
-    if (required.some((modality) => modality !== "text") && (!evidence || required.some((modality) => !inputs.includes(modality)))) {
+    if (!inheritsCapabilities && required.some((modality) => modality !== "text") && (!evidence || required.some((modality) => !inputs.includes(modality)))) {
       issues.push({ path: `roster[${index}].capabilities`, message: "Declare verified input capabilities for this role." });
     }
     if (!participant.role) {
@@ -157,6 +196,9 @@ export function validateClientDesign(design: ClientDesign | null, detail: Enviro
   }
   return issues;
 }
+
+const MODEL_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "vertexai_adc",
+  "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY", "OLLAMA_API_KEY"];
 
 function matches(parameter: Parameter, value: unknown) {
   if (parameter.type === "boolean" && typeof value !== "boolean") return false;

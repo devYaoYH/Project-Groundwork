@@ -62,6 +62,46 @@ def create(plane: ControlPlane):
     )
 
 
+def test_typed_draft_requires_binding_before_lock_and_freezes_its_resolved_route(tmp_path, monkeypatch):
+    import yaml
+    from a2a_engine.design import DesignValidationError
+
+    payload = yaml.safe_load(DESIGN)
+    payload["schema_version"] = 2
+    for seat in payload["roster"]:
+        seat.update(kind="llm", binding=None)
+    text = yaml.safe_dump(payload)
+    plane = control(tmp_path)
+    draft = plane.create_experiment(name="Unbound typed draft", release_id="buyer_seller", design_text=text)
+    draft = plane.update_experiment_design(draft.id, design_text=text)
+    assert not plane.validate_design_text(release_id="buyer_seller", design_text=text)["valid"]
+    with pytest.raises(DesignValidationError, match="needs a binding"):
+        plane.lock_experiment(draft.id, design_sha256=draft.design_sha256)
+    assert plane.experiment_detail(draft.id)["cells"] == []
+    assert plane.participant_roster(draft.id) == []
+
+    # A model-looking reference must exist in the pool, even in version 2.
+    for seat in payload["roster"]:
+        seat["binding"] = {"kind": "agent", "name": "gpt-4o-mini"}
+    pool_path = tmp_path / "agents.yaml"
+    pool_path.write_text("agents: {}\n")
+    monkeypatch.setenv("A2A_AGENT_POOL", str(pool_path))
+    draft = plane.update_experiment_design(draft.id, design_text=yaml.safe_dump(payload))
+    with pytest.raises(DesignValidationError, match="unknown agent reference"):
+        plane.lock_experiment(draft.id, design_sha256=draft.design_sha256)
+
+    route = {"model": "original", "credential": "OPENAI_API_KEY", "api_base": "https://example.test/v1"}
+    pool_path.write_text(yaml.safe_dump({"agents": {"gpt-4o-mini": route}}))
+    locked = plane.lock_experiment(draft.id, design_sha256=draft.design_sha256)
+    frozen = plane._design_episode_configs(locked, mode="live")
+    assert frozen[0]["agents"][0]["model"] == "original"
+    assert {row["binding"] for row in plane.participant_roster(draft.id)} == {"gpt-4o-mini"}
+    pool_path.write_text("agents: {}\n")
+    assert plane._design_episode_configs(locked, mode="live") == frozen
+    reopened = control(tmp_path)
+    assert reopened._design_episode_configs(reopened.experiment(locked.id), mode="live") == frozen
+
+
 def test_model_pool_bindings_resolve_before_lock_and_retain_the_frozen_route(tmp_path, monkeypatch):
     import yaml
     from a2a_engine.experiment import expand_cells, load_experiment

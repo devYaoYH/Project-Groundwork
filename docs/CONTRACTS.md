@@ -118,15 +118,30 @@ hashes the same. A locked design is read-only: explicitly fork it to make a new
 editable draft, rather than having a save silently create a different study.
 
 ```yaml
+schema_version: 2
 release: negotiation@v1
 parameters:
   mode:       {factor: [stable, rotating]}   # an axis: levels become cells
   num_rounds: {pin: 10}                      # constant across the experiment
   mc_ratio:   {randomize: true}              # item only: varies within a cell
 units:  {episodes_per_cell: 8}
-roster: [{id: a, kind: llm, binding: gpt-4o-mini}, ...]
+roster: [{id: a, role: negotiator, kind: llm, binding: {kind: agent, name: gpt-mini}}, ...]
 seed:   {mode: derived, root: 17}
 ```
+
+New designs use schema version 2. The roster is a discriminated union of LLM,
+scripted, and human participants. LLM bindings are either an explicit agent
+reference (`{kind: agent, name: gpt-mini}`) or an inline model with an explicit
+credential selector (`{kind: model, model: gpt-4o-mini, credential: OPENAI_API_KEY}`).
+Scripted participants use `{kind: strategy, name: baseline}`; humans have no
+binding. An agent reference must resolve to a configured LLM with a model; an
+unknown reference never becomes a model name. The harness must match the
+participant kind. External seats may omit their implementation binding.
+
+A version 2 draft may save an unbound participant (`binding: null`), but preview,
+lock, and compilation require every locally managed non-human seat to be bound.
+Version 1 remains readable with its original serialization and canonical digest;
+existing locked plans are never migrated or recompiled by this schema change.
 
 Exactly one disposition per parameter, and the asymmetry is deliberate: a design
 parameter is factor-or-pin because the release already has a default for it,
