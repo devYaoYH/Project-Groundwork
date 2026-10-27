@@ -50,6 +50,7 @@ _EXPORTS = {
     "build_provenance": ("a2a_engine.provenance", "build_provenance"),
     "provenance_of": ("a2a_engine.provenance", "provenance_of"),
     "Design": ("a2a_engine.design", "Design"),
+    "DesignV2": ("a2a_engine.design", "DesignV2"),
     "Disposition": ("a2a_engine.design", "Disposition"),
     "ParticipantConfig": ("a2a_engine.design", "ParticipantConfig"),
     "DesignValidationError": ("a2a_engine.design", "DesignValidationError"),

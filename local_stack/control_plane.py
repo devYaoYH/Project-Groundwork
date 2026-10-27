@@ -415,7 +415,7 @@ class ControlPlane:
             if any(
                 participant.role is not None
                 or participant.kind != row["kind"]
-                or participant.binding != row["binding"]
+                or participant.binding_name != row["binding"]
                 for row in roster
                 for participant in [by_id[str(row["participant_id"])]]
             ):
@@ -825,7 +825,7 @@ class ControlPlane:
             release = self._release_by_id(release_id)
             declaration = self._declaration(release.environment_id)
             bank = self._item_bank(release.environment_id)
-            errors = validate_design(design, declaration, bank, release_id=release.id)
+            errors = validate_design(design, declaration, bank, release_id=release.id, allow_unbound=True)
             if errors:
                 raise DesignValidationError(errors)
             experiment = Experiment(
@@ -963,7 +963,7 @@ class ControlPlane:
         release = self._release_by_id(experiment.release_id)
         errors = validate_design(
             design, self._declaration(release.environment_id), self._item_bank(release.environment_id),
-            release_id=release.id,
+            release_id=release.id, allow_unbound=True,
         )
         if errors:
             raise DesignValidationError(errors)
@@ -1012,7 +1012,7 @@ class ControlPlane:
                 "INSERT INTO participants (participant_id, experiment_id, kind, binding, role, config_sha256) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    (participant.id, experiment.id, participant.kind, participant.binding, participant.role,
+                    (participant.id, experiment.id, participant.kind, participant.binding_name, participant.role,
                      hashlib.sha256(_json(participant.model_dump(mode="json")).encode("utf-8")).hexdigest())
                     for participant in design.roster
                 ],
@@ -1196,7 +1196,7 @@ class ControlPlane:
     def _design_agent_pool(self, design):
         from a2a_engine.agent_pool import load_agent_pool
 
-        if not any(participant.kind == "llm" and participant.binding for participant in design.roster):
+        if not any(participant.kind == "llm" and participant.binding_name for participant in design.roster):
             return None
         return load_agent_pool(self.workspace / "experiments")
 

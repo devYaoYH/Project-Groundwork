@@ -2,13 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { stringify } from "yaml";
 
 import { Chip } from "./Chip";
 import { Crumb } from "./Crumb";
 import { DataTable } from "./DataTable";
 import {
-  EnvironmentDetail,
   EnvironmentSummary,
   Experiment,
   createDesignExperiment,
@@ -16,28 +14,7 @@ import {
   listEnvironments,
   listExperiments,
 } from "../lib/api";
-
-function initialDesign(detail: EnvironmentDetail) {
-  const parameters: Record<string, { randomize: true }> = {};
-  for (const parameter of detail.parameters) {
-    if (parameter.source === "item" && (parameter.levels?.length ?? 0) > 1) {
-      parameters[parameter.name] = { randomize: true };
-    }
-  }
-  return stringify({
-    schema_version: 1,
-    release: `${detail.environment_id}@${detail.release.version}`,
-    parameters,
-    units: { episodes_per_cell: 1 },
-    roster: detail.roles.flatMap((role) => Array.from({ length: role.count }, (_, index) => ({
-      id: `${role.id}_${index + 1}`,
-      role: role.id,
-      kind: role.accepts.includes("scripted") ? "scripted" : role.accepts[0],
-      binding: "baseline",
-    }))),
-    seed: { root: 1 },
-  });
-}
+import { initialDesign } from "../lib/design-template";
 
 export function ExperimentLibrary() {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
