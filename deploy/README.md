@@ -40,6 +40,38 @@ launch uses the current worker binding. There is no separate migration command.
 Runtime images predating the supported platform execution contract are rejected
 explicitly; deployment does not guess how to execute an incompatible image.
 
+## Operator logs in Cloud Logging
+
+Hosted workers also mirror each consumed runner stdout/stderr line to their own
+stdout as structured JSON. Cloud Run captures these under the **worker**
+container in the same Job execution; no frontend session or Logging API client
+is required. The records include `component: groundwork.runner`, `launch_id`,
+`job_name`, and `execution_name`, so the Cloud Run execution suffix can be used
+to find game output and its Groundwork launch UUID directly.
+
+In Logs Explorer, select project `cicl-487801` and use:
+
+```text
+resource.type="cloud_run_job"
+jsonPayload.component="groundwork.runner"
+jsonPayload.execution_name="groundwork-run-RUNTIME-WORKER-cqr4w"
+```
+
+Alternatively filter by `jsonPayload.launch_id="LAUNCH_UUID"`. Standard Python
+runner severity is retained; unstructured output defaults to `INFO`. Lines too
+large for one entry are split with a shared `runner_line` and ordered
+`line_part`/`line_parts` fields. Cloud stdout failures are best effort and cannot
+stop execution or frontend/artifact publication. Cloud logs remain provisional;
+`launches/LAUNCH_UUID/runner.log` in the private artifacts bucket retains the
+original output after final publication, and `live-detail.json` holds a bounded
+recent tail during execution.
+
+Mirroring is enabled for the hosted GCP backend. Local stacks retain their
+existing file/frontend logs. This is a worker change, so new launches of older
+pinned runtimes also receive it after deployment; existing executions do not.
+It mirrors emitted runner logs rather than exporting episode transcripts or
+model inputs to Cloud Logging.
+
 ## Local first
 
 ```sh
