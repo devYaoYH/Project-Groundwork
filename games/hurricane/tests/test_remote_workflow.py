@@ -11,9 +11,10 @@ from hurricane.remote import HURRICANE_TOOLS
 from hurricane.runtime_strategy import HurricaneStrategy, submission
 
 CONFIG = {"num_rounds": 3, "seed": 7, "history_window": 2}
+SEASON = {**CONFIG, "storms": ["storm.central_city", "storm.wide_front"], "season_memory": "notes"}
 
 
-def run_remote(*, fail=False, names=None):
+def run_remote(*, fail=False, names=None, config=CONFIG):
     invocations = []
     with ExitStack() as stack:
         env = EnvironmentApp(HURRICANE_TOOLS)
@@ -44,7 +45,7 @@ def run_remote(*, fail=False, names=None):
             )
         game = HurricaneEnvironment(
             {
-                **CONFIG,
+                **config,
                 "agents": [
                     {"type": "scripted", "runtime": "external", **({"id": names[i]} if names else {})}
                     for i in range(3)
@@ -65,11 +66,26 @@ def test_remote_session_parity_and_private_registration():
     assert [(e.type, e.data) for e in actual.events] == [(e.type, e.data) for e in expected.events]
     registrations = [i for i in invocations if i.kind == "register"]
     assert len(registrations) == 3
-    assert all(set(i.observation) == {"role", "participant", "participant_id", "history_window"} for i in registrations)
+    assert all(
+        set(i.observation) == {"role", "participant", "participant_id", "history_window", "season_memory"}
+        for i in registrations
+    )
     turns = [i for i in invocations if i.kind == "turn"]
     assert len(turns) == 3 * 3  # scripted seats never convene or message privately
     assert all("landfall_zone" not in i.observation for i in turns)
     assert all(p.agent.request_history_lengths[-1] == 4 for p in policies)
+    assert not episode.active
+
+
+def test_remote_season_parity_includes_debrief_notes():
+    expected = HurricaneEnvironment(SEASON, dry_run=True).run()
+    actual, invocations, policies, episode = run_remote(config=SEASON)
+    assert actual.final_state == expected.final_state and actual.metrics == expected.metrics
+    assert [(e.type, e.data) for e in actual.events] == [(e.type, e.data) for e in expected.events]
+    assert actual.metrics["storms_completed"] == 2 and actual.metrics["notes_written"] == 3
+    turns = [i for i in invocations if i.kind == "turn"]
+    assert sum(i.observation["turn_kind"] == "debrief" for i in turns) == 3
+    assert all(i.observation["season_memory"] == "notes" for i in invocations if i.kind == "register")
     assert not episode.active
 
 

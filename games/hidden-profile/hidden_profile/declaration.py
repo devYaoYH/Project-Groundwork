@@ -22,6 +22,11 @@ DECLARATION = ReleaseDeclaration(
         ParameterConfig(name="condition", type="categorical", source="item"),
         ParameterConfig(name="discussion_cycles", type="integer", domain=(1, 20)),
         ParameterConfig(name="commitment_cycles", type="integer", domain=(2, 20)),
+        # What the same four seats carry from one decision round to the next.
+        ParameterConfig(
+            name="round_memory", type="categorical", domain=["none", "outcomes", "notes", "full"]
+        ),
+        ParameterConfig(name="max_note_chars", type="integer", domain=(50, 8000)),
     ],
     item_policy=ItemPolicy(
         mode="enumerate",

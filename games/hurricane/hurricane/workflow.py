@@ -1,5 +1,6 @@
-"""Executable story: each round runs a main pass of bounded action turns, convened
-meetings as live round-robin dialogues, a reply pass for direct messages, then landfall."""
+"""Executable story: a season of one or more storms; each round of a storm runs a main pass
+of bounded action turns, convened meetings as live round-robin dialogues and a reply pass for
+direct messages; landfall scores the storm and, before another storm, seats may write notes."""
 
 from dataclasses import dataclass
 import json
@@ -13,10 +14,14 @@ from a2a_engine.workflow_runtime import (
     require_agent_step,
 )
 
-TURN_KINDS = ("main", "meeting", "reply")
+TURN_KINDS = ("main", "meeting", "reply", "debrief")
 
 
 class State(TypedDict, total=False):
+    storm_index: int
+    storms: list
+    notes: dict
+    observation_chars: list
     round_index: int
     turn_kind: str
     seat: int
@@ -61,7 +66,8 @@ def recursion_limit(config):
     main = 2 * n + 3
     meetings = config.max_meetings_per_round * (2 * n * config.meeting_turns + 4) + 3
     reply = 2 * n + 3
-    return 20 + config.num_rounds * (main + meetings + reply + 6)
+    debrief = 2 * n + 3
+    return 20 + config.num_storms * (config.num_rounds * (main + meetings + reply + 6) + debrief + 8)
 
 
 def all_seats(cfg):
@@ -121,18 +127,29 @@ def manager(state, context):
 
 
 def observation(state, context):
-    obs = context.game.observation(state)
-    context.game.events.append(
+    game = context.game
+    obs = game.observation(state)
+    content = json.dumps(obs, ensure_ascii=False)
+    game.events.append(
         "observation",
         data={
             "speaker": manager(state, context).name,
             "round": obs["round"],
             "turn_kind": obs["turn_kind"],
-            "content": json.dumps(obs, ensure_ascii=False),
+            **({"storm": obs["season"]["storm"]} if "season" in obs else {}),
+            "content": content,
             "visibility": "private",
         },
     )
     return obs
+
+
+def observation_chars(state, game):
+    """Context-length proxy per storm (the environment cannot see provider token counts);
+    the observation is a pure function of the state the seat was handed."""
+    chars = list(state["observation_chars"])
+    chars[state["storm_index"]] += len(json.dumps(game.observation(state), ensure_ascii=False))
+    return chars
 
 
 async def act(actor, operation, obs, state, context):
@@ -192,9 +209,10 @@ class Turn:
     """Mutable working copy of the round state for one seat's turn; commits as updates."""
 
     def __init__(self, state, game, seat):
-        self.state, self.game, self.cfg, self.seat = state, game, game.config, seat
+        self.state, self.game, self.cfg, self.seat = state, game, game.storm_config, seat
         self.name = game.agents[seat].name
         self.round = state["round_index"] + 1
+        self.notes = {k: list(v) for k, v in state["notes"].items()}
         self.readings = {k: [dict(r) for r in v] for k, v in state["readings"].items()}
         self.probe_log = list(state["probe_log"])
         self.probed = list(state["probed_this_round"])
@@ -311,7 +329,7 @@ class Turn:
             if self.recon_remaining < 1:
                 return False
             self.recon_remaining -= 1
-        ensemble = reading(self.cfg, self.round, self.seat, instrument)
+        ensemble = reading(self.cfg, self.round, self.seat, instrument, self.game.reading_storm(self.state))
         row = {"round": self.round, "instrument": instrument, "ensemble": ensemble, "audience": [self.seat]}
         self.readings[self.seat] = [*self.readings.get(self.seat, []), row]
         self.probed.append(self.seat)
@@ -445,6 +463,30 @@ class Turn:
             elif not getattr(self, self.REPLY[kind])(action):
                 self.invalid_action(kind, "rejected")
 
+    def run_debrief(self, actions):
+        """One private note, carried into every later storm; nothing else survives the boundary."""
+        action = actions[0] if actions else {}
+        if not isinstance(action, dict):
+            self.invalid_action(None, "not_an_object")
+            return
+        kind = action.get("kind")
+        if kind == "pass":
+            return
+        if kind != "note":
+            self.invalid_action(kind, "unknown_kind")
+            return
+        text = action.get("text", "")
+        if not isinstance(text, str) or not text.strip() or len(text) > self.cfg.max_note_chars:
+            self.invalid_action(kind, "rejected")
+            return
+        storm = self.game.storm_number(self.state)
+        self.notes[self.seat] = [*self.notes.get(self.seat, []), {"storm": storm, "text": text}]
+        self.game.events.append(
+            "note",
+            data={"storm": storm, "round": self.round, "participant": self.seat + 1, "speaker": self.name,
+                  "text": text, "visibility": "private", "to_agents": []},
+        )
+
     def run_meeting(self, actions):
         meeting = self.meetings[self.state["meeting_index"]]
         attendees = meeting["attendees"]
@@ -482,6 +524,7 @@ class Turn:
             "estimates": self.estimates, "recommendations": self.recommendations,
             "orders": self.orders, "evacuated": self.evacuated, "recon_remaining": self.recon_remaining,
             "attention_used": self.attention_used, "reply_seats": self.reply_seats,
+            "notes": self.notes,
             "invalid_actions": self.state["invalid_actions"] + self.invalid,
         }
 
@@ -498,9 +541,12 @@ def record_turn(state, runtime: Runtime[GameContext]):
         turn.run_main(actions)
     elif kind == "reply":
         turn.run_reply(actions)
+    elif kind == "debrief":
+        turn.run_debrief(actions)
     else:
         turn.run_meeting(actions)
-    return {**turn.updates(), "phase_turn": state["phase_turn"] + 1}
+    return {**turn.updates(), "phase_turn": state["phase_turn"] + 1,
+            "observation_chars": observation_chars(state, game)}
 
 
 # -- main pass ------------------------------------------------------------------
@@ -679,7 +725,7 @@ def landfall(state, runtime: Runtime[GameContext]):
     game.events.append(
         "landfall",
         data={
-            **result,
+            **{k: v for k, v in result.items() if k not in ("orders", "rounds_completed")},
             "text": (
                 f"Landfall at zone {result['landfall_zone']}; zones {result['hit_zones']} hit. "
                 f"Protected {result['population_protected']}, exposed {result['population_exposed']}, "
@@ -688,26 +734,112 @@ def landfall(state, runtime: Runtime[GameContext]):
             ),
         },
     )
-    return {"result": result}
+    return {"storms": [*state["storms"], game.storm_summary(state, result)]}
+
+
+# -- debrief pass: before another storm, each seat may write one private note ---------------
+
+
+def debrief_route(state, runtime: Runtime[GameContext]):
+    cfg = runtime.context.game.config
+    more_storms = state["storm_index"] + 1 < cfg.num_storms
+    return "debrief" if more_storms and cfg.season_memory == "notes" else "skip"
+
+
+def begin_debrief(state, runtime: Runtime[GameContext]):
+    return {"turn_kind": "debrief", "seat": 0, "phase_turn": 0, "phase_limit": runtime.context.game.config.num_agents}
+
+
+def debrief_program():
+    builder = StateGraph(State, context_schema=GameContext)
+    builder.add_node("begin", begin_debrief)
+    builder.add_node("manager", AgentStep(manager, "act", observation, act))
+    builder.add_node("record_turn", record_turn)
+    builder.add_node("advance_seat", advance_seat)
+    builder.add_edge(START, "begin")
+    builder.add_edge("begin", "manager")
+    builder.add_edge("manager", "record_turn")
+    builder.add_edge("record_turn", "advance_seat")
+    builder.add_conditional_edges("advance_seat", main_route, {"next": "manager", "done": END})
+    return GraphProgram(builder)
+
+
+# -- season: storms in order, same seats; per-storm state resets, the board may persist -------
+
+
+def next_storm(state):
+    return {}
+
+
+def storm_route(state, runtime: Runtime[GameContext]):
+    return "next" if state["storm_index"] < runtime.context.game.config.num_storms else "done"
+
+
+def begin_storm(state, runtime: Runtime[GameContext]):
+    game = runtime.context.game
+    index = state["storm_index"]
+    game.storm_config = game.storm_configs[index]
+    fresh = game.storm_state()
+    if game.in_season:
+        game.events.append(
+            "storm_start",
+            data={"storm": index + 1, "storms_total": game.config.num_storms,
+                  "scenario_id": game.storm_config.scenario_id,
+                  "board_entries": len(state["board"]) if game.config.board_persists else 0},
+        )
+    if not game.config.board_persists:
+        fresh["board"] = []
+    return {**fresh, "observation_chars": [*state["observation_chars"], 0]}
+
+
+def close_storm(state, runtime: Runtime[GameContext]):
+    game = runtime.context.game
+    if game.in_season:
+        last = state["storms"][-1]
+        game.events.append(
+            "storm_end",
+            data={"storm": last["storm"], "total_cost": last["total_cost"], "regret": last["regret"],
+                  "notes": sum(n["storm"] == last["storm"] for rows in state["notes"].values() for n in rows)},
+        )
+    return {"storm_index": state["storm_index"] + 1}
+
+
+def storm_program():
+    builder = StateGraph(State, context_schema=GameContext)
+    builder.add_node("begin_storm", begin_storm)
+    builder.add_node("next_round", next_round)
+    builder.add_node("round", round_program().compiled)
+    builder.add_node("landfall", landfall)
+    builder.add_node("debrief", debrief_program().compiled)
+    builder.add_node("close_storm", close_storm)
+    builder.add_edge(START, "begin_storm")
+    builder.add_edge("begin_storm", "next_round")
+    builder.add_conditional_edges("next_round", round_route, {"next": "round", "done": "landfall"})
+    builder.add_edge("round", "next_round")
+    builder.add_conditional_edges("landfall", debrief_route, {"debrief": "debrief", "skip": "close_storm"})
+    builder.add_edge("debrief", "close_storm")
+    builder.add_edge("close_storm", END)
+    return GraphProgram(builder)
 
 
 def finalize(state, runtime: Runtime[GameContext]):
+    storms = state["storms"]
     runtime.context.game.events.append(
         "game_end",
-        data={"rounds_completed": state["round_index"], "total_cost": state["result"]["total_cost"]},
+        data={"rounds_completed": sum(s["rounds_completed"] for s in storms),
+              "storms_completed": len(storms),
+              "total_cost": sum(s["total_cost"] for s in storms)},
     )
     return {}
 
 
 def build_program():
     builder = StateGraph(State, context_schema=GameContext)
-    builder.add_node("next_round", next_round)
-    builder.add_node("round", round_program().compiled)
-    builder.add_node("landfall", landfall)
+    builder.add_node("next_storm", next_storm)
+    builder.add_node("storm", storm_program().compiled)
     builder.add_node("finalize", finalize)
-    builder.add_edge(START, "next_round")
-    builder.add_conditional_edges("next_round", round_route, {"next": "round", "done": "landfall"})
-    builder.add_edge("round", "next_round")
-    builder.add_edge("landfall", "finalize")
+    builder.add_edge(START, "next_storm")
+    builder.add_conditional_edges("next_storm", storm_route, {"next": "storm", "done": "finalize"})
+    builder.add_edge("storm", "next_storm")
     builder.add_edge("finalize", END)
     return GraphProgram(builder)

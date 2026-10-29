@@ -389,7 +389,8 @@ def test_export_has_real_nested_phases_and_is_pure(monkeypatch):
     assert doc == export_program(build_program(), "hurricane")
     assert doc["status"] == "available"
     ids = [g["id"] for g in doc["workflow"]["graphs"]]
-    assert len(ids) == 5 and any("meeting" in i for i in ids) and any("reply" in i for i in ids)
+    assert len(ids) == 7 and any("meeting" in i for i in ids) and any("reply" in i for i in ids)
+    assert any(i.endswith("debrief") for i in ids) and any(i.endswith("storm") for i in ids)
     top = doc["workflow"]["graphs"][0]
     assert {e.get("route_key") for e in top["edges"] if e["conditional"]} == {"next", "done"}
 
@@ -427,7 +428,8 @@ def test_design_compilation_selects_the_frozen_storm():
         "recon_sigma": 0.5, "model_sigma_initial": 2.0, "model_sigma_final": 1.0,
         "casualty_cost_per_capita": 10.0, "attention_budget": 3, "meeting_turns": 2,
         "meeting_attention_cost": 1, "meeting_cost": 0.0, "max_meetings_per_round": 1,
-        "reply_turns": 1, "history_window": 4,
+        "reply_turns": 1, "history_window": 4, "season_memory": "notes", "board_persists": False,
+        "max_note_chars": 400,
     }
     design = Design.model_validate(
         {
@@ -450,6 +452,159 @@ def test_design_compilation_selects_the_frozen_storm():
     plan = compile(design, DECLARATION, load_bank(), experiment_id="storm-design", experiment_name="wide")
     cfg = plan.preview_episode_config
     assert cfg["item_id"] == "storm.wide_front" and cfg["impact_radius"] == 2 and cfg["history_window"] == 4
+    assert cfg["season_memory"] == "notes" and cfg["board_persists"] is False
     trace = HurricaneEnvironment(cfg, dry_run=True).run()
     assert trace.final_state["hit_zones"] == [2, 3, 4, 5, 6]
     assert trace.metrics["recon_used"] == 1 and trace.final_state["rounds_completed"] == 3
+    # A compiled design selects one storm; a season is a plain config list and still a single episode.
+    assert HurricaneConfig(**cfg).storms == ["storm.wide_front"]
+
+
+# -- seasons: several storms, the same seats, bounded cross-storm memory ---------------------
+
+SEASON = ["storm.central_city", "storm.northern_edge"]
+
+
+def season_observations(trace, name, storm):
+    """Observations one seat received during a storm, read back from the private trace events."""
+    return [json.loads(e.data["content"]) for e in events(trace, "observation")
+            if e.data["speaker"] == name and e.data.get("storm") == storm]
+
+
+def test_season_config_resolves_storms_and_rejects_drift():
+    cfg = HurricaneConfig(storms=SEASON)
+    assert (cfg.scenario_id, cfg.landfall_zone, cfg.num_storms) == ("storm.central_city", 4, 2)
+    assert cfg.for_storm(1).landfall_zone == 1 and cfg.for_storm(1).populations[0] == 40
+    assert cfg.for_storm(1).attention_budget == cfg.attention_budget and cfg.for_storm(1).storms == SEASON
+    assert HurricaneConfig().storms == ["storm.central_city"] and HurricaneConfig().num_storms == 1
+    assert HurricaneConfig(scenario_id="storm.wide_front", storms=["storm.wide_front", "storm.wide_front"]).num_storms == 2
+    with pytest.raises(ValueError, match="first storm"):
+        HurricaneConfig(scenario_id="storm.wide_front", storms=SEASON)
+    with pytest.raises(ValueError, match="unknown storm"):
+        HurricaneConfig(storms=["storm.central_city", "storm.nowhere"])
+    with pytest.raises(ValueError, match="season_memory"):
+        HurricaneConfig(season_memory="everything")
+    # A repeated scenario draws fresh noise in a later storm; a single storm keeps the v2 readings.
+    assert reading(cfg, 1, 0, "model", storm=0) != reading(cfg, 1, 0, "model", storm=1)
+    assert reading(cfg, 1, 0, "model") == reading(HurricaneConfig(), 1, 0, "model")
+
+
+def test_single_storm_episode_carries_no_season_plumbing():
+    game, trace = play()
+    assert not events(trace, "storm_start", "storm_end", "note")
+    assert all("season" not in json.loads(e.data["content"]) for e in events(trace, "observation"))
+    assert all(e.data["turn_kind"] != "debrief" for e in events(trace, "observation"))
+    assert trace.metrics["storms_completed"] == 1 and len(trace.final_state["storms"]) == 1
+    assert trace.metrics["regret_first_storm"] == trace.metrics["regret_last_storm"] == 0
+    assert trace.final_state["storms"][0]["scenario_id"] == "storm.central_city"
+
+
+def test_season_resets_storm_state_keeps_the_board_and_records_public_outcomes():
+    game, trace = play({"storms": SEASON})
+    assert trace.metrics["storms_completed"] == 2 and [s["landfall_zone"] for s in trace.final_state["storms"]] == [4, 1]
+    # Scripted managers are optimal on every storm, so season totals are the two oracle costs.
+    assert trace.metrics["total_cost"] == 90 + 60 and trace.metrics["regret"] == 0
+    assert [s["regret"] for s in trace.final_state["storms"]] == [0, 0]
+    assert trace.metrics["recon_used"] == 6 and trace.metrics["probes_used"] == 36
+    assert [e.data["storm"] for e in events(trace, "storm_start")] == [1, 2]
+    assert [e.data["scenario_id"] for e in events(trace, "storm_start")] == SEASON
+    assert "hit_zones" not in trace.final_state and len(trace.final_state["orders"]) == 6
+    assert {o["storm"] for o in trace.final_state["orders"]} == {1, 2}
+    assert len(trace.final_state["observation_chars_by_storm"]) == 2
+    second = [json.loads(e.data["content"]) for e in events(trace, "observation") if e.data.get("storm") == 2]
+    first_turn = second[0]
+    assert first_turn["season"]["storm"] == 2 and first_turn["season"]["storms_total"] == 2
+    assert first_turn["your_readings"] == [] and first_turn["known_data"] == [] and first_turn["bulletin"] == []
+    assert first_turn["instruments"]["recon"]["remaining"] == 3 and first_turn["round"] == 1
+    assert all(z["order"] is None for z in first_turn["zones"]) and first_turn["zones"][0]["population"] == 40
+    record = first_turn["season"]["record"]
+    assert len(record) == 1 and record[0]["landfall_zone"] == 4 and record[0]["hit_zones"] == [3, 4, 5]
+    assert [o["zone"] for o in record[0]["orders"]] == [3, 4, 5] and record[0]["regret"] == 0
+    # Nothing in any observation names where a storm went or what the other seats privately read.
+    for obs in second:
+        serialized = json.dumps(obs)
+        assert "central_city" not in serialized and "northern_edge" not in serialized and "title" not in obs
+        assert "landfall_zone" not in {k for k in obs} and "your_notes" not in obs
+    again = play({"storms": SEASON})[1]
+    assert [(e.type, e.data) for e in again.events] == [(e.type, e.data) for e in trace.events]
+
+
+def test_board_persists_across_storms_unless_disabled():
+    def writer(o):
+        if o["turn_kind"] == "main" and o["round"] == 1 and o["season"]["storm"] == 1:
+            return {"actions": [{"kind": "write_board", "text": "zone 4 took the hit last year"}]}
+        return passive(o)
+
+    for persists, expected in ((True, 1), (False, 0)):
+        game, trace = play({"storms": SEASON, "num_rounds": 1, "board_persists": persists}, [writer, passive, passive])
+        later = season_observations(trace, "p1", 2)
+        assert later and all(len(o["board"]) == expected for o in later)
+        assert events(trace, "storm_start")[1].data["board_entries"] == expected
+        assert trace.metrics["board_writes"] == 1
+
+
+def test_season_memory_none_withholds_the_record():
+    game, trace = play({"storms": SEASON, "num_rounds": 1, "season_memory": "none"})
+    later = season_observations(trace, "participant_0", 2)
+    assert later and all("record" not in o["season"] and o["season"]["memory"] == "none" for o in later)
+    assert not events(trace, "note") and trace.metrics["notes_written"] == 0
+
+
+def test_season_memory_notes_runs_one_private_debrief_per_boundary():
+    def noter(o):
+        if o["turn_kind"] == "debrief":
+            assert o["landfall_result"]["storm"] == o["season"]["storm"] and o["actions"] == ["note", "pass"]
+            assert o["round"] == o["rounds_total"]
+            return {"actions": [{"kind": "note", "text": f"p0 secret note after storm {o['season']['storm']}"}]}
+        return passive(o)
+
+    def silent(o):
+        return {"actions": [{"kind": "pass"}]}
+
+    def verbose(o):
+        if o["turn_kind"] == "debrief":
+            return {"actions": [{"kind": "note", "text": "x" * 51}]}
+        return passive(o)
+
+    cfg = {"storms": [*SEASON, "storm.wide_front"], "num_rounds": 1, "season_memory": "notes", "max_note_chars": 50}
+    game, trace = play(cfg, [noter, silent, verbose])
+    debriefs = [o for o in observations_of(game, "p0") if o["turn_kind"] == "debrief"]
+    assert [o["season"]["storm"] for o in debriefs] == [1, 2]  # none after the final storm
+    notes = events(trace, "note")
+    assert [(e.data["storm"], e.data["speaker"]) for e in notes] == [(1, "p0"), (2, "p0")]
+    assert all(e.data["visibility"] == "private" and e.data["to_agents"] == [] for e in notes)
+    assert sum(e.data["reason"] == "rejected" for e in events(trace, "invalid_action")) == 2
+    assert trace.metrics["notes_written"] == 2
+    assert [e.data["notes"] for e in events(trace, "storm_end")] == [1, 1, 0]
+    third = season_observations(trace, "p0", 3)
+    assert third and [n["storm"] for n in third[0]["your_notes"]] == [1, 2]
+    assert third[0]["your_notes"][0]["text"] == "p0 secret note after storm 1"
+    for name in ("p1", "p2"):
+        for o in season_observations(trace, name, 3):
+            assert o["your_notes"] == [] and "secret note" not in json.dumps(o)
+    # The scripted manager writes a deterministic note from the public result alone.
+    scripted = play({**cfg, "max_note_chars": 1000})[1]
+    assert scripted.metrics["notes_written"] == 6 and scripted.metrics["invalid_actions"] == 0
+    assert "landfall at zone 4" in events(scripted, "note")[0].data["text"]
+
+
+def test_agent_drops_provider_history_at_a_storm_boundary_unless_full():
+    class Client:
+        def __init__(self):
+            self.messages = []
+
+        def oneshot(self, messages):
+            self.messages.append(copy.deepcopy(messages))
+            return '{"kind":"pass"}'
+
+    def run(agent, storms):
+        for storm in storms:
+            asyncio.run(agent.act({"season": {"storm": storm}} if storm else {"round": 1}, {}))
+        return [len(m) for m in agent.client.messages]
+
+    assert run(HurricaneAgent(Client(), "a", season_memory="none"), [1, 1, 2, 2]) == [2, 4, 2, 4]
+    assert run(HurricaneAgent(Client(), "b", season_memory="outcomes"), [1, 1, 2]) == [2, 4, 2]
+    assert run(HurricaneAgent(Client(), "c", season_memory="notes", history_window=1), [1, 1, 2]) == [2, 4, 2]
+    assert run(HurricaneAgent(Client(), "d", season_memory="full"), [1, 1, 2]) == [2, 4, 6]
+    # Without a season in the observation nothing is ever dropped.
+    assert run(HurricaneAgent(Client(), "e", season_memory="none"), [None, None, None]) == [2, 4, 6]

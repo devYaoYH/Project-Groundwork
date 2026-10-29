@@ -34,11 +34,19 @@ def parse_turn(text):
     return result if isinstance(result, dict) else {"parse_failed": True}
 
 
+def storm_of(observation):
+    return observation.get("season", {}).get("storm", 1)
+
+
 class HurricaneAgent(LLMAgent):
-    def __init__(self, client, name, *, history_window=None):
+    def __init__(self, client, name, *, history_window=None, season_memory="full"):
         super().__init__(client, system_prompt=SYSTEM, name=name)
         self.history = []
         self.history_window = history_window
+        # Cross-storm memory policy: anything but "full" drops the provider conversation at a
+        # storm boundary; the environment supplies outcomes and notes in the observation.
+        self.season_memory = season_memory or "full"
+        self.current_storm = None
         self.request_history_lengths = []
         self.history_allowed = lambda: True
 
@@ -48,7 +56,14 @@ class HurricaneAgent(LLMAgent):
             return list(self.history)
         return self.history[-2 * self.history_window:]
 
+    def cross_storm_boundary(self, observation):
+        storm = storm_of(observation)
+        if self.current_storm is not None and storm != self.current_storm and self.season_memory != "full":
+            self.history = []
+        self.current_storm = storm
+
     def build_messages(self, observation, tools):
+        self.cross_storm_boundary(observation)
         self.request_history_lengths.append(len(self.history))
         return [
             {"role": "system", "content": self.system_prompt},
@@ -85,6 +100,14 @@ class ScriptedManager:
 
     def plan(self, observation):
         kind = observation["turn_kind"]
+        if kind == "debrief":
+            result = observation["landfall_result"]
+            text = (
+                f"Storm {result['storm']}: landfall at zone {result['landfall_zone']}, zones "
+                f"{result['hit_zones']} hit; regret {result['regret']:g}. Pooling every reading and "
+                f"evacuating within impact_radius of the mean worked."
+            )
+            return {"actions": [{"kind": "note", "text": text}]}
         estimate = pooled_estimate(observation)
         radius = observation["impact_radius"]
         num_zones = len(observation["zones"])

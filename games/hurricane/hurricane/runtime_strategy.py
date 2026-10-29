@@ -45,7 +45,8 @@ class HurricaneStrategy:
             )
             self.agent = (
                 HurricaneAgent(self.bounded_client, name,
-                               history_window=invocation.observation.get("history_window"))
+                               history_window=invocation.observation.get("history_window"),
+                               season_memory=invocation.observation.get("season_memory"))
                 if self.client else ScriptedManager(name)
             )
             return []

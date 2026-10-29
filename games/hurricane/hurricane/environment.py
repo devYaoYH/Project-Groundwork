@@ -16,6 +16,9 @@ INSTRUMENTS = ("recon", "model")
 MAIN_ACTIONS = ("probe", "post", "dm", "write_board", "convene", "evacuate", "pass")
 REPLY_ACTIONS = ("dm", "post", "pass")
 MEETING_ACTIONS = ("say", "leave")
+DEBRIEF_ACTIONS = ("note", "pass")
+SEASON_MEMORY = ("none", "outcomes", "notes", "full")
+FROZEN_STORM_KEYS = ("scenario_id", "landfall_zone", "impact_radius", "populations")
 
 
 class HurricaneConfig(EpisodeConfigBase):
@@ -47,6 +50,12 @@ class HurricaneConfig(EpisodeConfigBase):
     history_window: int | None = Field(default=None, ge=1, le=200)
     max_message_chars: int = Field(default=2000, ge=100, le=16000)
     turn_timeout_s: float = Field(default=120, gt=0, le=600)
+    # Season: the frozen storms played in order by the same seats within one episode. The
+    # scenario fields above describe the first storm; later storms are looked up in the bank.
+    storms: list[str] = Field(default_factory=list, max_length=12)
+    season_memory: str = "outcomes"
+    board_persists: bool = True
+    max_note_chars: int = Field(default=1000, ge=50, le=8000)
 
     @model_validator(mode="before")
     @classmethod
@@ -54,22 +63,45 @@ class HurricaneConfig(EpisodeConfigBase):
         if not isinstance(value, dict):
             return value
         value = dict(value)
-        selected = value.get("item_id") or value.get("scenario_id") or "storm.central_city"
+        storms = value.get("storms") or []
+        if not isinstance(storms, list):
+            raise ValueError("storms must be a list of scenario ids")
+        selected = value.get("item_id") or value.get("scenario_id") or (storms[0] if storms else None) or "storm.central_city"
+        bank = load_bank()
         try:
-            params = load_bank().get(selected).params
+            params = bank.get(selected).params
+            for storm in storms:
+                bank.get(storm)
         except KeyError as exc:
             raise ValueError("unknown storm scenario") from exc
-        for key in ("scenario_id", "landfall_zone", "impact_radius", "populations"):
+        for key in FROZEN_STORM_KEYS:
             if key in value and value[key] is not None and value[key] != params[key]:
                 raise ValueError(f"{key} differs from the selected frozen scenario")
             value[key] = params[key]
+        if storms and storms[0] != params["scenario_id"]:
+            raise ValueError("the first storm of the season differs from the selected frozen scenario")
+        value["storms"] = list(storms) or [params["scenario_id"]]
         return value
 
     @model_validator(mode="after")
     def coast_divides_into_sectors(self):
         if len(self.populations) % self.num_agents:
             raise ValueError("zones must divide evenly into one sector per manager")
+        bank = load_bank()
+        if any(len(bank.get(s).params["populations"]) != self.num_zones for s in self.storms):
+            raise ValueError("every storm in a season must cross the same coastline of zones")
+        if self.season_memory not in SEASON_MEMORY:
+            raise ValueError(f"season_memory must be one of {SEASON_MEMORY}")
         return self
+
+    @property
+    def num_storms(self):
+        return len(self.storms)
+
+    def for_storm(self, index):
+        """This config with the frozen fields of the season's `index`-th storm; design knobs unchanged."""
+        params = load_bank().get(self.storms[index]).params
+        return self.model_copy(update={**{k: params[k] for k in FROZEN_STORM_KEYS}, "item_id": params["scenario_id"]})
 
     @property
     def num_zones(self):
@@ -100,9 +132,12 @@ class HurricaneConfig(EpisodeConfigBase):
         return last if last >= 1 else None
 
 
-def reading(config, round_number, seat, instrument):
-    """One ensemble; seeded by (seed, round, seat, instrument) so order of play never alters it."""
+def reading(config, round_number, seat, instrument, storm=None):
+    """One ensemble; seeded by (seed, round, seat, instrument) so order of play never alters it.
+    In a season the storm index joins the key so a repeated scenario draws fresh noise."""
     blob = f"{config.seed or 0}:{round_number}:{seat}:{instrument}".encode()
+    if storm is not None:
+        blob += f":storm{storm}".encode()
     rng = random.Random(int.from_bytes(hashlib.sha256(blob).digest()[:8], "big"))
     sigma = config.sigma(instrument, round_number)
     return [
@@ -134,7 +169,31 @@ INSTRUCTIONS = {
         '{"kind":"dm","to":participant,"text":"...","share":bool,"estimate":..,"recommend":..}, '
         '{"kind":"post",...} or {"kind":"pass"}.'
     ),
+    "debrief": (
+        'The storm has made landfall and the outcome is in landfall_result. Another storm follows. '
+        'Your conversation memory will not carry over; only the note you write now will. Return one action: '
+        '{"kind":"note","text":"..."} (at most max_note_chars characters, private to you, shown to you in '
+        'every later turn) or {"kind":"pass"}.'
+    ),
 }
+
+
+def public_record(result):
+    """The part of a landfall result everyone on the coast can see afterwards."""
+    return {
+        "storm": result["storm"],
+        "landfall_zone": result["landfall_zone"],
+        "hit_zones": result["hit_zones"],
+        "orders": [{k: o[k] for k in ("round", "participant", "zone", "effective")} for o in result["orders"]],
+        "population_protected": result["population_protected"],
+        "population_exposed": result["population_exposed"],
+        "population_needlessly_evacuated": result["population_needlessly_evacuated"],
+        "evacuation_cost": result["evacuation_cost"],
+        "casualty_cost": result["casualty_cost"],
+        "total_cost": result["total_cost"],
+        "oracle_cost": result["oracle_cost"],
+        "regret": result["regret"],
+    }
 
 
 class HurricaneEnvironment:
@@ -155,6 +214,9 @@ class HurricaneEnvironment:
         self.dry_run = dry_run
         self.events = EventLog.from_config(self.config)
         self.bank = load_bank()
+        # One resolved view per storm; `storm_config` is the storm being played right now.
+        self.storm_configs = [self.config.for_storm(i) for i in range(self.config.num_storms)]
+        self.storm_config = self.storm_configs[0]
         self._owns_episode = episode is None
         self.episode = episode or open_episode(
             runtime_manager,
@@ -184,7 +246,8 @@ class HurricaneEnvironment:
                     agent = ScriptedManager(name)
                 else:
                     agent = HurricaneAgent(
-                        make_llm_client(cfg), name, history_window=self.config.history_window
+                        make_llm_client(cfg), name, history_window=self.config.history_window,
+                        season_memory=self.config.season_memory,
                     )
                 self.agents.append(agent)
         except BaseException:
@@ -208,8 +271,19 @@ class HurricaneEnvironment:
 
     # -- observations -----------------------------------------------------
 
+    @property
+    def in_season(self):
+        return self.config.num_storms > 1
+
+    def storm_number(self, state):
+        return state.get("storm_index", 0) + 1
+
+    def reading_storm(self, state):
+        """Storm index that keys instrument noise; None keeps single-storm readings unchanged."""
+        return state.get("storm_index", 0) if self.in_season else None
+
     def zones_public(self, state):
-        cfg = self.config
+        cfg = self.storm_config
         evacuated = state["evacuated"]
         return [
             {
@@ -230,9 +304,10 @@ class HurricaneEnvironment:
     def observation(self, state):
         """Everything one seat may see. The storm, other seats' unshared readings, and traffic
         the seat was not party to are absent."""
-        cfg, seat, kind = self.config, state["seat"], state["turn_kind"]
+        cfg, seat, kind = self.storm_config, state["seat"], state["turn_kind"]
         me = seat + 1
-        round_number = state["round_index"] + 1
+        # A debrief happens after the last round closed; it reports that round, not a phantom one.
+        round_number = min(state["round_index"] + 1, cfg.num_rounds)
         mine = [
             {"round": r["round"], "instrument": r["instrument"], "ensemble": r["ensemble"],
              "visible_to": [s + 1 for s in r["audience"]]}
@@ -306,6 +381,21 @@ class HurricaneEnvironment:
             ],
             "response_instruction": INSTRUCTIONS[kind],
         }
+        if self.in_season:
+            # The season is public world state; past outcomes are public facts; notes are private.
+            # Scenario ids and titles stay out: they name where the storm went.
+            season = {"storm": self.storm_number(state), "storms_total": cfg.num_storms,
+                      "memory": cfg.season_memory}
+            if cfg.season_memory != "none":
+                season["record"] = [public_record(r) for r in state.get("storms", [])]
+            if cfg.season_memory == "notes":
+                obs["your_notes"] = list(state.get("notes", {}).get(seat, []))
+            obs["season"] = season
+        if kind == "debrief":
+            obs["landfall_result"] = public_record(state["storms"][-1])
+            obs["max_note_chars"] = cfg.max_note_chars
+            obs["actions"] = list(DEBRIEF_ACTIONS)
+            return obs
         if kind == "main":
             obs["attention_budget"] = max(0, cfg.attention_budget - debt)
             obs["attention_debt"] = debt
@@ -344,13 +434,16 @@ class HurricaneEnvironment:
                 "reply_turns": cfg.reply_turns,
                 "history_window": cfg.history_window,
                 "scenario_id": cfg.scenario_id,
+                "storms": list(cfg.storms),
+                "season_memory": cfg.season_memory,
+                "board_persists": cfg.board_persists,
                 "item_bank_sha256": self.bank.item_bank_sha256,
             },
         )
         registrations = {
             i: Registration(
                 {"role": "manager", "participant": i + 1, "participant_id": self.agents[i].name,
-                 "history_window": cfg.history_window}
+                 "history_window": cfg.history_window, "season_memory": cfg.season_memory}
             )
             for i in range(cfg.num_agents)
         }
@@ -370,19 +463,24 @@ class HurricaneEnvironment:
             if self._owns_episode:
                 self.episode.close()
 
-    def initial_state(self):
+    def storm_state(self):
+        """Everything that starts afresh with each storm of a season."""
         return {
             "round_index": 0, "readings": {}, "probe_log": [], "probed_this_round": [],
-            "bulletin": [], "dms": [], "board": [], "meetings": [], "estimates": [],
+            "bulletin": [], "dms": [], "meetings": [], "estimates": [],
             "recommendations": [], "orders": [], "evacuated": {},
             "recon_remaining": self.config.recon_budget, "attention_used": {},
-            "attention_debt": {}, "attention_debt_next": {}, "reply_seats": [], "invalid_actions": 0,
+            "attention_debt": {}, "attention_debt_next": {}, "reply_seats": [],
         }
+
+    def initial_state(self):
+        return {**self.storm_state(), "storm_index": 0, "storms": [], "notes": {}, "board": [],
+                "invalid_actions": 0, "observation_chars": []}
 
     # -- scoring ------------------------------------------------------------
 
     def landfall(self, state):
-        cfg = self.config
+        cfg = self.storm_config
         hit = hit_zones(cfg.landfall_zone, cfg.impact_radius, cfg.num_zones)
         evacuated = state["evacuated"]
         ordered = sorted(evacuated)
@@ -396,6 +494,8 @@ class HurricaneEnvironment:
         oracle_cost = cfg.evacuation_cost_per_capita * population(hit)
         total = evacuation_cost + casualty_cost + meeting_cost
         return {
+            "storm": self.storm_number(state),
+            "scenario_id": cfg.scenario_id,
             "landfall_zone": cfg.landfall_zone,
             "hit_zones": hit,
             "ordered_zones": ordered,
@@ -414,12 +514,13 @@ class HurricaneEnvironment:
             "regret": total - oracle_cost,
             "late_orders": sum(not o["effective"] for o in state["orders"]),
             "hit_zones_protected_rate": len(protected) / len(hit) if hit else 1.0,
+            "orders": list(state["orders"]),
+            "rounds_completed": state["round_index"],
         }
 
-    def trace(self, state):
-        cfg, result = self.config, state["result"]
-        events = self.events.all()
-        messages = [e for e in events if e.type == "message"]
+    def storm_summary(self, state, result):
+        """Process measures of one storm, computed while its per-storm state is still present."""
+        cfg = self.storm_config
         readings = [r for rows in state["readings"].values() for r in rows]
         everyone = set(range(cfg.num_agents))
         common = sum(set(r["audience"]) == everyone for r in readings)
@@ -427,7 +528,6 @@ class HurricaneEnvironment:
         latest = {}
         for e in state["estimates"]:
             latest[e["participant"]] = e["value"]
-        errors = [abs(v - cfg.landfall_zone) for v in latest.values()]
         modal = Counter(latest.values()).most_common(1)
         # Uptake counts an order whose zone another manager had recommended in a channel the
         # ordering manager could see.
@@ -439,54 +539,108 @@ class HurricaneEnvironment:
                 and (r["round"] < o["round"] or r["round"] == o["round"])
                 for r in state["recommendations"]
             ))
+        return {
+            **result,
+            "estimates": {str(k): v for k, v in sorted(latest.items())},
+            "estimate_errors": [abs(v - cfg.landfall_zone) for v in latest.values()],
+            "estimate_agreement": modal[0][1] / len(latest) if latest else 0.0,
+            "uptake": uptake,
+            "recommendations": len(state["recommendations"]),
+            "probes_used": len(readings),
+            "recon_used": sum(r["instrument"] == "recon" for r in readings),
+            "model_used": sum(r["instrument"] == "model" for r in readings),
+            "readings_common": common,
+            "readings_private": private,
+            "meetings": [
+                {k: m[k] for k in ("id", "round", "convener", "agenda")}
+                | {"attendees": [s + 1 for s in m["attendees"]], "messages": len(m["transcript"]),
+                   "attended": m.get("attended", [])}
+                for m in state["meetings"]
+            ],
+            "recon_remaining": state["recon_remaining"],
+        }
+
+    SUMMED = ("total_cost", "evacuation_cost", "casualty_cost", "meeting_cost_total", "oracle_cost",
+              "regret", "population_at_risk", "population_protected", "population_exposed",
+              "population_needlessly_evacuated", "late_orders", "rounds_completed")
+    LANDFALL_KEYS = (
+        "landfall_zone", "hit_zones", "ordered_zones", "protected_zones", "exposed_zones",
+        "needlessly_evacuated_zones", *SUMMED, "hit_zones_protected_rate", "orders",
+    )
+
+    def season_result(self, storms):
+        """Season totals; zone lists live inside each storm's own result."""
+        hit = sum(len(s["hit_zones"]) for s in storms)
+        protected = sum(len(s["protected_zones"]) for s in storms)
+        orders = [{**o, "storm": s["storm"]} for s in storms for o in s["orders"]]
+        return {
+            **{k: sum(s[k] for s in storms) for k in self.SUMMED},
+            "hit_zones_protected_rate": protected / hit if hit else 1.0,
+            "orders": orders,
+        }
+
+    def trace(self, state):
+        cfg, storms = self.config, state["storms"]
+        events = self.events.all()
+        messages = [e for e in events if e.type == "message"]
+        result = {k: storms[0][k] for k in self.LANDFALL_KEYS} if len(storms) == 1 else self.season_result(storms)
+        probes = sum(s["probes_used"] for s in storms)
+        common = sum(s["readings_common"] for s in storms)
+        private = sum(s["readings_private"] for s in storms)
+        errors = [e for s in storms for e in s["estimate_errors"]]
+        uptake = [u for s in storms for u in s["uptake"]]
         by_channel = Counter(e.data["channel"] for e in messages)
         metrics = {
             **{k: result[k] for k in (
                 "total_cost", "evacuation_cost", "casualty_cost", "meeting_cost_total", "oracle_cost",
                 "regret", "population_at_risk", "population_protected", "population_exposed",
                 "population_needlessly_evacuated", "hit_zones_protected_rate", "late_orders")},
-            "orders": len(state["orders"]),
-            "probes_used": len(readings),
-            "recon_used": sum(r["instrument"] == "recon" for r in readings),
-            "model_used": sum(r["instrument"] == "model" for r in readings),
+            "orders": len(result["orders"]),
+            "probes_used": probes,
+            "recon_used": sum(s["recon_used"] for s in storms),
+            "model_used": sum(s["model_used"] for s in storms),
             "readings_common": common,
-            "readings_subset": len(readings) - common - private,
+            "readings_subset": probes - common - private,
             "readings_private": private,
-            "knowledge_common_fraction": common / len(readings) if readings else 0.0,
-            "disclosure_rate": (len(readings) - private) / len(readings) if readings else 0.0,
-            "estimates_reported": len(latest),
+            "knowledge_common_fraction": common / probes if probes else 0.0,
+            "disclosure_rate": (probes - private) / probes if probes else 0.0,
+            "estimates_reported": sum(len(s["estimates"]) for s in storms),
             "estimate_error": sum(errors) / len(errors) if errors else 0.0,
-            "estimate_agreement": modal[0][1] / len(latest) if latest else 0.0,
-            "recommendations": len(state["recommendations"]),
+            "estimate_agreement": sum(s["estimate_agreement"] for s in storms) / len(storms),
+            "recommendations": sum(s["recommendations"] for s in storms),
             "recommendation_uptake": sum(uptake) / len(uptake) if uptake else 0.0,
             "messages": len(messages),
             "bulletin_messages": by_channel.get("bulletin", 0),
             "dm_messages": by_channel.get("dm", 0),
             "meeting_messages": by_channel.get("meeting", 0),
             "reply_messages": sum(e.data["turn_kind"] == "reply" for e in messages),
-            "meetings_convened": len(state["meetings"]),
-            "board_writes": len(state["board"]),
+            "meetings_convened": sum(len(s["meetings"]) for s in storms),
+            "board_writes": sum(e.type == "board" for e in events),
             "attention_used": sum(e.data["attention_used"] for e in events if e.type == "turn_end"),
             "dialogue_words": sum(len(e.data["text"].split()) for e in messages),
             "invalid_actions": state["invalid_actions"],
+            "storms_completed": len(storms),
+            "regret_first_storm": storms[0]["regret"],
+            "regret_last_storm": storms[-1]["regret"],
+            "notes_written": sum(e.type == "note" for e in events),
+            "observation_chars": sum(state["observation_chars"]),
         }
+        per_storm = [
+            {k: v for k, v in s.items() if k not in ("estimate_errors", "uptake")} for s in storms
+        ]
         return EpisodeTrace(
             episode_uid=str(uuid.uuid4()),
             config=cfg,
             events=events,
             final_state={
                 **result,
-                "orders": list(state["orders"]),
-                "estimates": {str(k): v for k, v in sorted(latest.items())},
-                "meetings": [
-                    {k: m[k] for k in ("id", "round", "convener", "agenda")}
-                    | {"attendees": [s + 1 for s in m["attendees"]], "messages": len(m["transcript"]),
-                       "attended": m.get("attended", [])}
-                    for m in state["meetings"]
-                ],
+                "estimates": storms[-1]["estimates"],
+                "meetings": [m for s in storms for m in s["meetings"]],
                 "board_entries": len(state["board"]),
-                "recon_remaining": state["recon_remaining"],
-                "rounds_completed": state["round_index"],
+                "recon_remaining": storms[-1]["recon_remaining"],
+                "storms": per_storm,
+                "storms_completed": len(storms),
+                "observation_chars_by_storm": list(state["observation_chars"]),
                 "terminated_reason": "landfall",
             },
             metrics=metrics,
