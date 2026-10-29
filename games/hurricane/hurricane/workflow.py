@@ -294,6 +294,9 @@ class Turn:
             return False
         if not valid_estimate(self.cfg, estimate):
             return False
+        if recommend == []:
+            # "I recommend nothing" is a statement, not a malformed one: the message stands.
+            recommend = None
         if recommend is not None:
             recommend = zone_list(recommend, self.cfg.num_zones)
             if recommend is None:

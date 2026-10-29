@@ -301,6 +301,29 @@ def test_invalid_actions_consume_turns_and_never_commit():
     assert trace.metrics["messages"] == 0 and trace.metrics["meetings_convened"] == 0
 
 
+def test_empty_recommendation_is_no_recommendation_not_a_rejection():
+    def seat0(o):
+        if o["turn_kind"] != "main" or o["round"] != 1:
+            return passive(o)
+        return {"actions": [
+            {"kind": "probe", "instrument": "model"},
+            {"kind": "post", "text": "nothing to recommend yet", "share": True, "estimate": 4, "recommend": []},
+            {"kind": "dm", "to": 2, "text": "same here", "recommend": []},
+        ]}
+
+    game, trace = play({"num_rounds": 1}, [seat0, passive, passive])
+    assert trace.metrics["invalid_actions"] == 0
+    assert trace.metrics["bulletin_messages"] == 1 and trace.metrics["dm_messages"] == 1
+    assert trace.metrics["recommendations"] == 0 and trace.metrics["disclosure_rate"] == 1.0
+    posted = [e for e in events(trace, "message") if e.data["channel"] == "bulletin"][0]
+    assert posted.data["recommend"] is None and posted.data["estimate"] == 4 and posted.data["shared_readings"] == 1
+    # Evacuating nothing is still not an order.
+    def evacuate_nothing(o):
+        return {"actions": [{"kind": "evacuate", "zones": []}]} if o["turn_kind"] == "main" else passive(o)
+    _, rejected = play({"num_rounds": 1}, [evacuate_nothing, passive, passive])
+    assert rejected.metrics["invalid_actions"] == 1 and rejected.metrics["orders"] == 0
+
+
 def test_sharing_discloses_every_unshared_reading_once_per_audience():
     def seat0(o):
         if o["turn_kind"] != "main":

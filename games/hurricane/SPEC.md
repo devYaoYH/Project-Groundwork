@@ -231,6 +231,10 @@ round. When no round is effective, they hold.
   estimates and recommendations, which remain free.
 - Meeting attendance is implicit for invitees; a seat that leaves before
   speaking pays no attention cost.
+- An empty `recommend` list on a post, direct message or meeting turn means no
+  recommendation and the message commits; a non-empty list with an unknown or
+  repeated zone rejects the message. (Live Haiku runs posted `recommend: []`
+  and lost the whole post, including its `share`, before this call was made.)
 - Orders in the final `evacuation_lead_time` rounds are accepted and charged
   rather than rejected, because a too-late order is a real decision outcome.
 - Scenario populations, radius and landfall are frozen bank rows selected by
