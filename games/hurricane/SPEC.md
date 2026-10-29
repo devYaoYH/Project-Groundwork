@@ -45,11 +45,11 @@ the episode. The episode `seed` changes the readings but never the storm.
 
 ## Rounds
 
-The episode runs `num_rounds` rounds (default 6); landfall happens after the
-last round. The executable LangGraph story is
-`next_round -> round -> next_round -> landfall -> finalize`, where the round
+Each storm runs `num_rounds` rounds (default 6); landfall happens after the
+last round. The executable LangGraph story for one storm is
+`next_round -> round -> next_round -> landfall`, where the round
 child executes `begin_round -> main_pass -> (meeting)* -> reply_pass ->
-close_round`. Every seat invocation is one explicit `AgentStep` whose response
+close_round`; the season loop around it is described under *Seasons*. Every seat invocation is one explicit `AgentStep` whose response
 is a single JSON object holding an ordered action list; the environment
 validates and commits the list in order.
 
@@ -103,6 +103,66 @@ harness and runtime strategy enforce it and it is recorded in the resolved
 config and passed in the registration. The board is the external memory:
 durable, authored, public, and costly to write.
 
+## Seasons: iterated play with the same seats
+
+`storms` (default `[scenario_id]`, at most 12) lists frozen bank rows played in
+order by the same three seats within one episode; the executable story becomes
+`next_storm -> storm -> next_storm -> finalize` with the storm child running
+`begin_storm -> (round)* -> landfall -> (debrief) -> close_storm`. The scenario
+fields of the config describe the first storm and later storms are looked up in
+the pinned bank; every storm must cross the same number of zones so sectors are
+stable. `storms` is a plain config field rather than a design parameter: a
+compiled design still selects one storm, and a season is written as an episode
+override. Single-storm episodes carry no season plumbing: no `storm_start`,
+`storm_end`, `note` or debrief events, no `season` key in observations, and
+readings identical to release v2.
+
+Each storm starts afresh: readings, probe log, bulletin, direct messages,
+meetings, estimates, recommendations, orders and the recon budget reset, and
+instrument noise is keyed by `(seed, storm, round, seat, instrument)` so a
+repeated scenario is a fresh storm. Attention debt from a final-round meeting
+is forgiven. The board persists across storms unless `board_persists` is
+false, because a board that resets every storm is not durable.
+
+What a seat carries from one storm to the next is the ordered design parameter
+`season_memory`, recorded in the resolved config and passed in the
+registration like `history_window`:
+
+| level | provider history | observation adds | who enforces |
+|---|---|---|---|
+| `none` | dropped at every storm boundary | `season: {storm, storms_total, memory}` | seat harness and runtime strategy |
+| `outcomes` (default) | dropped | `season.record`: every past storm's landfall zone, hit zones, orders with round and effectiveness, protected/exposed/needless populations, costs and regret | environment |
+| `notes` | dropped | `season.record` plus `your_notes`: the seat's own notes, one per past storm | environment and seat harness |
+| `full` | kept, within `history_window` | `season.record` | nothing dropped |
+
+The record is public world knowledge (everyone saw where the storm hit and who
+ordered what), built structurally and never containing another seat's
+undisclosed readings, scenario ids or titles (which name where a storm went).
+Under `notes`, after a landfall that is not the last, each seat takes one
+**debrief** turn seeing `landfall_result` and returning
+`{"kind":"note","text"}` (at most `max_note_chars`, default 1000) or
+`{"kind":"pass"}`; an empty or over-long note is `invalid_action: rejected`.
+Notes are private, recorded with `visibility: private`, and shown only to their
+author. The scripted manager writes a fixed note from the public result.
+
+The ladder follows the repeated-game literature: `outcomes` is the information
+structure of repeated-game studies with LLMs (moves and payoffs with a fixed
+partner), `notes` is the Reflexion-style agent-written summary, `full` is the
+hidden-profile release's existing convention, and `none` is the control that
+separates memory from the longer prompt that memory implies. Per storm the
+trace records `observation_chars_by_storm` as a context-length proxy, since
+provider token counts are not visible to the environment.
+
+Scoring: each storm's landfall result is kept in `final_state.storms`. For a
+single storm the top-level result is unchanged. For a season the top-level
+costs, populations, late orders and regret are sums, `hit_zones_protected_rate`
+is pooled over storms, `orders` carry a `storm` key, and zone lists live only
+inside each storm's result. Metrics keep their names as season totals or means
+(`estimate_error` over every storm's estimates, `estimate_agreement` and
+`recommendation_uptake` averaged), with `storms_completed`,
+`regret_first_storm`, `regret_last_storm`, `notes_written` and
+`observation_chars` added.
+
 ## Landfall and scoring
 
 - `evacuation_cost = evacuation_cost_per_capita * sum(population of every
@@ -152,7 +212,8 @@ role, seat, name and `history_window` only.
 
 LLM managers receive the JSON observation and return one JSON object per turn
 (`{"actions":[...]}`, a bare action, or a bare list); their provider history is
-agent-side and persists across rounds within `history_window`. Scripted
+agent-side and persists across rounds within `history_window`, and across
+storms only under `season_memory: full`. Scripted
 managers are deterministic from the observation alone: they probe every round
 (recon while the budget lasts), post all their readings on the bulletin with
 the rounded mean of every ensemble member they know as their estimate and the
@@ -170,8 +231,21 @@ round. When no round is effective, they hold.
   estimates and recommendations, which remain free.
 - Meeting attendance is implicit for invitees; a seat that leaves before
   speaking pays no attention cost.
+- A colleague in `dm.to` or `convene.participants` is the 1-based participant
+  number (as an integer or a numeric string) or the exact seat name listed in
+  the observation's `participants`; nothing else is guessed. Live model seats
+  wrote `"to": "manager_1"` and every direct message was rejected before this.
+- An empty `recommend` list on a post, direct message or meeting turn means no
+  recommendation and the message commits; a non-empty list with an unknown or
+  repeated zone rejects the message. (Live Haiku runs posted `recommend: []`
+  and lost the whole post, including its `share`, before this call was made.)
 - Orders in the final `evacuation_lead_time` rounds are accepted and charged
   rather than rejected, because a too-late order is a real decision outcome.
 - Scenario populations, radius and landfall are frozen bank rows selected by
   `scenario_id`/`item_id`; all noise, budget, cost, horizon and communication
   knobs are design parameters recorded in the resolved config.
+- The season's outcome record is shown under every memory level but `none`,
+  including `full`: the landfall is public, so a seat that remembers the whole
+  conversation is not also made to forget what happened.
+- Notes are agent-written, not harness summaries, so that what a seat chooses
+  to keep is itself an observed behavior and comparable across models.

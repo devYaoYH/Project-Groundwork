@@ -1,0 +1,21 @@
+schema_version: 1
+name: hurricane_season_local_smoke
+description: The same three scripted managers face three frozen storms in one episode, carrying only a private note between storms; no provider.
+release: ../environments/hurricane_tiny_v2.yaml
+agents:
+  - {role: manager, type: scripted, model: scripted}
+  - {role: manager, type: scripted, model: scripted}
+  - {role: manager, type: scripted, model: scripted}
+episodes:
+  - label: three_storm_season_notes
+    count: 1
+    seeds: [7]
+    overrides:
+      storms: [storm.central_city, storm.northern_edge, storm.wide_front]
+      season_memory: notes
+      board_persists: true
+storage:
+  backend: sqlite
+  path: ./results/hurricane_season_local_smoke.db
+observability:
+  capture_content: true

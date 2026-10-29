@@ -41,6 +41,11 @@ DECLARATION = ReleaseDeclaration(
         ParameterConfig(name="max_meetings_per_round", type="integer", domain=(0, 5)),
         ParameterConfig(name="reply_turns", type="integer", domain=(0, 1)),
         ParameterConfig(name="history_window", type="integer", domain=(1, 200)),
+        # Season: `storms` (the ordered scenario list) is a plain config field; these govern
+        # what the same seats carry from one storm to the next.
+        ParameterConfig(name="season_memory", type="categorical", domain=["none", "outcomes", "notes", "full"]),
+        ParameterConfig(name="board_persists", type="boolean"),
+        ParameterConfig(name="max_note_chars", type="integer", domain=(50, 8000)),
     ],
     item_policy=ItemPolicy(
         mode="enumerate",
