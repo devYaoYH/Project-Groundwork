@@ -231,6 +231,10 @@ round. When no round is effective, they hold.
   estimates and recommendations, which remain free.
 - Meeting attendance is implicit for invitees; a seat that leaves before
   speaking pays no attention cost.
+- A colleague in `dm.to` or `convene.participants` is the 1-based participant
+  number (as an integer or a numeric string) or the exact seat name listed in
+  the observation's `participants`; nothing else is guessed. Live model seats
+  wrote `"to": "manager_1"` and every direct message was rejected before this.
 - An empty `recommend` list on a post, direct message or meeting turn means no
   recommendation and the message commits; a non-empty list with an unknown or
   repeated zone rejects the message. (Live Haiku runs posted `recommend: []`

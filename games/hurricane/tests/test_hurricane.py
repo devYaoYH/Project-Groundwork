@@ -631,3 +631,31 @@ def test_agent_drops_provider_history_at_a_storm_boundary_unless_full():
     assert run(HurricaneAgent(Client(), "d", season_memory="full"), [1, 1, 2]) == [2, 4, 6]
     # Without a season in the observation nothing is ever dropped.
     assert run(HurricaneAgent(Client(), "e", season_memory="none"), [None, None, None]) == [2, 4, 6]
+
+
+def test_colleagues_may_be_addressed_by_participant_number_or_seat_name():
+    def seat0(o):
+        if o["turn_kind"] == "meeting":
+            return {"actions": [{"kind": "leave"}]}
+        if o["turn_kind"] != "main" or o["round"] != 1:
+            return passive(o)
+        return {"actions": [
+            {"kind": "dm", "to": "bo", "text": "by name"},
+            {"kind": "dm", "to": "3", "text": "by numeric string"},
+            {"kind": "dm", "to": "participant_9", "text": "unknown name"},  # rejected
+            {"kind": "dm", "to": "ana", "text": "to myself"},  # rejected
+            {"kind": "convene", "participants": ["bo", 3], "agenda": "mixed addressing"},
+        ]}
+
+    def quiet(o):
+        return {"actions": [{"kind": "leave"}]} if o["turn_kind"] == "meeting" else passive(o)
+
+    agents = [{"type": "scripted", "id": n} for n in ("ana", "bo", "cy")]
+    game = HurricaneEnvironment({"seed": 7, "num_rounds": 1, "attention_budget": 5, "agents": agents}, dry_run=True)
+    game.agents = [Controlled(n, p) for n, p in (("ana", seat0), ("bo", quiet), ("cy", quiet))]
+    trace = game.run()
+    dms = [e.data for e in events(trace, "message") if e.data["channel"] == "dm"]
+    assert [(d["to_agents"], d["text"]) for d in dms] == [([2], "by name"), ([3], "by numeric string")]
+    assert [e.data["reason"] for e in events(trace, "invalid_action")] == ["rejected", "rejected"]
+    assert events(trace, "convene")[0].data["attendees"] == [1, 2, 3]
+    assert observations_of(game, "bo")[-1]["inbox"][0]["from"] == 1

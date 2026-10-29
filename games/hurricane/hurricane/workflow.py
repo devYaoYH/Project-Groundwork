@@ -169,15 +169,32 @@ def zone_list(value, num_zones):
     return zones
 
 
-def seat_list(value, cfg, me):
+def resolve_seat(value, game):
+    """A colleague named the way the observation names them: the 1-based participant number
+    (as an int or a numeric string) or the exact seat name from `participants`. Live model
+    seats addressed direct messages by name and lost them; nothing else is guessed."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        names = [a.name for a in game.agents]
+        if value in names:
+            return names.index(value)
+        if not value.strip().isdigit():
+            return None
+        value = int(value)
+    if not isinstance(value, int):
+        return None
+    seat = value - 1
+    return seat if seat in all_seats(game.config) else None
+
+
+def seat_list(value, game, me):
     if not isinstance(value, list) or not value:
         return None
     seats = []
     for participant in value:
-        if isinstance(participant, bool) or not isinstance(participant, int):
-            return None
-        seat = participant - 1
-        if seat == me or seat not in all_seats(cfg):
+        seat = resolve_seat(participant, game)
+        if seat is None or seat == me:
             return None
         if seat not in seats:
             seats.append(seat)
@@ -355,10 +372,11 @@ class Turn:
         return bool(message)
 
     def do_dm(self, action):
-        to = action.get("to")
-        if isinstance(to, bool) or not isinstance(to, int) or to - 1 == self.seat or to - 1 not in self.everyone():
+        seat = resolve_seat(action.get("to"), self.game)
+        if seat is None or seat == self.seat:
             return False
-        message = self.say(action, "dm", [self.seat, to - 1], [to])
+        to = seat + 1
+        message = self.say(action, "dm", [self.seat, seat], [to])
         if message:
             self.dms.append({**message, "to": to})
             if to - 1 not in self.reply_seats:
@@ -377,7 +395,7 @@ class Turn:
         return True
 
     def do_convene(self, action):
-        invited = seat_list(action.get("participants"), self.cfg, self.seat)
+        invited = seat_list(action.get("participants"), self.game, self.seat)
         agenda = action.get("agenda", "")
         if invited is None or not valid_text(self.cfg, agenda):
             return False
