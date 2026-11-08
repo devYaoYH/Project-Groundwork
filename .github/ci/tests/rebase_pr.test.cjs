@@ -217,3 +217,25 @@ test('a rerun API failure is reported instead of claiming success', async () => 
   assert.match(calls.failures[0], /Actions write permission/);
   assert.match(calls.comments.at(-1).body, /could not finish/);
 });
+
+test('conflicting rebase hands an unchanged head to Codex only when repair is enabled', async () => {
+  const { calls, input, pr } = fixture({ behind: true, mutationError: 'Rebase conflicts' });
+  pr.rebaseable = false;
+  const outputs = {};
+  input.core.setOutput = (key, value) => { outputs[key] = value; };
+  input.enableRepair = true;
+  await rebasePR(input);
+  assert.equal(outputs.repair, 'true');
+  assert.equal(outputs.head, 'old');
+  assert.equal(outputs.base, 'base');
+  assert.equal(calls.failures.length, 0);
+  assert.match(calls.comments.at(-1).body, /gpt-6-luna/);
+});
+
+test('a rebase API permission error does not launch Codex for a rebaseable PR', async () => {
+  const { calls, input, pr } = fixture({ behind: true, mutationError: 'Resource not accessible' });
+  pr.rebaseable = true;
+  input.enableRepair = true;
+  await rebasePR(input);
+  assert.match(calls.failures[0], /Resource not accessible/);
+});

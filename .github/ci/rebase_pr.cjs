@@ -5,7 +5,7 @@ const WORKFLOWS = new Set([
 ]);
 
 module.exports = async function rebasePR({
-  github, context, core, hasToken,
+  github, context, core, hasToken, enableRepair = false,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 }) {
   const { payload, repo } = context;
@@ -20,6 +20,7 @@ module.exports = async function rebasePR({
     core.info('Ignoring /rebase from a user without repository write access.');
     return;
   }
+  core.setOutput?.('authorized', 'true');
 
   const pull_number = payload.issue.number;
   const runUrl = `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
@@ -27,7 +28,9 @@ module.exports = async function rebasePR({
   const { data: comment } = await github.rest.issues.createComment({
     ...commentArgs, body: `Rebasing onto \`main\` and starting PR checks. [Workflow](${runUrl})`,
   });
+  core.setOutput?.('comment_id', String(comment.id));
   let stage = 'Preparing the rebase';
+  let snapshot;
   try {
     if (!hasToken) {
       throw new Error('Set the PR_REBASE_TOKEN repository Actions secret first; see docs/CI.md.');
@@ -41,6 +44,9 @@ module.exports = async function rebasePR({
         && pr.head.ref === 'main') {
       throw new Error('Refusing to rewrite main.');
     }
+    snapshot = pr;
+    core.setOutput?.('head', pr.head.sha);
+    core.setOutput?.('base', pr.base.sha);
 
     const compare = async head => (await github.rest.repos.compareCommits({
       ...repo, base: pr.base.sha, head,
@@ -107,6 +113,7 @@ module.exports = async function rebasePR({
       throw new Error('The PR changed while checks were being located. Retry /rebase on its current head.');
     }
     const links = [];
+    const attempts = {};
     for (const run of runs.values()) {
       let action = 'running';
       if (!updated && run.status === 'completed') {
@@ -115,13 +122,34 @@ module.exports = async function rebasePR({
       } else if (run.status === 'completed') {
         action = `completed: ${run.conclusion}`;
       }
+      attempts[run.path.split('@')[0]] = {
+        id: run.id, attempt: (run.run_attempt || 1) + (action === 'restarted' ? 1 : 0),
+      };
       links.push(`- [${run.name}](${run.html_url}) — ${action}`);
     }
+    core.setOutput?.('head', pr.head.sha);
+    core.setOutput?.('base', pr.base.sha);
+    core.setOutput?.('attempts', JSON.stringify(attempts));
+    core.setOutput?.('repair', 'false');
     await github.rest.issues.updateComment({
       ...repo, comment_id: comment.id,
       body: `${updated ? 'Rebased onto' : 'Already up to date with'} \`main\`. Checks for \`${pr.head.sha}\`:\n\n${links.join('\n')}\n\nPlatform checks follow their normal path filter. Test results appear in the linked runs and the PR checks. [Command workflow](${runUrl})`,
     });
   } catch (error) {
+    if (enableRepair && snapshot && stage === 'Rebasing') {
+      // Only an unchanged PR can be handed to the agent. Permission errors,
+      // races, and other failures are revalidated before any paid generation.
+      const { data: current } = await github.rest.pulls.get({ ...repo, pull_number });
+      if (current.head.sha === snapshot.head.sha && current.base.ref === 'main'
+          && current.state === 'open' && current.rebaseable === false) {
+        core.setOutput?.('repair', 'true');
+        await github.rest.issues.updateComment({
+          ...repo, comment_id: comment.id,
+          body: `The native rebase needs conflict resolution. Starting one Codex repair attempt with \`gpt-6-luna\`. [Workflow](${runUrl})`,
+        });
+        return;
+      }
+    }
     core.setFailed(`${stage}: ${error.message}`);
     await github.rest.issues.updateComment({
       ...repo, comment_id: comment.id,
