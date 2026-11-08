@@ -124,8 +124,9 @@ def test_export_has_real_nested_phases_and_is_pure():
 
     doc = export_program(build_program(), "hidden_profile")
     assert doc["status"] == "available"
-    assert len(doc["workflow"]["graphs"]) == 6
+    assert len(doc["workflow"]["graphs"]) == 7
     assert any("discussion" in g["id"] for g in doc["workflow"]["graphs"])
+    assert any(g["id"].endswith("debrief") for g in doc["workflow"]["graphs"])
 
 
 def test_design_compilation_selects_full_packet_and_rejects_drift():
@@ -266,3 +267,94 @@ def test_matched_conditions_are_consistent_through_every_round():
         full["oracle_result"]["packet_scores"]
         == [full["oracle_result"]["pooled_scores"]] * 4
     )
+
+
+# -- cross-round memory: what the same four seats carry between decision rounds -----------
+
+
+def observations_of(trace, name, round_number):
+    return [
+        json.loads(e.data["content"])
+        for e in trace.events
+        if e.type == "observation" and e.data["speaker"] == name and e.data["round"] == round_number
+    ]
+
+
+def test_round_memory_levels_control_record_and_notes():
+    import asyncio
+
+    with pytest.raises(ValueError, match="round_memory"):
+        HiddenProfileEnvironment({"round_memory": "everything"}, dry_run=True)
+    # Default `full`: the record of finished rounds is what everyone already witnessed.
+    full = HiddenProfileEnvironment({"discussion_cycles": 1}, dry_run=True).run()
+    later = observations_of(full, "participant_0", 2)
+    assert later and all(o["memory"] == "full" and "your_notes" not in o for o in later)
+    assert later[0]["record"] == [
+        {"round": 1, "choice": "B", "proposer": 1, "termination": "unanimous_commitment"}
+    ]
+    assert all("optimal" not in json.dumps(o) and "oracle" not in json.dumps(o) for o in later)
+    assert full.metrics["notes_written"] == 0 and not [e for e in full.events if e.type == "note"]
+    none = HiddenProfileEnvironment({"discussion_cycles": 1, "round_memory": "none"}, dry_run=True).run()
+    assert all("record" not in o for o in observations_of(none, "participant_0", 2))
+    assert none.metrics["optimal_rounds"] == 2  # scripted pooling needs no memory
+
+    class Client:
+        def __init__(self):
+            self.messages = []
+
+        def oneshot(self, messages):
+            self.messages.append(copy.deepcopy(messages))
+            return '{"kind":"pass"}'
+
+    for memory, expected in (("none", [2, 4, 2]), ("outcomes", [2, 4, 2]), ("notes", [2, 4, 2]), ("full", [2, 4, 6])):
+        agent = HiddenProfileAgent(Client(), "p", round_memory=memory)
+        for round_number in (1, 1, 2):
+            asyncio.run(agent.act({"round": round_number}, {}))
+        assert [len(m) for m in agent.client.messages] == expected, memory
+
+
+class Noter(ScriptedParticipant):
+    def __init__(self, name, text):
+        super().__init__(name)
+        self.text = text
+
+    async def act(self, obs, tools):
+        if obs["phase"] == "debrief":
+            assert obs["last_round_result"]["round"] == obs["round"] and "max_note_chars" in obs
+            # The finished round's task and packet, not the next round's.
+            assert "caucus" in obs["task"].lower() and "relief" not in json.dumps(obs).lower()
+            return {"kind": "note", "text": self.text} if self.text is not None else {"kind": "pass"}
+        return await super().act(obs, tools)
+
+
+def test_notes_run_one_private_debrief_per_boundary():
+    cfg = {"discussion_cycles": 1, "round_memory": "notes", "max_note_chars": 60}
+    game = HiddenProfileEnvironment(cfg, dry_run=True)
+    game.agents = [
+        Noter("p0", "p0 secret: everyone posted facts, sums agreed"),
+        Noter("p1", None),
+        Noter("p2", "x" * 61),
+        ScriptedParticipant("p3"),
+    ]
+    trace = game.run()
+    notes = [e for e in trace.events if e.type == "note"]
+    # p1 passes, p2 overruns the cap, and the scripted note is longer than 60 characters too.
+    assert [(e.data["round"], e.data["speaker"]) for e in notes] == [(1, "p0")]
+    assert all(e.data["visibility"] == "private" and e.data["to_agents"] == [] for e in notes)
+    assert trace.metrics["notes_written"] == 1
+    invalid = [e for e in trace.events if e.type == "invalid_action" and e.data["phase"] == "debrief"]
+    assert [e.data["participant"] for e in invalid] == [3, 4]
+    debriefs = [json.loads(e.data["content"]) for e in trace.events if e.type == "observation" and json.loads(e.data["content"])["phase"] == "debrief"]
+    assert len(debriefs) == 4  # one boundary in a two-round sequence, four seats
+    assert all(d["round"] == 1 and d["your_notes"] == [] and "relief" not in json.dumps(d).lower() for d in debriefs)
+    second = observations_of(trace, "p0", 2)
+    assert second and second[0]["your_notes"] == [{"round": 1, "text": "p0 secret: everyone posted facts, sums agreed"}]
+    assert second[0]["record"][0]["choice"] == "B"
+    for name in ("p1", "p2", "p3"):
+        for o in observations_of(trace, name, 2):
+            assert "p0 secret" not in json.dumps(o)
+    assert observations_of(trace, "p1", 2)[0]["your_notes"] == []
+    assert trace.metrics["optimal_rounds"] == 2
+    again = HiddenProfileEnvironment({**cfg, "max_note_chars": 1000}, dry_run=True).run()
+    assert again.metrics["notes_written"] == 4 and again.metrics["invalid_actions"] == 0
+    assert "committed to B" in [e for e in again.events if e.type == "note"][0].data["text"]

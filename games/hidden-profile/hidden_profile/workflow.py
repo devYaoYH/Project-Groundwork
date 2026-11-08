@@ -17,6 +17,7 @@ from a2a_engine.workflow_runtime import (
 class State(TypedDict, total=False):
     round_index: int
     results: list
+    notes: dict
     phase: str
     seat: int
     phase_turn: int
@@ -79,7 +80,7 @@ def phase_start(phase):
             if phase == "discussion"
             else cfg.commitment_cycles
             if phase == "commitment"
-            else 1
+            else 1  # one sealed report, or one debrief note, per participant
         )
         return {"phase": phase, "seat": 0, "phase_turn": 0, "phase_limit": 4 * cycles}
 
@@ -136,7 +137,33 @@ def record_turn(state, runtime: Runtime[GameContext]):
     )
     updates = {"phase_turn": state["phase_turn"] + 1, "seat": (seat + 1) % 4}
     valid = isinstance(action, dict) and not action.get("parse_failed")
-    if phase in ("pre_report", "post_report"):
+    if phase == "debrief":
+        # One private note, the only thing that crosses the round boundary under `notes`.
+        kind, text = action.get("kind") if valid else None, action.get("text", "") if valid else ""
+        valid = valid and kind in ("note", "pass")
+        if valid and kind == "note":
+            valid = (
+                isinstance(text, str)
+                and bool(text.strip())
+                and len(text) <= game.config.max_note_chars
+            )
+            if valid:
+                note = {"round": state["round_index"], "text": text}
+                notes = {k: list(v) for k, v in state["notes"].items()}
+                notes[seat] = [*notes.get(seat, []), note]
+                updates["notes"] = notes
+                game.events.append(
+                    "note",
+                    data={
+                        "round": state["round_index"],
+                        "participant": seat + 1,
+                        "speaker": game.agents[seat].name,
+                        "text": text,
+                        "visibility": "private",
+                        "to_agents": [],
+                    },
+                )
+    elif phase in ("pre_report", "post_report"):
         valid = valid and valid_report(action)
         if valid:
             key = "pre_reports" if phase == "pre_report" else "post_reports"
@@ -250,6 +277,7 @@ def score_round(state, runtime: Runtime[GameContext]):
         "round": state["round_index"] + 1,
         "item_id": game.rows[state["round_index"]]["item_id"],
         "choice": choice,
+        "proposer": state["proposal"]["proposer"] if state["proposal"] else None,
         "oracle_choice": oracle["pooled_ranking"][0],
         "pooled_scores": scores,
         "optimal_choice": choice == oracle["pooled_ranking"][0],
@@ -272,10 +300,16 @@ def score_round(state, runtime: Runtime[GameContext]):
     }
 
 
+def debrief_route(state, runtime: Runtime[GameContext]):
+    game = runtime.context.game
+    more_rounds = state["round_index"] < len(game.rows)
+    return "debrief" if more_rounds and game.config.round_memory == "notes" else "skip"
+
+
 def round_program():
     builder = StateGraph(State, context_schema=GameContext)
     builder.add_node("receive_packets", begin_round)
-    for phase in ("pre_report", "discussion", "post_report", "commitment"):
+    for phase in ("pre_report", "discussion", "post_report", "commitment", "debrief"):
         builder.add_node(phase, phase_program(phase).compiled)
     builder.add_node("score_round", score_round)
     chain = [
@@ -286,10 +320,13 @@ def round_program():
         "post_report",
         "commitment",
         "score_round",
-        END,
     ]
     for left, right in zip(chain, chain[1:]):
         builder.add_edge(left, right)
+    builder.add_conditional_edges(
+        "score_round", debrief_route, {"debrief": "debrief", "skip": END}
+    )
+    builder.add_edge("debrief", END)
     return GraphProgram(builder)
 
 

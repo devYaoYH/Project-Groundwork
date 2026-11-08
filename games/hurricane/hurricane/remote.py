@@ -24,8 +24,9 @@ class HurricaneAction(WireModel):
     estimate: int | None = None
     recommend: list[int] | None = Field(default=None, max_length=64)
     zones: list[int] | None = Field(default=None, max_length=64)
-    to: int | None = None
-    participants: list[int] | None = Field(default=None, max_length=8)
+    # A colleague is a 1-based participant number or the seat name from the observation.
+    to: int | str | None = None
+    participants: list[int | str] | None = Field(default=None, max_length=8)
     agenda: str = Field(default="", max_length=2000)
 
 

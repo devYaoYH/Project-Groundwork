@@ -12,13 +12,28 @@ def prompt(observation):
 
 
 class HiddenProfileAgent(LLMAgent):
-    def __init__(self, client, name):
+    def __init__(self, client, name, *, round_memory="full"):
         super().__init__(client, system_prompt=SYSTEM, name=name)
         self.history = []
+        # Cross-round memory policy: anything but "full" drops the provider conversation when
+        # a new decision round begins; the environment supplies the record and notes instead.
+        self.round_memory = round_memory or "full"
+        self.current_round = None
         self.request_history_lengths = []
         self.history_allowed = lambda: True
 
+    def cross_round_boundary(self, observation):
+        round_number = observation.get("round")
+        if (
+            self.current_round is not None
+            and round_number != self.current_round
+            and self.round_memory != "full"
+        ):
+            self.history = []
+        self.current_round = round_number
+
     def build_messages(self, observation, tools):
+        self.cross_round_boundary(observation)
         self.request_history_lengths.append(len(self.history))
         return [
             {"role": "system", "content": self.system_prompt},
@@ -70,7 +85,14 @@ class ScriptedParticipant:
         }
         choice = max("ABC", key=lambda c: scores[c])
         phase = observation["phase"]
-        if phase in ("pre_report", "post_report"):
+        if phase == "debrief":
+            last = observation["last_round_result"]
+            action = {
+                "kind": "note",
+                "text": f"Round {last['round']}: the group committed to {last['choice']} "
+                f"({last['termination']}). Posting every packet fact as 'X: +n — statement' let everyone sum.",
+            }
+        elif phase in ("pre_report", "post_report"):
             action = {"choice": choice, "scores": scores}
         elif phase == "discussion":
             action = {

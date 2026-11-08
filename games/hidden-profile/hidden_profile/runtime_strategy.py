@@ -36,7 +36,11 @@ class HiddenProfileStrategy:
                 or f"participant_{invocation.observation['participant'] - 1}"
             )
             self.agent = (
-                HiddenProfileAgent(self.bounded_client, name)
+                HiddenProfileAgent(
+                    self.bounded_client,
+                    name,
+                    round_memory=invocation.observation.get("round_memory"),
+                )
                 if self.client
                 else ScriptedParticipant(name)
             )

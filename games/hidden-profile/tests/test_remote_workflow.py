@@ -72,7 +72,7 @@ def test_remote_repeated_session_parity_and_private_registration():
     registrations = [i for i in invocations if i.kind == "register"]
     assert len(registrations) == 4
     assert all(
-        set(i.observation) == {"role", "participant", "participant_id"}
+        set(i.observation) == {"role", "participant", "participant_id", "round_memory"}
         for i in registrations
     )
     assert all(p.agent.request_history_lengths[-1] > 10 for p in policies)

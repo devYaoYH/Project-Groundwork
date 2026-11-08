@@ -10,6 +10,14 @@ from .agents import HiddenProfileAgent, ScriptedParticipant
 from .bank import load_bank, project
 from .declaration import DECLARATION
 
+ROUND_MEMORY = ("none", "outcomes", "notes", "full")
+
+
+def public_record(result):
+    """What every participant already witnessed about a finished round: the committed choice
+    and how commitment ended. Correctness is oracle data and never enters an observation."""
+    return {k: result[k] for k in ("round", "choice", "proposer", "termination")}
+
 
 class HiddenProfileConfig(EpisodeConfigBase):
     environment_id: str = "hidden_profile"
@@ -26,6 +34,10 @@ class HiddenProfileConfig(EpisodeConfigBase):
     commitment_cycles: int = Field(default=3, ge=2, le=20)
     max_message_chars: int = Field(default=6000, ge=100, le=16000)
     turn_timeout_s: float = Field(default=120, gt=0, le=600)
+    # What a participant carries from one decision round to the next. `full` is the release v1
+    # convention (the whole provider conversation); the other levels drop it at the boundary.
+    round_memory: str = "full"
+    max_note_chars: int = Field(default=1000, ge=50, le=8000)
 
     @model_validator(mode="before")
     @classmethod
@@ -64,6 +76,8 @@ class HiddenProfileConfig(EpisodeConfigBase):
         bank = load_bank()
         if self.condition not in (None, "hidden", "full"):
             raise ValueError("unknown profile condition")
+        if self.round_memory not in ROUND_MEMORY:
+            raise ValueError(f"round_memory must be one of {ROUND_MEMORY}")
         for item in self.round_item_ids:
             bank.get(item)
         return self
@@ -126,7 +140,9 @@ class HiddenProfileEnvironment:
                 elif dry_run or cfg.get("type") == "scripted":
                     agent = ScriptedParticipant(name)
                 else:
-                    agent = HiddenProfileAgent(make_llm_client(cfg), name)
+                    agent = HiddenProfileAgent(
+                        make_llm_client(cfg), name, round_memory=self.config.round_memory
+                    )
                 self.agents.append(agent)
         except BaseException:
             if self._owns_episode:
@@ -150,16 +166,21 @@ class HiddenProfileEnvironment:
         )
 
     def observation(self, state):
-        row = self.rows[state["round_index"]]
         phase = state["phase"]
+        # A debrief follows score_round, which already advanced round_index: it reports the
+        # finished round and must never show the next round's packet.
+        round_index = state["round_index"] - 1 if phase == "debrief" else state["round_index"]
+        row = self.rows[round_index]
         instructions = {
             "pre_report": 'Sealed initial report using ONLY your available packet: {"choice":"A|B|C","scores":{"A":number,"B":number,"C":number}}.',
             "discussion": 'Free group discussion. You may disclose your packet, ask questions, discuss scores or pass. Other packets may have different evidence. Respond {"kind":"say","text":"your message"} or {"kind":"pass"}.',
             "post_report": 'Sealed postdiscussion report using your packet and current public discussion: {"choice":"A|B|C","scores":{"A":number,"B":number,"C":number}}.',
             "commitment": 'Commitment is separate from your sealed report. If no proposal, propose your preferred candidate. If you agree with the active proposal, explicitly endorse its candidate. A new proposal clears all endorsements. Unanimity requires every participant to endorse. Respond {"kind":"propose|endorse|pass","candidate":"A|B|C","text":"optional reason"}.',
+            "debrief": 'This round is over; last_round_result shows what the group committed to. Another round with NEW evidence follows and your conversation memory will not carry over; only the note you write now will. Respond {"kind":"note","text":"..."} (at most max_note_chars characters, private to you, shown to you in every later turn) or {"kind":"pass"}.',
         }
-        return {
-            "round": state["round_index"] + 1,
+        memory = self.config.round_memory
+        obs = {
+            "round": round_index + 1,
             "rounds_total": len(self.rows),
             "participant": state["seat"] + 1,
             "phase": phase,
@@ -176,8 +197,17 @@ class HiddenProfileEnvironment:
             if phase == "commitment"
             else [],
             "turns_remaining": state["phase_limit"] - state["phase_turn"],
+            "memory": memory,
             "response_instruction": instructions[phase],
         }
+        if memory != "none":
+            obs["record"] = [public_record(r) for r in state.get("results", [])]
+        if memory == "notes":
+            obs["your_notes"] = list(state.get("notes", {}).get(state["seat"], []))
+        if phase == "debrief":
+            obs["last_round_result"] = public_record(state["results"][-1])
+            obs["max_note_chars"] = self.config.max_note_chars
+        return obs
 
     def run(self):
         return asyncio.run(self._run_async())
@@ -191,6 +221,7 @@ class HiddenProfileEnvironment:
             data={
                 "rounds": len(self.rows),
                 "num_agents": 4,
+                "round_memory": self.config.round_memory,
                 "item_bank_sha256": self.bank.item_bank_sha256,
             },
         )
@@ -200,6 +231,7 @@ class HiddenProfileEnvironment:
                     "role": "participant",
                     "participant": i + 1,
                     "participant_id": self.agents[i].name,
+                    "round_memory": self.config.round_memory,
                 }
             )
             for i in range(4)
@@ -211,7 +243,7 @@ class HiddenProfileEnvironment:
                 register_timeout_s=self.config.turn_timeout_s,
             ) as roster:
                 state = await self.build_program().ainvoke(
-                    {"round_index": 0, "results": []},
+                    {"round_index": 0, "results": [], "notes": {}},
                     context=GameContext(self, roster),
                     config={
                         "recursion_limit": 30
@@ -221,7 +253,7 @@ class HiddenProfileEnvironment:
                             * (
                                 self.config.discussion_cycles
                                 + self.config.commitment_cycles
-                                + 2
+                                + 3
                             )
                             * 4
                             + 30
@@ -259,6 +291,7 @@ class HiddenProfileEnvironment:
             "missing_private_reports": sum(
                 8 - len(r["pre_reports"]) - len(r["post_reports"]) for r in results
             ),
+            "notes_written": sum(e.type == "note" for e in self.events.all()),
         }
         return EpisodeTrace(
             episode_uid=str(uuid.uuid4()),
