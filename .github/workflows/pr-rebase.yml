@@ -1,0 +1,264 @@
+name: Rebase and patch PR
+
+on:
+  issue_comment:
+    types: [created]
+
+# The coordinator/publisher execute only default-branch code. PR code runs only
+# in the isolated read-only-permission agent job, without the GitHub write token.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-rebase-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    if: github.event.issue.pull_request && github.event.comment.body == '/rebase'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      authorized: ${{ steps.command.outputs.authorized }}
+      comment_id: ${{ steps.command.outputs.comment_id }}
+      head: ${{ steps.command.outputs.head }}
+      base: ${{ steps.command.outputs.base }}
+      repair: ${{ steps.command.outputs.repair == 'true' || steps.checks.outputs.repair == 'true' }}
+      runs: ${{ steps.checks.outputs.runs || '[]' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        id: command
+        env:
+          HAS_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN != '' }}
+        with:
+          # A user/bot token lets the resulting synchronize event start normal
+          # PR CI automatically, without GITHUB_TOKEN's approval requirement.
+          github-token: ${{ secrets.PR_WORKFLOW_TOKEN || github.token }}
+          script: |
+            await require('./.github/ci/rebase_pr.cjs')({
+              github, context, core,
+              hasToken: process.env.HAS_WORKFLOW_TOKEN === 'true', enableRepair: true,
+            });
+      - uses: actions/github-script@v8
+        id: checks
+        if: steps.command.outputs.repair == 'false'
+        env:
+          PATCH_HEAD: ${{ steps.command.outputs.head }}
+          PATCH_COMMENT: ${{ steps.command.outputs.comment_id }}
+          PATCH_ATTEMPTS: ${{ steps.command.outputs.attempts }}
+        with:
+          github-token: ${{ secrets.PR_WORKFLOW_TOKEN }}
+          script: |
+            await require('./.github/ci/pr_checks.cjs').monitor({
+              github, context, core, head: process.env.PATCH_HEAD,
+              commentId: process.env.PATCH_COMMENT,
+              attempts: JSON.parse(process.env.PATCH_ATTEMPTS),
+            });
+
+  generate:
+    needs: rebase
+    if: needs.rebase.outputs.repair == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_repo: ${{ steps.request.outputs.source_repo }}
+      source_ref: ${{ steps.request.outputs.source_ref }}
+      final_message: ${{ steps.summary.outputs.final_message }}
+      had_conflicts: ${{ steps.prepare.outputs.had_conflicts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.rebase.outputs.head }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate request and collect failed-job evidence
+        id: request
+        uses: actions/github-script@v8
+        env:
+          PATCH_HEAD: ${{ needs.rebase.outputs.head }}
+          PATCH_BASE: ${{ needs.rebase.outputs.base }}
+          PATCH_RUNS: ${{ needs.rebase.outputs.runs }}
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+          HAS_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN != '' }}
+        with:
+          script: |
+            await require('./control/.github/ci/pr_checks.cjs').prepare({
+              github, context, core, head: process.env.PATCH_HEAD,
+              base: process.env.PATCH_BASE,
+              failedRuns: JSON.parse(process.env.PATCH_RUNS),
+              hasKey: process.env.HAS_OPENAI_KEY === 'true',
+              hasToken: process.env.HAS_WORKFLOW_TOKEN === 'true',
+            });
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: false
+      - name: Prepare local rebase and test tooling without model credentials
+        id: prepare
+        env:
+          PATCH_HEAD: ${{ needs.rebase.outputs.head }}
+          PATCH_BASE: ${{ needs.rebase.outputs.base }}
+        run: |
+          python control/.github/ci/pr_patch.py prepare --repository candidate \
+            --head "$PATCH_HEAD" --base "$PATCH_BASE"
+          uv venv --python 3.12 --seed candidate/.venv
+          uv pip install --python candidate/.venv/bin/python pytest pytest-asyncio
+      - name: Resolve conflicts and repair tests with Codex
+        id: codex
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13 (current v1)
+        timeout-minutes: 30
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-6-luna
+          effort: medium
+          working-directory: ${{ github.workspace }}/candidate
+          prompt-file: ${{ github.workspace }}/control/.github/codex/patch.md
+          output-file: ${{ runner.temp }}/codex-final-message.md
+          safety-strategy: drop-sudo
+          # Rebase continuation needs .git writes. This ephemeral runner has no
+          # GitHub write credential; the official action isolates the API key.
+          sandbox: danger-full-access
+      # Capture the action's final message as bounded text, including when a
+      # later generation/publication step fails. Never interpolate it into code.
+      - name: Capture Codex final message
+        id: summary
+        if: always() && steps.codex.outcome != 'skipped'
+        uses: actions/github-script@v8
+        env:
+          CODEX_SUMMARY_FILE: ${{ runner.temp }}/codex-final-message.md
+        with:
+          script: |
+            const fs = require('node:fs');
+            const file = process.env.CODEX_SUMMARY_FILE;
+            if (!fs.existsSync(file)) return;
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) return;
+            const buffer = Buffer.alloc(Math.min(stat.size, 24000));
+            const fd = fs.openSync(file, 'r');
+            let read;
+            try { read = fs.readSync(fd, buffer, 0, buffer.length, 0); }
+            finally { fs.closeSync(fd); }
+            const message = buffer.subarray(0, read).toString('utf8');
+            core.setOutput('final_message', message + (stat.size > read
+              ? '\n\n[Message truncated; full output is in the agent logs.]' : ''));
+      # After Codex, serialize only. No source code/tests or credentials are used.
+      - name: Serialize proposed commit history
+        env:
+          PATCH_BASE: ${{ needs.rebase.outputs.base }}
+        run: |
+          test -z "$(/usr/bin/git -C candidate status --porcelain)"
+          test ! -d candidate/.git/rebase-merge
+          test ! -d candidate/.git/rebase-apply
+          /usr/bin/git -C candidate merge-base --is-ancestor "$PATCH_BASE" HEAD
+          /usr/bin/git -C candidate update-ref refs/heads/patch-result HEAD
+          /usr/bin/git -C candidate bundle create "$RUNNER_TEMP/candidate.bundle" refs/heads/patch-result
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate.bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [rebase, generate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      head: ${{ steps.publish.outputs.head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: proposal
+      - name: Validate bundle and update only the authorized PR branch
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN }}
+          PATCH_HEAD: ${{ needs.rebase.outputs.head }}
+          PATCH_BASE: ${{ needs.rebase.outputs.base }}
+          PATCH_SOURCE_REPO: ${{ needs.generate.outputs.source_repo }}
+          PATCH_SOURCE_REF: ${{ needs.generate.outputs.source_ref }}
+          PATCH_REPO: ${{ github.repository }}
+          PATCH_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python .github/ci/pr_patch.py publish --repository proposal/objects \
+            --bundle proposal/candidate.bundle --head "$PATCH_HEAD" --base "$PATCH_BASE" \
+            --repo "$PATCH_REPO" --number "$PATCH_NUMBER" \
+            --source-repo "$PATCH_SOURCE_REPO" --source-ref "$PATCH_SOURCE_REF"
+
+  verify:
+    needs: [rebase, generate, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          PATCH_HEAD: ${{ needs.publish.outputs.head }}
+          PATCH_COMMENT: ${{ needs.rebase.outputs.comment_id }}
+          CODEX_FINAL_MESSAGE: ${{ needs.generate.outputs.final_message }}
+          PATCH_HAD_CONFLICTS: ${{ needs.generate.outputs.had_conflicts }}
+        with:
+          script: |
+            await require('./.github/ci/pr_checks.cjs').monitor({
+              github, context, core, head: process.env.PATCH_HEAD,
+              commentId: process.env.PATCH_COMMENT, allowRepair: false,
+              agent: {
+                finalMessage: process.env.CODEX_FINAL_MESSAGE,
+                hadConflicts: process.env.PATCH_HAD_CONFLICTS, published: true,
+              },
+            });
+
+  report-blocker:
+    needs: [rebase, generate, publish]
+    if: >-
+      always() && needs.rebase.outputs.authorized == 'true' &&
+      needs.rebase.outputs.repair == 'true' &&
+      (needs.generate.result != 'success' || needs.publish.result != 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          PATCH_COMMENT: ${{ needs.rebase.outputs.comment_id }}
+          CODEX_FINAL_MESSAGE: ${{ needs.generate.outputs.final_message }}
+          PATCH_HAD_CONFLICTS: ${{ needs.generate.outputs.had_conflicts }}
+        with:
+          script: |
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const report = require('./.github/ci/pr_checks.cjs').agentReport({
+              finalMessage: process.env.CODEX_FINAL_MESSAGE,
+              hadConflicts: process.env.PATCH_HAD_CONFLICTS, published: false,
+            });
+            await github.rest.issues.updateComment({
+              ...context.repo, comment_id: Number(process.env.PATCH_COMMENT),
+              body: `The Codex repair or guarded publication could not finish. No further agent attempt will run for this comment.\n\n${report}\n\n[Automation and agent logs](${url})`,
+            });

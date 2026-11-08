@@ -6,6 +6,132 @@ truth. Ordinary verification uses scripted agents and deterministic tests;
 provider access and hosted deployment are separate workflows with explicit
 configuration.
 
+## Rebase, repair, and verify from a PR comment
+
+After `Rebase and patch PR` is merged into `main` and the two secrets below are
+configured, leave this exact top-level PR comment (not a review/diff comment):
+
+```text
+/rebase
+```
+
+The commenter must currently have write, maintain, or admin access. The PR must
+be open and target `main`. One comment runs this sequence:
+
+1. Try GitHub's native rebase with an expected-head guard. If already current,
+   rerun the latest completed PR checks at that exact head; active runs continue.
+2. Wait for CI and the platform workflow when its actual PR path filter matches.
+   Check the requested run attempt, so a previous passing attempt cannot count
+   as the result of a newly requested rerun.
+3. On a rebase conflict or failed/timed-out tests, give Codex **one repair
+   attempt**, using **`gpt-6-luna`**, medium reasoning, and the OpenAI Platform API.
+   Codex completes the local rebase, reproduces relevant host tests, and commits
+   minimal repairs. It receives failed-job logs when available.
+4. A separate publisher validates the proposed history, checks that `main` and
+   the PR have not moved, and updates only the PR branch with an explicit
+   `--force-with-lease`. Fresh ordinary PR CI then verifies the published head.
+5. A bot reply includes Codex's final message and the independently verified
+   CI outcome. Resolved merge conflicts are highlighted for human review, with
+   the affected files, competing changes, resolution choices, and checks run.
+   The summary is preserved if CI or publication fails, with unpublished work
+   labeled accordingly. Missing summaries fall back to the agent logs. If checks
+   still fail, stop rather than launch another model session. Investigate or
+   comment again.
+
+The workflow never merges the PR. Approval-required, cancelled, missing, or
+infrastructure-startup checks stop for attention rather than invoking a repair
+agent speculatively. Each check-wait stage has a 25-minute limit; the Codex step
+has a 30-minute limit. These are runtime limits, not a guaranteed dollar cap.
+
+### One-time credential setup
+
+Configure these repository Actions secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | OpenAI Platform API access for `gpt-6-luna`; used only by the Codex Action. |
+| `PR_WORKFLOW_TOKEN` | Expiring user/bot PAT for branch updates, comments, and CI reruns. |
+
+The official `openai/codex-action` is pinned to commit
+`bdf19a4a223ec2549a3e2274a0cf61556bc07675`, the current **v1.13** release and **v1**
+alias. It uses `model: gpt-6-luna` and `secrets.OPENAI_API_KEY`. See
+[the Codex Action documentation](https://learn.chatgpt.com/docs/github-action).
+
+Set the GitHub token with:
+
+```bash
+gh secret set PR_WORKFLOW_TOKEN --repo devYaoYH/Project-Groundwork
+```
+
+Paste the token into the CLI's hidden prompt, never into a PR comment or source
+file. For same-repository PRs, prefer a fine-grained token restricted to this
+repository with **Contents: read/write**, **Pull requests: read/write**, and
+**Actions: read/write**. Include **Workflows: read/write** if PRs can change
+`.github/workflows/`. For fork PRs the token also needs permission to update the
+source branch, and the author must enable maintainer edits; a classic token with
+`public_repo` (or `repo` for private repositories), plus `workflow` for workflow
+edits, can be used when a fine-grained token cannot cover the fork. The command
+respects GitHub's fork and branch protection restrictions and reports access
+failures. Rotate the secret before the token expires.
+
+An ordinary user/bot GitHub token is intentional: GitHub's automatic `GITHUB_TOKEN`
+does not start unattended downstream PR workflows after a branch update. See
+[triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+The workflow fails with setup instructions if a required secret is missing.
+
+### Agent execution and publication
+
+The coordinator and publisher execute trusted default-branch code and do not
+run PR code or hooks. The generator is a separate ephemeral Linux runner with
+repository read permissions and no GitHub write token. The official Codex
+Action protects the OpenAI key behind its proxy and uses `drop-sudo`. Local Git
+rebase continuation needs `.git` writes, so the agent uses `danger-full-access`
+inside that runner; it has no deploy credentials or Docker socket. Only Git
+history and the bounded final message are serialized afterward. The publisher receives a Git bundle as data,
+checks it in a bare repository, and never checks out or executes its source.
+
+PRs changing `.github/workflows/` or `.github/actions/` cannot use automatic
+agent publication; review those automation changes manually. This prevents a
+repair from introducing privileged workflow changes. Normal native rebases of
+those PRs still work. The agent is told to preserve intended PR behavior, avoid
+weakening tests, and stop when human intent is needed. Review its commits before
+merging. Container tests run in ordinary PR CI after publication; the agent
+uses host checks and container failure logs.
+
+Only allowlisted `pull_request` test runs can be restarted, including the
+test-only path of `Platform release`. Push/manual deployment runs are excluded.
+Forks require maintainer edits and appropriate source-branch token access;
+GitHub's normal approval policy still applies. Concurrent pushes, a moved main,
+protected branches, unresolved conflicts, and credential failures stop with a
+reply. Requests for a PR are serialized, and no recursive CI-triggered agent loop
+is installed.
+
+### Alternative model providers
+
+The implemented generator uses OpenAI Platform. These are alternatives, not
+additional active providers or automatic fallbacks:
+
+| Provider | Coding agent and credential | What would change |
+| --- | --- | --- |
+| OpenAI Platform (configured) | Codex Action; `OPENAI_API_KEY`; `gpt-6-luna` | Current generation job. |
+| OpenRouter | Codex with a custom Responses-compatible provider; `OPENROUTER_API_KEY` | Adapt the isolated generation job's provider/endpoint and use a full supported model slug. |
+| Anthropic API | Claude Code; `ANTHROPIC_API_KEY` | Replace the generator with an isolated Claude Code integration, retaining the guarded publisher and CI verification. |
+
+OpenRouter documents [Codex integration](https://openrouter.ai/blog/tutorials/codex-cli-openrouter/)
+and model selection; tool compatibility depends on the selected model. Anthropic
+provides a [Claude Code GitHub Action](https://code.claude.com/docs/en/github-actions).
+An API key alone is not a coding agent: the agent supplies repository editing,
+commands, and test iteration. The selected API provider bills model use; GitHub
+Actions runner usage is separate. Do not put provider secrets into job-level
+environments or the publisher when adapting a generator.
+
+Test the command's authorization, API guards, and run selection locally with:
+
+```bash
+node --test .github/ci/tests/*.test.cjs
+python3 -m pytest .github/ci/tests -q
+```
+
 ## Motivation and change history
 
 The October 19, 2026 baseline PR waited 10m32s for CI. Python tests consumed
