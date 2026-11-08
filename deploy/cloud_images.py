@@ -154,7 +154,7 @@ def pull(project, region, source, runtime_source, build_id):
     command(["auth", "configure-docker", f"{region}-docker.pkg.dev", "--quiet"])
     for name, tag in images.LOCAL_IMAGES.items():
         subprocess.run(["docker", "pull", record["images"][name]], check=True)
-        if images.image_id(record["images"][name]) != record["configs"][name]:
+        if images.image_config_id(record["images"][name]) != record["configs"][name]:
             raise ValueError("Downloaded image differs from the Cloud Build output")
         images.docker("tag", record["images"][name], tag)
     (ROOT / "runtime-existing").unlink(missing_ok=True)

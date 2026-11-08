@@ -75,8 +75,9 @@ def test_download_refuses_wrong_build_source_or_namespace(candidates, field, val
 
 
 @pytest.mark.parametrize("wrong_download", [False, True])
+@pytest.mark.parametrize("containerd", [False, True])
 def test_pull_by_digest_records_only_the_downloaded_candidate_configs(
-    candidates, monkeypatch, wrong_download
+    candidates, monkeypatch, wrong_download, containerd
 ):
     calls = []
     monkeypatch.setattr(cloud, "command", lambda *a: "")
@@ -91,6 +92,9 @@ def test_pull_by_digest_records_only_the_downloaded_candidate_configs(
             else SCI_CONFIG
         ),
     )
+    monkeypatch.setattr(images, "image_config_id", images.image_id)
+    if containerd:
+        monkeypatch.setattr(images, "image_id", lambda ref: DIGEST if ref in (PLATFORM, images.LOCAL_IMAGES["platform"]) else SCI_DIGEST)
     if wrong_download:
         with pytest.raises(ValueError, match="Downloaded image differs"):
             cloud.pull("project", "us-central1", SOURCE, SCIENCE, BUILD)
@@ -101,6 +105,8 @@ def test_pull_by_digest_records_only_the_downloaded_candidate_configs(
         assert ["docker", "pull", CANDIDATE] in calls
         record = json.loads((cloud.ROOT / "validated-images.json").read_text())
         assert record["images"] == candidates["configs"]
+        if containerd:
+            assert record["local_images"] == {"platform": DIGEST, "runtime": SCI_DIGEST}
         assert record["validated"] is False
 
 
