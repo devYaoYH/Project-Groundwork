@@ -1,5 +1,7 @@
 """Agent output stays data; publication must preserve refs and credential boundaries."""
 
+import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -282,3 +284,61 @@ def test_final_message_and_conflict_flag_reach_both_reporting_paths_as_data():
         )
         assert "process.env.CODEX_FINAL_MESSAGE" in report["with"]["script"]
         assert "${{ needs.generate.outputs.final_message }}" not in report["with"]["script"]
+
+
+@pytest.mark.parametrize("token", ["workflow-token", ""])
+def test_command_action_keeps_builtin_feedback_client_separate_from_pat(token):
+    root = Path(__file__).resolve().parents[3]
+    jobs = yaml.safe_load((root / ".github/workflows/pr-rebase.yml").read_text())["jobs"]
+    step = next(step for step in jobs["rebase"]["steps"] if step.get("id") == "command")
+    script = step["with"]["script"]
+    # Execute the actual workflow wrapper with a fake Octokit constructor and
+    # helper. Authentication selection must not regress to PAT-backed feedback.
+    harness = r"""
+      const {script, token} = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+      const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+      class Octokit { constructor(options) { this.options = options; } }
+      const builtin = new Octokit({auth: 'builtin-token'});
+      const helper = async options => {
+        process.stdout.write(JSON.stringify({
+          feedbackIsBuiltin: options.feedback === builtin,
+          operationAuth: options.github.options.auth,
+          hasToken: options.hasToken,
+        }));
+      };
+      new AsyncFunction('github', 'context', 'core', 'require', 'process', script)(
+        builtin, {}, {}, () => helper,
+        {env: {PR_WORKFLOW_TOKEN: token, GITHUB_API_URL: 'https://api.github.com'}}
+      ).catch(error => { console.error(error); process.exitCode = 1; });
+    """
+    result = subprocess.run(
+        ["node", "-e", harness],
+        input=json.dumps({"script": script, "token": token}),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == {
+        "feedbackIsBuiltin": True,
+        "operationAuth": token or "builtin-token",
+        "hasToken": bool(token),
+    }
+
+
+def test_comment_feedback_never_authenticates_with_the_workflow_pat():
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/pr-rebase.yml").read_text())
+    jobs = workflow["jobs"]
+    for name in ("rebase", "verify", "report-blocker"):
+        for step in jobs[name]["steps"]:
+            if step.get("uses", "").startswith("actions/github-script"):
+                assert step["with"].get("github-token", "${{ github.token }}") == (
+                    "${{ github.token }}"
+                )
+    assert jobs["rebase"]["permissions"]["issues"] == "write"
+    assert jobs["rebase"]["permissions"]["actions"] == "read"
+    group = workflow["concurrency"]["group"]
+    assert "github.event.comment.body == '/rebase'" in group
+    assert "format('pr-rebase-{0}', github.event.issue.number)" in group
+    assert "format('pr-rebase-ignore-{0}', github.run_id)" in group
+    assert workflow["concurrency"]["cancel-in-progress"] is False
