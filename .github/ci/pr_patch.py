@@ -87,7 +87,12 @@ def pull_request(repo, number):
     return json.loads(command("gh", "api", f"repos/{repo}/pulls/{number}").stdout)
 
 
-def validate_target(pr, repo, head, base, source_repo, source_ref):
+def main_head(repo):
+    data = json.loads(command("gh", "api", f"repos/{repo}/git/ref/heads/main").stdout)
+    return oid(data["object"]["sha"])
+
+
+def validate_target(pr, repo, head, base, source_repo, source_ref, *, main):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source_repo):
         raise ValueError("Invalid source repository")
     command("git", "check-ref-format", f"refs/heads/{source_ref}")
@@ -96,7 +101,7 @@ def validate_target(pr, repo, head, base, source_repo, source_ref):
     if (
         pr["state"] != "open"
         or pr["base"]["ref"] != "main"
-        or pr["base"]["sha"] != base
+        or main != base
         or pr["head"]["sha"] != head
         or pr["head"]["ref"] != source_ref
         or not pr["head"]["repo"]
@@ -117,6 +122,7 @@ def publish(args):
         args.base,
         args.source_repo,
         args.source_ref,
+        main=main_head(args.repo),
     )
     result = validate_bundle(args.repository, args.bundle, args.base)
     if result == args.head:
@@ -129,6 +135,7 @@ def publish(args):
         args.base,
         args.source_repo,
         args.source_ref,
+        main=main_head(args.repo),
     )
     git(
         args.repository,

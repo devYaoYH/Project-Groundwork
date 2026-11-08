@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { monitor, prepare, latestRuns, platformPaths, agentReport } = require('../pr_checks.cjs');
 
 function fixture(options = {}) {
@@ -29,6 +30,10 @@ function fixture(options = {}) {
     paths: ['cloud_platform/**', 'web/**', 'compose.platform.yml'],
     github: {
       rest: {
+        git: { getRef: async args => {
+          assert.equal(args.ref, 'heads/main');
+          return { data: { object: { sha: 'base' } } };
+        } },
         pulls: { get: async () => ({ data: pr }), listFiles: 'files' },
         actions: { listWorkflowRunsForRepo: 'runs' },
         issues: { updateComment: async args => { calls.comments.push(args.body); } },
@@ -152,7 +157,7 @@ test('repair cannot start on a moved head, moved main, or a non-editable fork', 
   for (const change of ['head', 'base', 'fork']) {
     const { input, pr } = fixture();
     if (change === 'head') pr.head.sha = 'changed';
-    if (change === 'base') pr.base.sha = 'changed';
+    if (change === 'base') input.github.rest.git.getRef = async () => ({ data: { object: { sha: 'changed' } } });
     if (change === 'fork') pr.maintainer_can_modify = false;
     await assert.rejects(prepare({ ...input, hasKey: true, hasToken: true, failedRuns: [] }),
       /changed|maintainer edits/);
@@ -227,4 +232,33 @@ test('the no-agent path does not fabricate a Codex final message', async () => {
   const { calls, input } = fixture();
   await monitor(input);
   assert.doesNotMatch(calls.comments.at(-1), /Codex final message/);
+});
+
+
+test('repair preparation accepts a stale PR base when the actual main ref matches', async t => {
+  const { calls, input, pr } = fixture();
+  pr.base.sha = 'stale-base';
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-main-test-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, 'candidate/.git'), { recursive: true });
+  input.context.workspace = workspace;
+  await prepare({ ...input, hasKey: true, hasToken: true, failedRuns: [] });
+  assert.equal(calls.outputs.source_ref, 'feature');
+  assert.ok(fs.existsSync(path.join(workspace, 'candidate/.git/patch-ci.log')));
+});
+
+test('main advancing during CI monitoring prevents both repair and success reports', async () => {
+  for (const conclusion of ['failure', 'success']) {
+    const { calls, input, pr } = fixture({ runs: run => [run('ci', { conclusion })] });
+    // The PR payload remains stale even while the actual branch changes.
+    pr.base.sha = 'stale-base';
+    let reads = 0;
+    input.github.rest.git.getRef = async () => ({
+      data: { object: { sha: ++reads < 3 ? 'base' : 'advanced' } },
+    });
+    await monitor(input);
+    assert.match(calls.failures[0], /main changed/);
+    assert.equal(calls.outputs.repair, undefined);
+    assert.doesNotMatch(calls.comments.at(-1), /All applicable|Starting one Codex/);
+  }
 });

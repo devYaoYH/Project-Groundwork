@@ -20,8 +20,9 @@ be open and target `main`. An accepted command receives a 🚀 reaction on
 the original `/rebase` comment, acknowledging launch rather than test success.
 One comment runs this sequence:
 
-1. Try GitHub's native rebase with an expected-head guard. If already current,
-   rerun the latest completed PR checks at that exact head; active runs continue.
+1. Resolve the current `refs/heads/main` commit directly (the PR response's
+   `base.sha` can be stale), then try GitHub's native rebase with an expected-head
+   guard. If already current, rerun the latest completed PR checks at that exact head; active runs continue.
 2. Wait for CI and the platform workflow when its actual PR path filter matches.
    Check the requested run attempt, so a previous passing attempt cannot count
    as the result of a newly requested rerun.
@@ -88,6 +89,10 @@ Only the coordinator needs `issues: write` for the reaction endpoint, along with
 and CI reruns. Ordinary conversation comments may still create skipped Actions
 entries because GitHub cannot filter this event by comment body; they use a
 separate concurrency group and do not queue behind an active `/rebase` command.
+
+The resolved `main` commit is the shared snapshot for rebase comparisons, CI
+monitoring, local repair, and guarded publication. If `main` advances, the run
+stops and asks for another `/rebase` rather than using an outdated target.
 
 ### Agent execution and publication
 

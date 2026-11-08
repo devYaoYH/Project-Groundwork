@@ -1,4 +1,6 @@
 // Runs only from trusted default-branch code; no PR code or git hooks execute.
+const { mainHead, assertMain } = require('./pr_main.cjs');
+
 const WORKFLOWS = new Set([
   '.github/workflows/ci.yml',
   '.github/workflows/platform.yml',
@@ -36,6 +38,7 @@ module.exports = async function rebasePR({
   core.setOutput?.('comment_id', String(comment.id));
   let stage = 'Preparing the rebase';
   let snapshot;
+  let base;
   try {
     if (!hasToken) {
       throw new Error('Set the PR_WORKFLOW_TOKEN repository Actions secret first; see docs/CI.md.');
@@ -50,16 +53,18 @@ module.exports = async function rebasePR({
       throw new Error('Refusing to rewrite main.');
     }
     snapshot = pr;
+    base = await mainHead(github, repo);
     core.setOutput?.('head', pr.head.sha);
-    core.setOutput?.('base', pr.base.sha);
+    core.setOutput?.('base', base);
 
     const compare = async head => (await github.rest.repos.compareCommits({
-      ...repo, base: pr.base.sha, head,
+      ...repo, base, head,
     })).data.status;
     const isCurrent = status => ['ahead', 'identical'].includes(status);
     const oldHead = pr.head.sha;
     let updated = false;
     if (!isCurrent(await compare(oldHead))) {
+      await assertMain(github, repo, base);
       stage = 'Rebasing';
       // GitHub performs the rebase atomically and refuses conflicts, protected
       // branches, missing fork permissions, or a concurrent head change.
@@ -117,6 +122,7 @@ module.exports = async function rebasePR({
     if (current.head.sha !== pr.head.sha || current.base.ref !== 'main' || current.state !== 'open') {
       throw new Error('The PR changed while checks were being located. Retry /rebase on its current head.');
     }
+    await assertMain(github, repo, base);
     const links = [];
     const attempts = {};
     for (const run of runs.values()) {
@@ -133,7 +139,7 @@ module.exports = async function rebasePR({
       links.push(`- [${run.name}](${run.html_url}) — ${action}`);
     }
     core.setOutput?.('head', pr.head.sha);
-    core.setOutput?.('base', pr.base.sha);
+    core.setOutput?.('base', base);
     core.setOutput?.('attempts', JSON.stringify(attempts));
     core.setOutput?.('repair', 'false');
     await feedback.rest.issues.updateComment({
@@ -146,7 +152,8 @@ module.exports = async function rebasePR({
       // races, and other failures are revalidated before any paid generation.
       const { data: current } = await github.rest.pulls.get({ ...repo, pull_number });
       if (current.head.sha === snapshot.head.sha && current.base.ref === 'main'
-          && current.state === 'open' && current.rebaseable === false) {
+          && current.state === 'open' && current.rebaseable === false
+          && await mainHead(github, repo) === base) {
         core.setOutput?.('repair', 'true');
         await feedback.rest.issues.updateComment({
           ...repo, comment_id: comment.id,

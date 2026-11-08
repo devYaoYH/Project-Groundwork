@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { mainHead, assertMain } = require('./pr_main.cjs');
 
 const CI = '.github/workflows/ci.yml';
 const PLATFORM = '.github/workflows/platform.yml';
@@ -49,7 +50,7 @@ function agentReport({ finalMessage = '', hadConflicts = '', published = false }
 }
 
 async function monitor({
-  github, context, core, head, commentId, attempts = {}, allowRepair = true, agent,
+  github, context, core, head, base, commentId, attempts = {}, allowRepair = true, agent,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   timeoutMs = 25 * 60 * 1000,
   paths = platformPaths(fs.readFileSync(path.join(__dirname, '../workflows/platform.yml'), 'utf8')),
@@ -69,6 +70,7 @@ async function monitor({
       }
     };
     checkCurrent(pr);
+    await assertMain(github, repo, base);
     if (agent) await update(`Codex changes were published for \`${head}\`. Waiting for independent PR CI results.`);
     const files = await github.paginate(github.rest.pulls.listFiles, { ...repo, pull_number: number, per_page: 100 });
     if (files.length >= 3000) throw new Error('PR file listing may be truncated; inspect checks manually.');
@@ -77,6 +79,7 @@ async function monitor({
       pattern.endsWith('/**') ? name.startsWith(pattern.slice(0, -2)) : name === pattern)))) expected.push(PLATFORM);
     for (let poll = 0; poll < Math.max(1, Math.ceil(timeoutMs / 15000)); poll++) {
       checkCurrent((await github.rest.pulls.get({ ...repo, pull_number: number })).data);
+      await assertMain(github, repo, base);
       const runs = latestRuns(await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
         ...repo, event: 'pull_request', head_sha: head, per_page: 100,
       }), pr, number);
@@ -89,6 +92,7 @@ async function monitor({
       });
       if (fresh && selected.every(run => run.status === 'completed')) {
         checkCurrent((await github.rest.pulls.get({ ...repo, pull_number: number })).data);
+        await assertMain(github, repo, base);
         const failed = selected.filter(run => run.conclusion !== 'success');
         const links = selected.map(run => `- [${run.name}](${run.html_url}): ${run.conclusion}`).join('\n');
         core.setOutput('runs', JSON.stringify(failed.map(run => run.id)));
@@ -119,7 +123,8 @@ async function prepare({ github, context, core, head, base, failedRuns, hasKey, 
   if (!hasToken) throw new Error('Add PR_WORKFLOW_TOKEN before agent repair/publication.');
   const { repo, payload } = context;
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: payload.issue.number });
-  if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.head.sha !== head || pr.base.sha !== base) {
+  if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.head.sha !== head
+      || await mainHead(github, repo) !== base) {
     throw new Error('The PR or main changed before repair; comment /rebase again.');
   }
   if (!pr.head.repo || (pr.head.repo.full_name.toLowerCase() !== `${repo.owner}/${repo.repo}`.toLowerCase()

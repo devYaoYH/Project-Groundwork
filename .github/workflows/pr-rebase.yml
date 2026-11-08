@@ -65,13 +65,14 @@ jobs:
         if: steps.command.outputs.repair == 'false'
         env:
           PATCH_HEAD: ${{ steps.command.outputs.head }}
+          PATCH_BASE: ${{ steps.command.outputs.base }}
           PATCH_COMMENT: ${{ steps.command.outputs.comment_id }}
           PATCH_ATTEMPTS: ${{ steps.command.outputs.attempts }}
         with:
           github-token: ${{ github.token }}
           script: |
             await require('./.github/ci/pr_checks.cjs').monitor({
-              github, context, core, head: process.env.PATCH_HEAD,
+              github, context, core, head: process.env.PATCH_HEAD, base: process.env.PATCH_BASE,
               commentId: process.env.PATCH_COMMENT,
               attempts: JSON.parse(process.env.PATCH_ATTEMPTS),
             });
@@ -236,13 +237,14 @@ jobs:
       - uses: actions/github-script@v8
         env:
           PATCH_HEAD: ${{ needs.publish.outputs.head }}
+          PATCH_BASE: ${{ needs.rebase.outputs.base }}
           PATCH_COMMENT: ${{ needs.rebase.outputs.comment_id }}
           CODEX_FINAL_MESSAGE: ${{ needs.generate.outputs.final_message }}
           PATCH_HAD_CONFLICTS: ${{ needs.generate.outputs.had_conflicts }}
         with:
           script: |
             await require('./.github/ci/pr_checks.cjs').monitor({
-              github, context, core, head: process.env.PATCH_HEAD,
+              github, context, core, head: process.env.PATCH_HEAD, base: process.env.PATCH_BASE,
               commentId: process.env.PATCH_COMMENT, allowRepair: false,
               agent: {
                 finalMessage: process.env.CODEX_FINAL_MESSAGE,
