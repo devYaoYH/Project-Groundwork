@@ -45,7 +45,7 @@ Configure these repository Actions secrets:
 | Secret | Purpose |
 | --- | --- |
 | `OPENAI_API_KEY` | OpenAI Platform API access for `gpt-6-luna`; used only by the Codex Action. |
-| `PR_REBASE_TOKEN` | Expiring user/bot PAT for branch updates, comments, and CI reruns. |
+| `PR_WORKFLOW_TOKEN` | Expiring user/bot PAT for branch updates, comments, and CI reruns. |
 
 The official `openai/codex-action` is pinned to commit
 `bdf19a4a223ec2549a3e2274a0cf61556bc07675`, the current **v1.13** release and **v1**
@@ -55,7 +55,7 @@ alias. It uses `model: gpt-6-luna` and `secrets.OPENAI_API_KEY`. See
 Set the GitHub token with:
 
 ```bash
-gh secret set PR_REBASE_TOKEN --repo devYaoYH/Project-Groundwork
+gh secret set PR_WORKFLOW_TOKEN --repo devYaoYH/Project-Groundwork
 ```
 
 Paste the token into the CLI's hidden prompt, never into a PR comment or source

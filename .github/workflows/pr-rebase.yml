@@ -34,15 +34,15 @@ jobs:
       - uses: actions/github-script@v8
         id: command
         env:
-          HAS_REBASE_TOKEN: ${{ secrets.PR_REBASE_TOKEN != '' }}
+          HAS_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN != '' }}
         with:
           # A user/bot token lets the resulting synchronize event start normal
           # PR CI automatically, without GITHUB_TOKEN's approval requirement.
-          github-token: ${{ secrets.PR_REBASE_TOKEN || github.token }}
+          github-token: ${{ secrets.PR_WORKFLOW_TOKEN || github.token }}
           script: |
             await require('./.github/ci/rebase_pr.cjs')({
               github, context, core,
-              hasToken: process.env.HAS_REBASE_TOKEN === 'true', enableRepair: true,
+              hasToken: process.env.HAS_WORKFLOW_TOKEN === 'true', enableRepair: true,
             });
       - uses: actions/github-script@v8
         id: checks
@@ -52,7 +52,7 @@ jobs:
           PATCH_COMMENT: ${{ steps.command.outputs.comment_id }}
           PATCH_ATTEMPTS: ${{ steps.command.outputs.attempts }}
         with:
-          github-token: ${{ secrets.PR_REBASE_TOKEN }}
+          github-token: ${{ secrets.PR_WORKFLOW_TOKEN }}
           script: |
             await require('./.github/ci/pr_checks.cjs').monitor({
               github, context, core, head: process.env.PATCH_HEAD,
@@ -91,7 +91,7 @@ jobs:
           PATCH_BASE: ${{ needs.rebase.outputs.base }}
           PATCH_RUNS: ${{ needs.rebase.outputs.runs }}
           HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
-          HAS_REBASE_TOKEN: ${{ secrets.PR_REBASE_TOKEN != '' }}
+          HAS_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN != '' }}
         with:
           script: |
             await require('./control/.github/ci/pr_checks.cjs').prepare({
@@ -99,7 +99,7 @@ jobs:
               base: process.env.PATCH_BASE,
               failedRuns: JSON.parse(process.env.PATCH_RUNS),
               hasKey: process.env.HAS_OPENAI_KEY === 'true',
-              hasToken: process.env.HAS_REBASE_TOKEN === 'true',
+              hasToken: process.env.HAS_WORKFLOW_TOKEN === 'true',
             });
       - uses: astral-sh/setup-uv@v6
         with:
@@ -163,7 +163,7 @@ jobs:
       - name: Validate bundle and update only the authorized PR branch
         id: publish
         env:
-          GH_TOKEN: ${{ secrets.PR_REBASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN }}
           PATCH_HEAD: ${{ needs.rebase.outputs.head }}
           PATCH_BASE: ${{ needs.rebase.outputs.base }}
           PATCH_SOURCE_REPO: ${{ needs.generate.outputs.source_repo }}

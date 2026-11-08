@@ -96,7 +96,7 @@ async function monitor({
 
 async function prepare({ github, context, core, head, base, failedRuns, hasKey, hasToken }) {
   if (!hasKey) throw new Error('Add the OPENAI_API_KEY repository Actions secret before agent repair.');
-  if (!hasToken) throw new Error('Add PR_REBASE_TOKEN before agent repair/publication.');
+  if (!hasToken) throw new Error('Add PR_WORKFLOW_TOKEN before agent repair/publication.');
   const { repo, payload } = context;
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: payload.issue.number });
   if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.head.sha !== head || pr.base.sha !== base) {

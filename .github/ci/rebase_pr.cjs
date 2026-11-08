@@ -33,7 +33,7 @@ module.exports = async function rebasePR({
   let snapshot;
   try {
     if (!hasToken) {
-      throw new Error('Set the PR_REBASE_TOKEN repository Actions secret first; see docs/CI.md.');
+      throw new Error('Set the PR_WORKFLOW_TOKEN repository Actions secret first; see docs/CI.md.');
     }
     const getPR = async () => (await github.rest.pulls.get({ ...repo, pull_number })).data;
     let pr = await getPR();

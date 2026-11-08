@@ -243,7 +243,7 @@ def test_workflow_separates_generation_key_from_git_write_token():
     assert "secrets.OPENAI_API_KEY" not in str(jobs["publish"])
     assert "GH_TOKEN" not in str(agent)
     publish = next(step for step in jobs["publish"]["steps"] if step.get("id") == "publish")
-    assert publish["env"]["GH_TOKEN"] == "${{ secrets.PR_REBASE_TOKEN }}"
+    assert publish["env"]["GH_TOKEN"] == "${{ secrets.PR_WORKFLOW_TOKEN }}"
     for name in ("rebase", "publish", "verify"):
         checkout = next(
             step

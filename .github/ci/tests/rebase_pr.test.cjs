@@ -119,7 +119,7 @@ test('missing credentials fail with setup instructions before modifying a branch
   const { calls, input } = fixture();
   input.hasToken = false;
   await rebasePR(input);
-  assert.match(calls.failures[0], /PR_REBASE_TOKEN/);
+  assert.match(calls.failures[0], /PR_WORKFLOW_TOKEN/);
   assert.deepEqual(calls.mutations, []);
   assert.deepEqual(calls.reruns, []);
 });

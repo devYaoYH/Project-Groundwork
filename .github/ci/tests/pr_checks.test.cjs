@@ -145,7 +145,7 @@ test('a truncated PR file listing fails closed on platform coverage', async () =
 test('repair preparation requires both secrets without exposing their values', async () => {
   const { input } = fixture();
   await assert.rejects(prepare({ ...input, hasKey: false, hasToken: true }), /OPENAI_API_KEY/);
-  await assert.rejects(prepare({ ...input, hasKey: true, hasToken: false }), /PR_REBASE_TOKEN/);
+  await assert.rejects(prepare({ ...input, hasKey: true, hasToken: false }), /PR_WORKFLOW_TOKEN/);
 });
 
 test('repair cannot start on a moved head, moved main, or a non-editable fork', async () => {
