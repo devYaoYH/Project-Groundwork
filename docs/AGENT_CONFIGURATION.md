@@ -182,6 +182,27 @@ agents:
 Bindings retain their [credential selector](#credentials-and-endpoints) during
 hydration; secret values stay in the runtime environment.
 
+Authored research designs use schema version 2 and distinguish references from
+inline models and scripted strategies:
+
+```yaml
+schema_version: 2
+# Other design fields (release, parameters, units, seed) omitted here.
+roster:
+  - {id: model-seat, role: player, kind: llm, binding: {kind: agent, name: gpt-mini}}
+  - {id: script-seat, role: player, kind: scripted, binding: {kind: strategy, name: baseline}}
+```
+
+An LLM seat cannot contain a strategy binding. A reference must name a configured
+LLM agent, even if the reference looks like a model name. To configure a model
+inline, use `binding: {kind: model, model: gpt-4o-mini, credential: OPENAI_API_KEY}`;
+the credential selector fixes routing without guessing from the model name.
+The selector is public configuration; the secret itself stays in the runtime
+environment. Drafts may leave a binding null until selection, but cannot lock
+or compile that way. Existing version 1 designs and frozen plans retain their
+original identities. Runner-native `agents:` / `participants:` experiments keep
+their existing format; design schema versions apply to research design documents.
+
 The shared `haiku` and `haiku-or` bindings replace Haiku 4.5 with
 `anthropic/claude-haiku-5.5` through OpenRouter, using `api_format: openai`,
 `api_base: https://openrouter.ai/api/v1`, and `credential: OPENROUTER_API_KEY`.

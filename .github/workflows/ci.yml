@@ -23,7 +23,8 @@ jobs:
       - run: uvx --from ruff==0.15.2 ruff format --check .
 
   web:
-    runs-on: ubuntu-latest
+    # Keep the runner within the OS versions supported by pinned Playwright 1.58.2.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

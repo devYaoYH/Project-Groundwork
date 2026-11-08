@@ -55,16 +55,16 @@ export function quickPlayDesign(detail: EnvironmentDetail, choices: Record<strin
     const id = `${role.id}_${index + 1}`;
     if (mode === "smoke") {
       if (!role.accepts.includes("scripted")) throw new Error(`${role.id} does not support scripted testing. Choose models.`);
-      return { id, role: role.id, kind: "scripted", binding: "baseline",
+      return { id, role: role.id, kind: "scripted", binding: { kind: "strategy", name: "baseline" },
         capabilities: { input: ["text", "image"], evidence: "groundwork:scripted-visual-v1" } };
     }
     const agent = compatibleModels(detail, role, agents).find(entry => entry.name === bindings[id]);
     if (!agent) throw new Error(`Choose a compatible model for ${environmentTitle(id)}.`);
-    return { id, role: role.id, kind: "llm", binding: agent.name,
+    return { id, role: role.id, kind: "llm", binding: { kind: "agent", name: agent.name },
       ...(agent.capabilities ? { capabilities: agent.capabilities } : {}),
       ...(agent.api_format ? { api_format: agent.api_format } : {}) };
   }));
-  return stringify({ schema_version: 1, release: detail.release.release_id, parameters,
+  return stringify({ schema_version: 2, release: detail.release.release_id, parameters,
     units: { episodes_per_cell: 1 }, roster, seed: { root: 1 } });
 }
 

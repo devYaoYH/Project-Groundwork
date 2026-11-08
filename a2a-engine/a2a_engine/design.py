@@ -11,12 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from .environment import _StrictModel
+from .llm.credentials import ModelCredential
 
 
 Scalar = str | float | int | bool
@@ -64,6 +65,8 @@ class Disposition(_StrictModel):
 
 
 class ParticipantConfig(_StrictModel):
+    """Version 1 input retained verbatim for historic design digests."""
+
     id: str
     role: str | None = None
     kind: Literal["llm", "scripted", "human"] = "llm"
@@ -72,6 +75,85 @@ class ParticipantConfig(_StrictModel):
     harness: Literal["scripted", "structured_output"] | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
     api_format: str | None = None
+
+    @property
+    def binding_name(self) -> str | None:
+        return self.binding
+
+
+NonblankName = Annotated[str, Field(min_length=1, pattern=r"\S")]
+
+
+class AgentReference(_StrictModel):
+    kind: Literal["agent"]
+    name: NonblankName
+
+
+class ModelBinding(_StrictModel):
+    """Explicit routing, independent of heuristics over the model's name."""
+
+    kind: Literal["model"]
+    model: NonblankName
+    credential: ModelCredential
+    api_format: str | None = None
+    api_base: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
+    gcp_project: str | None = None
+    gcp_location: str | None = None
+
+    @model_validator(mode="after")
+    def _valid_routing(self) -> "ModelBinding":
+        from .llm.factory import provider_for_config
+
+        provider_for_config(self.as_agent_config())
+        return self
+
+    def as_agent_config(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
+
+
+class StrategyBinding(_StrictModel):
+    kind: Literal["strategy"]
+    name: NonblankName
+
+
+class _ParticipantV2(_StrictModel):
+    id: str
+    role: str | None = None
+    runtime: Literal["in_process", "local_process", "external"] = "in_process"
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    api_format: str | None = None
+
+    @property
+    def binding_name(self) -> str | None:
+        binding = self.binding
+        if isinstance(binding, ModelBinding):
+            return binding.model
+        return binding.name if binding else None
+
+
+class LLMParticipant(_ParticipantV2):
+    kind: Literal["llm"]
+    binding: Annotated[AgentReference | ModelBinding, Field(discriminator="kind")] | None = None
+    harness: Literal["structured_output"] | None = None
+
+
+class ScriptedParticipant(_ParticipantV2):
+    kind: Literal["scripted"]
+    binding: StrategyBinding | None = None
+    harness: Literal["scripted"] | None = None
+
+
+class HumanParticipant(_ParticipantV2):
+    kind: Literal["human"]
+    binding: None = None
+    harness: None = None
+
+
+TypedParticipantConfig = Annotated[
+    LLMParticipant | ScriptedParticipant | HumanParticipant, Field(discriminator="kind")
+]
 
 
 class UnitsConfig(_StrictModel):
@@ -100,6 +182,13 @@ class Design(_StrictModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+class DesignV2(Design):
+    """Typed bindings for new designs; a null binding is an unfinished draft."""
+
+    schema_version: Literal[2] = 2
+    roster: list[TypedParticipantConfig] = Field(default_factory=list)
+
+
 def parse_design_text(text: str) -> Design:
     """Parse an authored YAML document into the strict design model."""
 
@@ -110,16 +199,23 @@ def parse_design_text(text: str) -> Design:
     if not isinstance(payload, dict):
         raise DesignValidationError([ValidationIssue("$", "design must be one YAML mapping")])
     try:
-        return Design.model_validate(payload)
+        model = DesignV2 if payload.get("schema_version") == 2 else Design
+        return model.model_validate(payload)
     except ValidationError as exc:
         errors = [
-            ValidationIssue(_format_path(error["loc"]), str(error["msg"]))
+            ValidationIssue(_format_path(error["loc"], typed=model is DesignV2), str(error["msg"]))
             for error in exc.errors()
         ]
         raise DesignValidationError(errors) from exc
 
 
-def _format_path(location: tuple[Any, ...]) -> str:
+def _format_path(location: tuple[Any, ...], *, typed: bool = False) -> str:
+    # Pydantic inserts union tags in error locations; they are not YAML keys.
+    if typed and len(location) > 2 and location[0] == "roster" and isinstance(location[1], int):
+        if location[2] in {"llm", "scripted", "human"}:
+            location = location[:2] + location[3:]
+        if len(location) > 3 and location[2] == "binding" and location[3] in {"agent", "model"}:
+            location = location[:3] + location[4:]
     if not location:
         return "$"
     parts: list[str] = []

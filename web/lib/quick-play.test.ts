@@ -16,6 +16,8 @@ const detail: EnvironmentDetail = {
 test("quick play produces one episode, complete declared seats, and pins instead of factors", () => {
   const design = parse(quickPlayDesign(detail, { turns: 5 }, { item_id: "item", params: {}, parameter_values: { difficulty: "hard" }, oracle_result: null }, "smoke", {}, []));
   assert.deepEqual(design.units, { episodes_per_cell: 1 });
+  assert.equal(design.schema_version, 2);
+  assert.deepEqual(design.roster[0].binding, { kind: "strategy", name: "baseline" });
   assert.deepEqual(design.parameters, { difficulty: { pin: "hard" }, turns: { pin: 5 } });
   assert.deepEqual(design.roster.map((seat: { id: string; kind: string }) => [seat.id, seat.kind]), [["player_1", "scripted"], ["player_2", "scripted"]]);
   assert.equal(design.release, "release");
@@ -38,6 +40,7 @@ test("visual roles admit verified image models and copy binding capabilities int
   assert.throws(() => quickPlayDesign(visual, {}, undefined, "live", { player_1: "text" }, agents), /compatible model/);
   const design = parse(quickPlayDesign(visual, {}, undefined, "live", { player_1: "visual", player_2: "visual" }, agents));
   assert.equal(design.roster[0].api_format, "openai");
+  assert.deepEqual(design.roster[0].binding, { kind: "agent", name: "visual" });
   assert.deepEqual(design.roster[0].capabilities, agents[2].capabilities);
 });
 

@@ -163,3 +163,34 @@ test("half-written image capability declarations report instead of throwing", ()
   const imageDetail = { ...detail, roles: [{ ...detail.roles[0], required_modalities: ["image"] }] };
   assert.ok(validateClientDesign(design, imageDetail).some((issue) => issue.path === "roster[0].capabilities"));
 });
+
+test("typed bindings keep model and strategy choices in distinct namespaces", () => {
+  const modelDetail = { ...detail, roles: [{ ...detail.roles[0], accepts: ["llm"] }] };
+  for (const binding of ["baseline", { kind: "strategy", name: "baseline" }, [], 42]) {
+    const design = { schema_version: 2, release: "test@v1", parameters: { item: { pin: "a" } },
+      roster: [{ id: "p", role: "player", kind: "llm", binding }] };
+    assert.ok(validateClientDesign(design, modelDetail).some(issue => issue.path === "roster[0].binding"));
+  }
+  for (const binding of [{ kind: "agent", name: "gpt-mini" },
+    { kind: "model", model: "arbitrary", credential: "OPENAI_API_KEY" }]) {
+    const design = { schema_version: 2, release: "test@v1", parameters: { item: { pin: "a" } },
+      roster: [{ id: "p", role: "player", kind: "llm", binding }] };
+    assert.deepEqual(validateClientDesign(design, modelDetail), []);
+    assert.ok(validateClientDesign({ ...design, roster: [{ ...design.roster[0], kind: "scripted" }] }, detail)
+      .some(issue => issue.path === "roster[0].binding"));
+  }
+});
+
+test("typed inline models require explicit credential routing and reject scripted harnesses", () => {
+  const modelDetail = { ...detail, roles: [{ ...detail.roles[0], accepts: ["llm"] }] };
+  const design = parseClientDesign("schema_version: 2\nrelease: test@v1\nparameters: {item: {pin: a}}\nroster: [{id: p, role: player, kind: llm, harness: scripted, binding: {kind: model, model: arbitrary}}]");
+  const paths = validateClientDesign(design, modelDetail).map(issue => issue.path);
+  assert.ok(paths.includes("roster[0].binding.credential"));
+  assert.ok(paths.includes("roster[0].harness"));
+});
+
+test("typed references defer inherited capability checks to server-side resolution", () => {
+  const visual = { ...detail, roles: [{ ...detail.roles[0], accepts: ["llm"], required_modalities: ["text", "image"] }] };
+  const design = parseClientDesign("schema_version: 2\nrelease: test@v1\nparameters: {item: {pin: a}}\nroster: [{id: p, role: player, kind: llm, binding: {kind: agent, name: visual}}]");
+  assert.deepEqual(validateClientDesign(design, visual), []);
+});

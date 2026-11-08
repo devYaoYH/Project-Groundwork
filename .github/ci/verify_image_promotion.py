@@ -28,6 +28,7 @@ def main():
     fixture = uuid.uuid4().hex[:12]
     registry = "groundwork-promotion-check-" + fixture
     image_ids = []
+    config_ids = []
     try:
         docker("run", "-d", "--name", registry, "-p", "127.0.0.1::5000", "registry:2")
         ports = json.loads(docker("inspect", registry))[0]["NetworkSettings"]["Ports"]
@@ -66,6 +67,7 @@ def main():
                     str(context),
                 )
                 image_ids.append(images.image_id(tag))
+                config_ids.append(images.image_config_id(tag))
                 if name == "platform":
                     bytecode.write_bytes(b"different compilation")
                     loose_bytecode.write_bytes(b"different compilation")
@@ -133,7 +135,7 @@ def main():
             commands.clear()
             try:
                 images.publish_image(
-                    "fixture", address + "/runtime:" + science, image_ids[0], immutable=True
+                    "fixture", address + "/runtime:" + science, config_ids[0], immutable=True
                 )
             except ValueError as error:
                 assert "differs from the image" in str(error)
@@ -176,8 +178,8 @@ def main():
                 result["platform-image"],
                 candidate,
                 "c" * 40,
-                image_ids[0],
-                image_ids[1],
+                config_ids[0],
+                config_ids[1],
             )
             promoted = (context / "promoted-runtime").read_text()
             assert promoted.rpartition("@")[2] == candidate.rpartition("@")[2]
@@ -193,8 +195,8 @@ def main():
                 result["platform-image"],
                 promoted,
                 "c" * 40,
-                image_ids[0],
-                image_ids[1],
+                config_ids[0],
+                config_ids[1],
             )
             assert not any(command[0] == "push" for command in commands)
             print(

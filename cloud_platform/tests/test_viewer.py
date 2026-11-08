@@ -121,6 +121,39 @@ def test_existing_design_editor_mutations_remain_owned_and_digest_checked(platfo
     assert alice.post(f"/api/experiments/{draft['id']}/design", json={"design_text": text}).status_code == 400
 
 
+def test_typed_unbound_draft_cannot_lock_until_its_llm_reference_resolves(platform):
+    import yaml
+    from cloud_platform.tests.test_api import WORKSPACE
+
+    app, control, _ = platform
+    alice, bob = sign_in(app, "Alice"), sign_in(app, "Bob")
+    release = next(row for row in alice.get("/api/releases").json()["releases"]
+                   if row["environment_id"] == "buyer_seller")
+    design = yaml.safe_load((WORKSPACE / "local_stack/tests/buyer_seller_design_smoke.yaml").read_text())
+    design["schema_version"] = 2
+    for seat in design["roster"]:
+        seat.update(kind="llm", binding=None)
+    created = alice.post("/api/experiments", json={"name": "Typed draft", "release_id": release["id"],
+        "design_text": yaml.safe_dump(design), "draft": True})
+    assert created.status_code == 201, created.text
+    draft = created.json()
+    assert draft["status"] == "DRAFT"
+    lock_path = f"/api/experiments/{draft['id']}/lock"
+    assert bob.post(lock_path, json={"design_sha256": draft["design_sha256"]}).status_code == 404
+    assert alice.post(lock_path, json={"design_sha256": draft["design_sha256"]}).status_code == 400
+    assert "frozen_plan_key" not in control.repo.get("experiments", draft["id"])
+
+    for seat in design["roster"]:
+        seat["binding"] = {"kind": "agent", "name": "gpt-mini"}
+    saved = alice.post(f"/api/experiments/{draft['id']}/design", json={"design_text": yaml.safe_dump(design)})
+    assert saved.status_code == 200, saved.text
+    locked = alice.post(lock_path, json={"design_sha256": saved.json()["design_sha256"]})
+    assert locked.status_code == 200, locked.text
+    plan = json.loads(control.artifacts.get(locked.json()["frozen_plan_key"]))
+    assert all(agent["type"] == "llm" and agent["model"] and agent["credential"]
+               for config in plan for agent in config["agents"])
+
+
 def test_concurrent_save_wins_stale_lock_without_poisoning_later_lock(platform, monkeypatch):
     app, control, _ = platform
     alice = sign_in(app, "Alice")

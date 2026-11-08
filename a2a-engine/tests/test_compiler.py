@@ -232,3 +232,51 @@ roster:
         "  - id: two\n    role: opponent\n    kind: scripted\n    binding: baseline\n"
     ), declaration, bank)
     assert any(issue.path == "roster[0].kind" and "accepts human" in issue.message for issue in incompatible)
+
+
+def test_llm_binding_must_resolve_to_a_pool_agent_or_a_recognised_model(tmp_path):
+    from a2a_engine.agent_pool import AgentPool, AgentPoolEntry
+
+    declaration, bank = release_and_bank(tmp_path)
+    declaration = declaration.model_copy(update={"roles": [RoleConfig(id="player", accepts=["llm"])]})
+    pool = AgentPool(agents={
+        "ds-flash": AgentPoolEntry(model="deepseek/deepseek-v4-flash", api_format="openai",
+                                   api_base="https://openrouter.ai/api/v1", credential="OPENROUTER_API_KEY"),
+        "heuristic": AgentPoolEntry(type="heuristic"),
+    })
+
+    def compiled(binding: str, agent_pool=pool):
+        authored = parse_design_text(f"""schema_version: 1
+release: test@v1
+parameters:
+  difficulty: {{pin: easy}}
+  size: {{pin: 1}}
+units:
+  episodes_per_cell: 1
+roster:
+  - id: player
+    role: player
+    kind: llm
+    binding: {binding}
+seed:
+  root: 42
+""")
+        return compile(authored, declaration, bank, experiment_id="e", experiment_name="e",
+                       agent_pool=agent_pool)
+
+    # The hosted template once bound LLM-only roles to the scripted "baseline",
+    # which compiled to an empty base URL and failed mid-episode.
+    with pytest.raises(DesignValidationError) as exc:
+        compiled("baseline")
+    issue = exc.value.errors[0]
+    assert issue.path == "roster[0].binding"
+    assert "'baseline' is not a configured agent" in issue.message
+    assert "configured agents: ds-flash" in issue.message and "heuristic" not in issue.message
+
+    with pytest.raises(DesignValidationError):
+        compiled("baseline", agent_pool=None)
+
+    agent = compiled("ds-flash").cells[0].episodes[0].config["agents"][0]
+    assert agent["api_base"] == "https://openrouter.ai/api/v1"
+    # Concrete model strings from existing authored designs still compile.
+    assert compiled("gpt-4o-mini").cells[0].episodes[0].config["agents"][0]["model"] == "gpt-4o-mini"

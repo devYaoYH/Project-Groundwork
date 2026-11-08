@@ -1,9 +1,12 @@
 """Publish the exact image configurations that passed validation; never rebuild."""
 
 import argparse
+import functools
 import json
 import re
 import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 
 try:
@@ -35,8 +38,57 @@ def require_source(value):
 def image_id(image):
     value = docker("image", "inspect", "--format", "{{.Id}}", image)
     if not DIGEST.fullmatch(value):
-        raise ValueError("Docker did not return an immutable image configuration ID")
+        raise ValueError("Docker did not return an immutable local image ID")
     return value
+
+
+def archive_config_id(stream):
+    """Read Docker's exported config reference, independent of the image store."""
+    with tarfile.open(fileobj=stream, mode="r|") as archive:
+        for member in archive:
+            if member.name != "manifest.json":
+                continue
+            with archive.extractfile(member) as manifest_file:
+                manifests = json.load(manifest_file)
+            if len(manifests) != 1:
+                raise ValueError("Validation requires exactly one runnable image configuration")
+            name = Path(manifests[0]["Config"]).name.removesuffix(".json")
+            digest = "sha256:" + name
+            if not DIGEST.fullmatch(digest):
+                raise ValueError("Docker export did not identify an immutable image configuration")
+            return digest
+    raise ValueError("Docker export did not include its image manifest")
+
+
+@functools.lru_cache(maxsize=8)
+def saved_config_id(local_id):
+    # The containerd store's .Id names a manifest/index, not its configuration.
+    # Export metadata is authoritative; descriptor annotations need not be.
+    # Stream the archive rather than keeping an image-sized copy on disk.
+    with tempfile.TemporaryFile() as errors:
+        with subprocess.Popen(
+            ["docker", "image", "save", local_id], stdout=subprocess.PIPE, stderr=errors
+        ) as process:
+            try:
+                config = archive_config_id(process.stdout)
+                while process.stdout.read(1024 * 1024):
+                    pass  # Drain remaining layers with bounded memory.
+            except BaseException:
+                process.kill()
+                raise
+            if process.wait() != 0:
+                raise RuntimeError("Docker could not export the validated image configuration")
+    return config
+
+
+def image_config_id(image):
+    info = json.loads(docker("image", "inspect", "--format", "{{json .}}", image))
+    local_id = info.get("Id", "")
+    if not DIGEST.fullmatch(local_id):
+        raise ValueError("Docker did not return an immutable local image ID")
+    # Classic stores already use the config digest. New stores expose the
+    # descriptor, whose digest cannot be compared with a manifest's config.
+    return saved_config_id(local_id) if info.get("Descriptor") else local_id
 
 
 def write_record(path, record):
@@ -57,7 +109,8 @@ def record_images(path, source_sha, runtime_source_sha, reused_runtime=""):
         "source_sha": source_sha,
         "runtime_source_sha": runtime_source_sha,
         "reused_runtime": reused_runtime,
-        "images": {name: image_id(tag) for name, tag in LOCAL_IMAGES.items()},
+        "images": {name: image_config_id(tag) for name, tag in LOCAL_IMAGES.items()},
+        "local_images": {name: image_id(tag) for name, tag in LOCAL_IMAGES.items()},
         "validated": False,
     }
     write_record(path, record)
@@ -72,10 +125,20 @@ def read_record(path, source_sha):
     require_source(record["runtime_source_sha"])
     if set(record["images"]) != set(LOCAL_IMAGES):
         raise ValueError("Both validated images are required")
+    local_images = record.get("local_images")
+    if local_images is None:
+        # Historic records contained config IDs only. Resolve current handles
+        # without assuming that this Docker store uses the same identifier.
+        local_images = {name: image_id(tag) for name, tag in LOCAL_IMAGES.items()}
+    if set(local_images) != set(LOCAL_IMAGES):
+        raise ValueError("Both validated local image IDs are required")
     for name, tag in LOCAL_IMAGES.items():
         expected = record["images"][name]
-        if not DIGEST.fullmatch(expected) or image_id(tag) != expected:
+        local_id = local_images[name]
+        if (not DIGEST.fullmatch(expected) or not DIGEST.fullmatch(local_id)
+                or image_id(tag) != local_id or image_config_id(tag) != expected):
             raise ValueError(f"The {name} image changed after validation started")
+    record["local_images"] = local_images
     return record
 
 
@@ -149,17 +212,21 @@ def registry_image(project, tag):
 
 def verify_registry_image(image, expected_id):
     manifest = json.loads(docker("manifest", "inspect", image))
-    if manifest.get("config", {}).get("digest") != expected_id:
-        raise ValueError("Published image differs from the image that passed validation")
+    actual = manifest.get("config", {}).get("digest")
+    if actual != expected_id:
+        raise ValueError(
+            "Published image differs from the image that passed validation "
+            f"(expected config {expected_id}, registry config {actual})"
+        )
     return image
 
 
-def publish_image(project, tag, expected_id, *, immutable=False):
+def publish_image(project, tag, expected_id, *, immutable=False, local_image=None):
     # A concurrent release may have published this science source. Reuse it
     # only when its configuration matches the image we actually tested.
     image = registry_image(project, tag) if immutable else None
     if image is None:
-        docker("tag", expected_id, tag)
+        docker("tag", local_image or expected_id, tag)
         docker("push", tag)
         image = registry_image(project, tag)
         if image is None:
@@ -174,6 +241,7 @@ def publish_images(path, project, region, source_sha, release_id):
     if not re.fullmatch(r"[0-9]+-[0-9]+", release_id):
         raise ValueError("A workflow run ID and attempt are required")
     repos = repositories(project, region)
+    local_images = record.get("local_images", record["images"])
     reused = record["reused_runtime"]
     if reused:
         # Validate the namespace before making any registry requests or pushes.
@@ -185,11 +253,13 @@ def publish_images(path, project, region, source_sha, release_id):
             repos["runtime"] + ":" + record["runtime_source_sha"],
             record["images"]["runtime"],
             immutable=True,
+            local_image=local_images["runtime"],
         )
     platform = publish_image(
         project,
         repos["platform"] + ":" + source_sha + "-" + release_id,
         record["images"]["platform"],
+        local_image=local_images["platform"],
     )
     result = {
         "platform-image": platform,
