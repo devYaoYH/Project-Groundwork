@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pr_patch as patch
 import pytest
@@ -124,6 +125,60 @@ def test_symlinked_artifact_is_rejected(history, tmp_path):
     link.symlink_to(artifact)
     with pytest.raises(ValueError, match="symlinked"):
         patch.validate_bundle(tmp_path / "publisher.git", link, base)
+
+
+@pytest.mark.parametrize("concurrent_push", [False, True])
+def test_publication_uses_a_real_lease_and_cannot_overwrite_a_racing_push(
+    history, tmp_path, monkeypatch, concurrent_push
+):
+    repo, _, head, base = history
+    remote = tmp_path / "source.git"
+    remote.mkdir()
+    patch.git(remote, "init", "--bare", ".")
+    patch.git(repo, "push", str(remote), f"{head}:refs/heads/feature", f"{base}:refs/heads/main")
+    patch.prepare(repo, head, base)
+    resolve(repo, monkeypatch)
+    proposed = patch.git(repo, "rev-parse", "HEAD").stdout.strip()
+    args = SimpleNamespace(
+        repository=tmp_path / "publisher.git",
+        bundle=bundle(repo, tmp_path / "result.bundle"),
+        repo="owner/repo",
+        number=7,
+        head=head,
+        base=base,
+        source_repo="fork/repo",
+        source_ref="feature",
+    )
+    pr = {
+        "state": "open",
+        "base": {"ref": "main", "sha": base},
+        "head": {"ref": "feature", "sha": head, "repo": {"full_name": "fork/repo"}},
+    }
+    monkeypatch.setattr(patch, "pull_request", lambda *_args: pr)
+    original_git = patch.git
+
+    def local_git(repository, *arguments, **kwargs):
+        # Route only the transport to a disposable local remote. All validation
+        # and the actual force-with-lease publication use production code.
+        arguments = [
+            str(remote) if arg == "https://github.com/fork/repo.git" else arg for arg in arguments
+        ]
+        if concurrent_push and "push" in arguments:
+            original_git(remote, "update-ref", "refs/heads/feature", base)
+        return original_git(repository, *arguments, **kwargs)
+
+    monkeypatch.setattr(patch, "git", local_git)
+    output = tmp_path / "outputs.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    if concurrent_push:
+        with pytest.raises(RuntimeError, match="stale info"):
+            patch.publish(args)
+        assert original_git(remote, "rev-parse", "feature").stdout.strip() == base
+        assert not output.exists()
+    else:
+        patch.publish(args)
+        assert original_git(remote, "rev-parse", "feature").stdout.strip() == proposed
+        assert output.read_text() == f"head={proposed}\n"
 
 
 def target():
