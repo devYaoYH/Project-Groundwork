@@ -5,7 +5,7 @@ const WORKFLOWS = new Set([
 ]);
 
 module.exports = async function rebasePR({
-  github, context, core, hasToken, enableRepair = false,
+  github, feedback, context, core, hasToken, enableRepair = false,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 }) {
   const { payload, repo } = context;
@@ -20,12 +20,17 @@ module.exports = async function rebasePR({
     core.info('Ignoring /rebase from a user without repository write access.');
     return;
   }
+  // Feedback must use GITHUB_TOKEN: a PAT-authored status comment creates
+  // another issue_comment workflow run, even when its command job will skip.
+  await feedback.rest.reactions.createForIssueComment({
+    ...repo, comment_id: payload.comment.id, content: 'rocket',
+  });
   core.setOutput?.('authorized', 'true');
 
   const pull_number = payload.issue.number;
   const runUrl = `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
   const commentArgs = { ...repo, issue_number: pull_number };
-  const { data: comment } = await github.rest.issues.createComment({
+  const { data: comment } = await feedback.rest.issues.createComment({
     ...commentArgs, body: `Rebasing onto \`main\` and starting PR checks. [Workflow](${runUrl})`,
   });
   core.setOutput?.('comment_id', String(comment.id));
@@ -131,7 +136,7 @@ module.exports = async function rebasePR({
     core.setOutput?.('base', pr.base.sha);
     core.setOutput?.('attempts', JSON.stringify(attempts));
     core.setOutput?.('repair', 'false');
-    await github.rest.issues.updateComment({
+    await feedback.rest.issues.updateComment({
       ...repo, comment_id: comment.id,
       body: `${updated ? 'Rebased onto' : 'Already up to date with'} \`main\`. Checks for \`${pr.head.sha}\`:\n\n${links.join('\n')}\n\nPlatform checks follow their normal path filter. Test results appear in the linked runs and the PR checks. [Command workflow](${runUrl})`,
     });
@@ -143,7 +148,7 @@ module.exports = async function rebasePR({
       if (current.head.sha === snapshot.head.sha && current.base.ref === 'main'
           && current.state === 'open' && current.rebaseable === false) {
         core.setOutput?.('repair', 'true');
-        await github.rest.issues.updateComment({
+        await feedback.rest.issues.updateComment({
           ...repo, comment_id: comment.id,
           body: `The native rebase needs conflict resolution. Starting one Codex repair attempt with \`gpt-6-luna\`. [Workflow](${runUrl})`,
         });
@@ -151,7 +156,7 @@ module.exports = async function rebasePR({
       }
     }
     core.setFailed(`${stage}: ${error.message}`);
-    await github.rest.issues.updateComment({
+    await feedback.rest.issues.updateComment({
       ...repo, comment_id: comment.id,
       body: `${stage} could not finish: ${error.message}\n\nNo conflict resolution or test-failure repair was attempted. Inspect the PR and [workflow log](${runUrl}); after resolving the blocker, comment \`/rebase\` again.`,
     });

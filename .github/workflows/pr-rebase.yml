@@ -11,7 +11,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-rebase-${{ github.event.issue.number }}
+  # Only command comments share the PR lock. Other comments skip immediately
+  # rather than appearing as pending duplicates behind a long-running command.
+  group: >-
+    ${{ github.event.issue.pull_request && github.event.comment.body == '/rebase' &&
+        format('pr-rebase-{0}', github.event.issue.number) ||
+        format('pr-rebase-ignore-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -19,6 +24,11 @@ jobs:
     if: github.event.issue.pull_request && github.event.comment.body == '/rebase'
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      pull-requests: write
     outputs:
       authorized: ${{ steps.command.outputs.authorized }}
       comment_id: ${{ steps.command.outputs.comment_id }}
@@ -34,15 +44,21 @@ jobs:
       - uses: actions/github-script@v8
         id: command
         env:
-          HAS_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN != '' }}
+          PR_WORKFLOW_TOKEN: ${{ secrets.PR_WORKFLOW_TOKEN }}
         with:
-          # A user/bot token lets the resulting synchronize event start normal
-          # PR CI automatically, without GITHUB_TOKEN's approval requirement.
-          github-token: ${{ secrets.PR_WORKFLOW_TOKEN || github.token }}
+          # Feedback/reactions use the built-in token so they cannot recursively
+          # trigger issue_comment. Only branch writes/CI reruns use the PAT.
+          github-token: ${{ github.token }}
           script: |
+            const workflowGithub = process.env.PR_WORKFLOW_TOKEN
+              ? new github.constructor({
+                  auth: process.env.PR_WORKFLOW_TOKEN,
+                  baseUrl: process.env.GITHUB_API_URL || 'https://api.github.com',
+                })
+              : github;
             await require('./.github/ci/rebase_pr.cjs')({
-              github, context, core,
-              hasToken: process.env.HAS_WORKFLOW_TOKEN === 'true', enableRepair: true,
+              github: workflowGithub, feedback: github, context, core,
+              hasToken: Boolean(process.env.PR_WORKFLOW_TOKEN), enableRepair: true,
             });
       - uses: actions/github-script@v8
         id: checks
@@ -52,7 +68,7 @@ jobs:
           PATCH_COMMENT: ${{ steps.command.outputs.comment_id }}
           PATCH_ATTEMPTS: ${{ steps.command.outputs.attempts }}
         with:
-          github-token: ${{ secrets.PR_WORKFLOW_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             await require('./.github/ci/pr_checks.cjs').monitor({
               github, context, core, head: process.env.PATCH_HEAD,

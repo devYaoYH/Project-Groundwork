@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const rebasePR = require('../rebase_pr.cjs');
 
 function fixture(options = {}) {
-  const calls = { mutations: [], reruns: [], comments: [], failures: [], waits: [] };
+  const calls = { mutations: [], reruns: [], comments: [], reactions: [], failures: [], waits: [] };
   const pr = {
     state: 'open', node_id: 'PR_node',
     base: { ref: 'main', sha: 'base' },
@@ -15,7 +15,7 @@ function fixture(options = {}) {
     repo: { owner: 'owner', repo: 'repo' }, serverUrl: 'https://github.com', runId: 123,
     payload: {
       issue: { number: 7, pull_request: {} },
-      comment: { body: '/rebase', user: { login: 'maintainer', type: 'User' } },
+      comment: { id: 99, body: '/rebase', user: { login: 'maintainer', type: 'User' } },
     },
   };
   const run = (id, path, extra = {}) => ({
@@ -35,6 +35,9 @@ function fixture(options = {}) {
         get: async () => ({
           data: { ...pr, head: pr.head && { ...pr.head, sha: mutated ? 'new' : pr.head.sha } },
         }),
+      },
+      reactions: {
+        createForIssueComment: async args => { calls.reactions.push(args); return { status: 201 }; },
       },
       issues: {
         createComment: async args => { calls.comments.push(args); return { data: { id: 456 } }; },
@@ -58,7 +61,7 @@ function fixture(options = {}) {
     },
   };
   const input = {
-    github, context, hasToken: true,
+    github, feedback: github, context, hasToken: true,
     core: { info() {}, setFailed(message) { calls.failures.push(message); } },
     sleep: async ms => { calls.waits.push(ms); },
   };
@@ -91,6 +94,7 @@ for (const permission of ['read', 'triage', 'none']) {
     const { calls, input } = fixture({ permission });
     await rebasePR(input);
     assert.deepEqual(calls.comments, []);
+    assert.deepEqual(calls.reactions, []);
     assert.deepEqual(calls.mutations, []);
     assert.deepEqual(calls.reruns, []);
   });
@@ -102,6 +106,7 @@ for (const body of ['/rebase please', 'hello /rebase', '/rebase\necho hacked', '
     context.payload.comment.body = body;
     await rebasePR(input);
     assert.deepEqual(calls.comments, []);
+    assert.deepEqual(calls.reactions, []);
   });
 }
 
@@ -112,6 +117,7 @@ test('ordinary issues and bot comments do not trigger the command', async () => 
     else context.payload.comment.user.type = 'Bot';
     await rebasePR(input);
     assert.deepEqual(calls.comments, []);
+    assert.deepEqual(calls.reactions, []);
   }
 });
 
@@ -238,4 +244,60 @@ test('a rebase API permission error does not launch Codex for a rebaseable PR', 
   input.enableRepair = true;
   await rebasePR(input);
   assert.match(calls.failures[0], /Resource not accessible/);
+});
+
+
+test('accepted commands react to the original comment with a rocket before feedback', async () => {
+  const { calls, input, github } = fixture();
+  const create = github.rest.issues.createComment;
+  github.rest.issues.createComment = async args => {
+    assert.deepEqual(calls.reactions, [{ owner: 'owner', repo: 'repo', comment_id: 99, content: 'rocket' }]);
+    return create(args);
+  };
+  await rebasePR(input);
+  assert.equal(calls.reactions.length, 1);
+  assert.equal(calls.failures.length, 0);
+});
+
+for (const outcome of ['success', 'conflict', 'error', 'missing-token']) {
+  test(`all ${outcome} feedback uses the built-in-token client, never the workflow PAT`, async () => {
+    const options = outcome === 'conflict' || outcome === 'error'
+      ? { behind: true, mutationError: outcome === 'conflict' ? 'Conflicts' : 'Access denied' }
+      : {};
+    const { calls, input, github, pr } = fixture(options);
+    input.feedback = { rest: { issues: github.rest.issues, reactions: github.rest.reactions } };
+    // A write-token client is allowed to rebase/restart CI, but must not create
+    // or update comments (which would retrigger issue_comment as a user).
+    github.rest.issues = {
+      createComment: async () => assert.fail('PAT must never create feedback comments'),
+      updateComment: async () => assert.fail('PAT must never update feedback comments'),
+    };
+    github.rest.reactions = {
+      createForIssueComment: async () => assert.fail('PAT must never acknowledge comments'),
+    };
+    if (outcome === 'conflict') { input.enableRepair = true; pr.rebaseable = false; }
+    if (outcome === 'missing-token') input.hasToken = false;
+    await rebasePR(input);
+    assert.equal(calls.reactions.length, 1);
+    assert.ok(calls.comments.length >= 2);
+    if (outcome === 'success') {
+      assert.deepEqual(calls.reruns, [10, 11]);
+      assert.equal(calls.failures.length, 0);
+    } else if (outcome === 'conflict') {
+      assert.match(calls.comments.at(-1).body, /conflict resolution/);
+    } else {
+      assert.equal(calls.failures.length, 1);
+    }
+  });
+}
+
+test('a clean rebase still uses the workflow-token client for the branch mutation', async () => {
+  const { calls, input, github } = fixture({ behind: true });
+  input.feedback = { rest: { issues: github.rest.issues, reactions: github.rest.reactions } };
+  delete github.rest.issues;
+  delete github.rest.reactions;
+  await rebasePR(input);
+  assert.equal(calls.mutations.length, 1);
+  assert.equal(calls.reactions.length, 1);
+  assert.equal(calls.failures.length, 0);
 });

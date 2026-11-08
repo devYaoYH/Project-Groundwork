@@ -16,7 +16,9 @@ configured, leave this exact top-level PR comment (not a review/diff comment):
 ```
 
 The commenter must currently have write, maintain, or admin access. The PR must
-be open and target `main`. One comment runs this sequence:
+be open and target `main`. An accepted command receives a 🚀 reaction on
+the original `/rebase` comment, acknowledging launch rather than test success.
+One comment runs this sequence:
 
 1. Try GitHub's native rebase with an expected-head guard. If already current,
    rerun the latest completed PR checks at that exact head; active runs continue.
@@ -50,7 +52,7 @@ Configure these repository Actions secrets:
 | Secret | Purpose |
 | --- | --- |
 | `OPENAI_API_KEY` | OpenAI Platform API access for `gpt-6-luna`; used only by the Codex Action. |
-| `PR_WORKFLOW_TOKEN` | Expiring user/bot PAT for branch updates, comments, and CI reruns. |
+| `PR_WORKFLOW_TOKEN` | Expiring user/bot PAT for branch updates and CI reruns. |
 
 The official `openai/codex-action` is pinned to commit
 `bdf19a4a223ec2549a3e2274a0cf61556bc07675`, the current **v1.13** release and **v1**
@@ -78,6 +80,14 @@ An ordinary user/bot GitHub token is intentional: GitHub's automatic `GITHUB_TOK
 does not start unattended downstream PR workflows after a branch update. See
 [triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 The workflow fails with setup instructions if a required secret is missing.
+
+Comments and acknowledgement reactions use the built-in `GITHUB_TOKEN`, so the
+workflow's own status replies do not trigger additional `issue_comment` runs.
+Only the coordinator needs `issues: write` for the reaction endpoint, along with
+`actions: read` for monitoring CI. The PAT remains reserved for branch updates
+and CI reruns. Ordinary conversation comments may still create skipped Actions
+entries because GitHub cannot filter this event by comment body; they use a
+separate concurrency group and do not queue behind an active `/rebase` command.
 
 ### Agent execution and publication
 
