@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { monitor, prepare, latestRuns, platformPaths } = require('../pr_checks.cjs');
+const { monitor, prepare, latestRuns, platformPaths, agentReport } = require('../pr_checks.cjs');
 
 function fixture(options = {}) {
   const calls = { outputs: {}, failures: [], comments: [], waits: [] };
@@ -157,4 +157,74 @@ test('repair cannot start on a moved head, moved main, or a non-editable fork', 
     await assert.rejects(prepare({ ...input, hasKey: true, hasToken: true, failedRuns: [] }),
       /changed|maintainer edits/);
   }
+});
+
+
+test('published conflict resolutions are prominent and retain file-level review notes', () => {
+  const report = agentReport({
+    finalMessage: '#### Merge conflicts resolved\n- `a2a-engine/example.py:42`: kept both validation paths.',
+    hadConflicts: 'true', published: true,
+  });
+  assert.match(report, /\*\*Merge conflicts resolved — human review requested\.\*\*/);
+  assert.match(report, /a2a-engine\/example\.py:42/);
+  assert.match(report, /kept both validation paths/);
+  assert.match(report, /agent reported/);
+});
+
+test('an unpublished conflict repair is not reported as a completed resolution', () => {
+  const report = agentReport({ finalMessage: 'Could not safely resolve the competing behavior.', hadConflicts: true });
+  assert.match(report, /Merge conflicts encountered/);
+  assert.match(report, /not been published/);
+  assert.doesNotMatch(report, /\*\*Merge conflicts resolved/);
+});
+
+test('unknown conflict status and missing final messages fall back to logs', () => {
+  const report = agentReport();
+  assert.match(report, /Conflict status was not captured/);
+  assert.match(report, /final message is unavailable/);
+  assert.doesNotMatch(report, /did not encounter/);
+});
+
+test('a clean prepared rebase does not falsely claim conflict resolution', () => {
+  const report = agentReport({ finalMessage: 'Fixed the failing assertion.', hadConflicts: 'false', published: true });
+  assert.match(report, /did not encounter merge conflicts/);
+  assert.doesNotMatch(report, /Merge conflicts resolved/);
+});
+
+test('model summaries are bounded and cannot cause user or team mention notifications', () => {
+  const report = agentReport({ finalMessage: '@reviewers '.repeat(10000) });
+  assert.ok(Buffer.byteLength(report, 'utf8') < 60000);
+  assert.doesNotMatch(report, /@reviewers/);
+  assert.match(report, /Summary truncated/);
+});
+
+test('Codex summary is posted while CI is pending and preserved with verified success', async () => {
+  const { calls, input } = fixture();
+  input.allowRepair = false;
+  input.agent = { finalMessage: '#### Merge conflicts resolved\n- `engine.py:12`: retained both checks.', hadConflicts: 'true', published: true };
+  await monitor(input);
+  assert.match(calls.comments[0], /Waiting for independent PR CI results/);
+  assert.match(calls.comments[0], /retained both checks/);
+  assert.match(calls.comments.at(-1), /All applicable PR test workflows passed/);
+  assert.match(calls.comments.at(-1), /Merge conflicts resolved — human review requested/);
+  assert.match(calls.comments.at(-1), /retained both checks/);
+});
+
+test('verified failure and timeouts preserve the agent summary without another repair', async () => {
+  for (const extra of [{ conclusion: 'failure' }, { status: 'in_progress' }]) {
+    const { calls, input } = fixture({ runs: run => [run('ci', extra)] });
+    input.allowRepair = false;
+    input.agent = { finalMessage: 'Reconciled the scoring conflict; container checks need verification.', hadConflicts: true, published: true };
+    await monitor(input);
+    assert.equal(calls.failures.length, 1);
+    assert.equal(calls.outputs.repair, undefined);
+    assert.match(calls.comments.at(-1), /PR automation stopped/);
+    assert.match(calls.comments.at(-1), /Reconciled the scoring conflict/);
+  }
+});
+
+test('the no-agent path does not fabricate a Codex final message', async () => {
+  const { calls, input } = fixture();
+  await monitor(input);
+  assert.doesNotMatch(calls.comments.at(-1), /Codex final message/);
 });

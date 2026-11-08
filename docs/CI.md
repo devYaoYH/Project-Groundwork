@@ -30,8 +30,13 @@ be open and target `main`. One comment runs this sequence:
 4. A separate publisher validates the proposed history, checks that `main` and
    the PR have not moved, and updates only the PR branch with an explicit
    `--force-with-lease`. Fresh ordinary PR CI then verifies the published head.
-5. A bot reply reports the actual CI outcome and links. If checks still fail,
-   stop rather than launch another model session. Investigate or comment again.
+5. A bot reply includes Codex's final message and the independently verified
+   CI outcome. Resolved merge conflicts are highlighted for human review, with
+   the affected files, competing changes, resolution choices, and checks run.
+   The summary is preserved if CI or publication fails, with unpublished work
+   labeled accordingly. Missing summaries fall back to the agent logs. If checks
+   still fail, stop rather than launch another model session. Investigate or
+   comment again.
 
 The workflow never merges the PR. Approval-required, cancelled, missing, or
 infrastructure-startup checks stop for attention rather than invoking a repair
@@ -82,7 +87,7 @@ repository read permissions and no GitHub write token. The official Codex
 Action protects the OpenAI key behind its proxy and uses `drop-sudo`. Local Git
 rebase continuation needs `.git` writes, so the agent uses `danger-full-access`
 inside that runner; it has no deploy credentials or Docker socket. Only Git
-history is serialized afterward. The publisher receives a Git bundle as data,
+history and the bounded final message are serialized afterward. The publisher receives a Git bundle as data,
 checks it in a bare repository, and never checks out or executes its source.
 
 PRs changing `.github/workflows/` or `.github/actions/` cannot use automatic

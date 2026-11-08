@@ -63,6 +63,7 @@ def prepare(repository, head, base):
         raise RuntimeError(result.stderr)
     request = {"head": head, "base": base, "rebase_conflicted": bool(result.returncode)}
     (repository / ".git/patch-request.json").write_text(json.dumps(request) + "\n")
+    return request
 
 
 def validate_bundle(repository, bundle, base):
@@ -157,7 +158,10 @@ def main():
     parser.add_argument("--source-ref")
     args = parser.parse_args()
     if args.operation == "prepare":
-        prepare(args.repository.resolve(), args.head, args.base)
+        request = prepare(args.repository.resolve(), args.head, args.base)
+        if output_path := os.environ.get("GITHUB_OUTPUT"):
+            with open(output_path, "a") as output:
+                output.write(f"had_conflicts={str(request['rebase_conflicted']).lower()}\n")
     else:
         publish(args)
 

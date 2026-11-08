@@ -51,7 +51,8 @@ def test_real_conflicting_rebase_can_be_resolved_bundled_and_validated(
     history, tmp_path, monkeypatch
 ):
     repo, _, head, base = history
-    patch.prepare(repo, head, base)
+    request = patch.prepare(repo, head, base)
+    assert request["rebase_conflicted"] is True
     assert (repo / ".git/rebase-merge").is_dir()
     assert "<<<<<<<" in (repo / "shared.txt").read_text()
     resolve(repo, monkeypatch)
@@ -252,3 +253,32 @@ def test_workflow_separates_generation_key_from_git_write_token():
         )
         assert checkout["with"]["ref"] == "${{ github.sha }}"
         assert checkout["with"]["persist-credentials"] is False
+
+
+def test_conflict_free_preparation_reports_no_conflicts(history):
+    repo, original, head, _ = history
+    request = patch.prepare(repo, head, original)
+    assert request["rebase_conflicted"] is False
+
+
+def test_final_message_and_conflict_flag_reach_both_reporting_paths_as_data():
+    root = Path(__file__).resolve().parents[3]
+    jobs = yaml.safe_load((root / ".github/workflows/pr-rebase.yml").read_text())["jobs"]
+    agent = jobs["generate"]
+    codex = next(step for step in agent["steps"] if step.get("id") == "codex")
+    assert codex["with"]["output-file"] == "${{ runner.temp }}/codex-final-message.md"
+    assert agent["outputs"]["final_message"] == "${{ steps.summary.outputs.final_message }}"
+    assert agent["outputs"]["had_conflicts"] == "${{ steps.prepare.outputs.had_conflicts }}"
+    summary = next(step for step in agent["steps"] if step.get("id") == "summary")
+    assert summary["if"] == "always() && steps.codex.outcome != 'skipped'"
+    assert "generate" in jobs["verify"]["needs"]
+    for name in ("verify", "report-blocker"):
+        report = jobs[name]["steps"][-1]
+        assert report["env"]["CODEX_FINAL_MESSAGE"] == (
+            "${{ needs.generate.outputs.final_message }}"
+        )
+        assert report["env"]["PATCH_HAD_CONFLICTS"] == (
+            "${{ needs.generate.outputs.had_conflicts }}"
+        )
+        assert "process.env.CODEX_FINAL_MESSAGE" in report["with"]["script"]
+        assert "${{ needs.generate.outputs.final_message }}" not in report["with"]["script"]

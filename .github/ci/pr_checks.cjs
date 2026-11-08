@@ -29,8 +29,27 @@ function latestRuns(runs, pr, number) {
   return latest;
 }
 
+function agentReport({ finalMessage = '', hadConflicts = '', published = false } = {}) {
+  let conflictNote = 'Conflict status was not captured; inspect the agent logs.';
+  if (hadConflicts === true || hadConflicts === 'true') {
+    conflictNote = published
+      ? '**Merge conflicts resolved — human review requested.** Review the affected files and resolution choices in Codex’s summary below.'
+      : '**Merge conflicts encountered.** Proposed resolutions have not been published; inspect the summary and logs for remaining blockers.';
+  } else if (hadConflicts === false || hadConflicts === 'false') {
+    conflictNote = 'The prepared rebase did not encounter merge conflicts.';
+  }
+  // Model output is comment text only. Bound its size and suppress accidental
+  // user/team mentions; it cannot replace the independently verified CI result.
+  const raw = typeof finalMessage === 'string' ? finalMessage.trim() : '';
+  const safe = raw.replace(/@/g, '@\u200b');
+  const message = safe ? safe.slice(0, 16000)
+    + (safe.length > 16000 ? '\n\n_Summary truncated; see the agent logs for the full message._' : '')
+    : '_Codex’s final message is unavailable; inspect the agent logs._';
+  return `${conflictNote}\n\n### Codex final message (agent reported)\n\n${message}`;
+}
+
 async function monitor({
-  github, context, core, head, commentId, attempts = {}, allowRepair = true,
+  github, context, core, head, commentId, attempts = {}, allowRepair = true, agent,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   timeoutMs = 25 * 60 * 1000,
   paths = platformPaths(fs.readFileSync(path.join(__dirname, '../workflows/platform.yml'), 'utf8')),
@@ -40,7 +59,7 @@ async function monitor({
   const workflowUrl = `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
   const update = body => github.rest.issues.updateComment({
     ...repo, comment_id: Number(commentId),
-    body: `${body}\n\n[Automation and agent logs](${workflowUrl})`,
+    body: `${body}${agent ? `\n\n${agentReport(agent)}` : ''}\n\n[Automation and agent logs](${workflowUrl})`,
   });
   try {
     const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: number });
@@ -50,6 +69,7 @@ async function monitor({
       }
     };
     checkCurrent(pr);
+    if (agent) await update(`Codex changes were published for \`${head}\`. Waiting for independent PR CI results.`);
     const files = await github.paginate(github.rest.pulls.listFiles, { ...repo, pull_number: number, per_page: 100 });
     if (files.length >= 3000) throw new Error('PR file listing may be truncated; inspect checks manually.');
     const expected = [CI];
@@ -131,4 +151,4 @@ async function prepare({ github, context, core, head, base, failedRuns, hasKey, 
   fs.writeFileSync(path.join(context.workspace || process.env.GITHUB_WORKSPACE, 'candidate/.git/patch-ci.log'), logs);
 }
 
-module.exports = { monitor, prepare, latestRuns, platformPaths };
+module.exports = { monitor, prepare, latestRuns, platformPaths, agentReport };
