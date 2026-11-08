@@ -6,6 +6,65 @@ truth. Ordinary verification uses scripted agents and deterministic tests;
 provider access and hosted deployment are separate workflows with explicit
 configuration.
 
+## Rebase and rerun from a PR comment
+
+After the `Rebase PR` workflow is merged into `main` and the token below is
+configured, leave this exact top-level PR comment (not a review/diff comment):
+
+```text
+/rebase
+```
+
+The commenter must currently have write, maintain, or admin access to this
+repository. The PR must be open and target `main`. The workflow uses GitHub's
+native rebase API with an expected-head guard: it rewrites the PR branch onto
+`main` without a merge commit. The resulting synchronize event starts the
+existing PR workflows, including platform validation when its path filter
+matches. If the branch is already current, the command restarts the latest
+completed `CI` and `Platform release` PR runs for that exact head; active runs
+continue. A bot reply links the runs. Read their results in the PR checks; the
+command finishing successfully means checks started, not that tests passed.
+
+### One-time credential setup
+
+Create an expiring personal access token for a user/bot with write access to the
+repository, and save it as the repository Actions secret **`PR_REBASE_TOKEN`**:
+
+```bash
+gh secret set PR_REBASE_TOKEN --repo devYaoYH/Project-Groundwork
+```
+
+Paste the token into the CLI's hidden prompt, never into a PR comment or source
+file. For same-repository PRs, prefer a fine-grained token restricted to this
+repository with **Contents: read/write**, **Pull requests: read/write**, and
+**Actions: read/write**. Include **Workflows: read/write** if PRs can change
+`.github/workflows/`. For fork PRs the token also needs permission to update the
+source branch, and the author must enable maintainer edits; a classic token with
+`public_repo` (or `repo` for private repositories), plus `workflow` for workflow
+edits, can be used when a fine-grained token cannot cover the fork. The command
+respects GitHub's fork and branch protection restrictions and reports access
+failures. Rotate the secret before the token expires.
+
+An ordinary user/bot token is intentional: GitHub's automatic `GITHUB_TOKEN`
+does not start unattended downstream PR workflows after a branch update. See
+[triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+The workflow fails with setup instructions if the secret is missing.
+
+The privileged command checks out only the trusted default-branch event SHA,
+does not persist checkout credentials, and never executes PR code or Git hooks.
+It only reruns allowlisted `pull_request` test workflows; it cannot restart
+push/manual platform deployment runs. Fork checks retain GitHub's normal
+approval policy. Requests for one PR are serialized. Conflicts, denied updates,
+and concurrent head changes stop with a bot reply; resolve the blocker and
+comment `/rebase` again. No coding agent attempts conflict resolution or repairs
+failing tests. Existing PR checks run normally after a successful rebase.
+
+Test the command's authorization, API guards, and run selection locally with:
+
+```bash
+node --test .github/ci/tests/rebase_pr.test.cjs
+```
+
 ## Motivation and change history
 
 The October 19, 2026 baseline PR waited 10m32s for CI. Python tests consumed

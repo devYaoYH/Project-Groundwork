@@ -1,0 +1,37 @@
+name: Rebase PR
+
+on:
+  issue_comment:
+    types: [created]
+
+# Only trusted default-branch code runs here. Never check out the PR branch.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-rebase-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    if: github.event.issue.pull_request && github.event.comment.body == '/rebase'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          HAS_REBASE_TOKEN: ${{ secrets.PR_REBASE_TOKEN != '' }}
+        with:
+          # A user/bot token lets the resulting synchronize event start normal
+          # PR CI automatically, without GITHUB_TOKEN's approval requirement.
+          github-token: ${{ secrets.PR_REBASE_TOKEN || github.token }}
+          script: |
+            await require('./.github/ci/rebase_pr.cjs')({
+              github, context, core,
+              hasToken: process.env.HAS_REBASE_TOKEN === 'true',
+            });
