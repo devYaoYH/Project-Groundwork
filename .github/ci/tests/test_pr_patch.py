@@ -130,11 +130,12 @@ def test_symlinked_artifact_is_rejected(history, tmp_path):
         patch.validate_bundle(tmp_path / "publisher.git", link, base)
 
 
+@pytest.mark.parametrize("concurrent_main", [False, True])
 @pytest.mark.parametrize("concurrent_push", [False, True])
 def test_publication_uses_a_real_lease_and_cannot_overwrite_a_racing_push(
-    history, tmp_path, monkeypatch, concurrent_push
+    history, tmp_path, monkeypatch, concurrent_push, concurrent_main
 ):
-    repo, _, head, base = history
+    repo, original, head, base = history
     remote = tmp_path / "source.git"
     remote.mkdir()
     patch.git(remote, "init", "--bare", ".")
@@ -154,11 +155,21 @@ def test_publication_uses_a_real_lease_and_cannot_overwrite_a_racing_push(
     )
     pr = {
         "state": "open",
-        "base": {"ref": "main", "sha": base},
+        "base": {"ref": "main", "sha": original},
         "head": {"ref": "feature", "sha": head, "repo": {"full_name": "fork/repo"}},
     }
     monkeypatch.setattr(patch, "pull_request", lambda *_args: pr)
     original_git = patch.git
+    main_reads = 0
+
+    def current_main(_repo):
+        nonlocal main_reads
+        main_reads += 1
+        if concurrent_main and main_reads == 2:
+            original_git(remote, "update-ref", "refs/heads/main", original)
+        return original_git(remote, "rev-parse", "main").stdout.strip()
+
+    monkeypatch.setattr(patch, "main_head", current_main)
 
     def local_git(repository, *arguments, **kwargs):
         # Route only the transport to a disposable local remote. All validation
@@ -173,7 +184,12 @@ def test_publication_uses_a_real_lease_and_cannot_overwrite_a_racing_push(
     monkeypatch.setattr(patch, "git", local_git)
     output = tmp_path / "outputs.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    if concurrent_push:
+    if concurrent_main:
+        with pytest.raises(ValueError, match="changed since authorization"):
+            patch.publish(args)
+        assert original_git(remote, "rev-parse", "feature").stdout.strip() == head
+        assert not output.exists()
+    elif concurrent_push:
         with pytest.raises(RuntimeError, match="stale info"):
             patch.publish(args)
         assert original_git(remote, "rev-parse", "feature").stdout.strip() == base
@@ -199,6 +215,7 @@ def validate(pr, **overrides):
         "base": "b" * 40,
         "source_repo": "fork/repo",
         "source_ref": "feature",
+        "main": "b" * 40,
     }
     patch.validate_target(pr, **{**args, **overrides})
 
@@ -209,7 +226,9 @@ def test_moved_or_closed_pr_cannot_be_overwritten(changed):
     if changed == "head":
         pr["head"]["sha"] = "c" * 40
     elif changed == "main":
-        pr["base"]["sha"] = "c" * 40
+        with pytest.raises(ValueError, match="changed since authorization"):
+            validate(pr, main="c" * 40)
+        return
     elif changed == "closed":
         pr["state"] = "closed"
     elif changed == "base_ref":
@@ -342,3 +361,58 @@ def test_comment_feedback_never_authenticates_with_the_workflow_pat():
     assert "format('pr-rebase-{0}', github.event.issue.number)" in group
     assert "format('pr-rebase-ignore-{0}', github.run_id)" in group
     assert workflow["concurrency"]["cancel-in-progress"] is False
+
+
+def test_publication_validates_main_directly_despite_stale_pr_base():
+    pr = target()
+    pr["base"]["sha"] = "c" * 40
+    validate(pr)
+
+
+def test_publisher_resolves_main_from_the_branch_ref(monkeypatch):
+    calls = []
+
+    def command(*args):
+        calls.append(args)
+        return SimpleNamespace(stdout=json.dumps({"object": {"sha": "b" * 40}}))
+
+    monkeypatch.setattr(patch, "command", command)
+    assert patch.main_head("owner/repo") == "b" * 40
+    assert calls == [("gh", "api", "repos/owner/repo/git/ref/heads/main")]
+
+
+def test_clean_rebase_inherits_main_workflow_fix_without_an_extra_repair_commit(history, tmp_path):
+    repo, _, head, _ = history
+    patch.git(repo, "switch", "main")
+    # Keep upstream edits disjoint from the PR, as with a runner-only CI fix.
+    (repo / "shared.txt").write_text("original\n")
+    workflow = repo / ".github/workflows/ci.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("jobs:\n  web:\n    runs-on: ubuntu-24.04\n")
+    patch.git(repo, "add", ".")
+    patch.git(repo, "commit", "-m", "Pin Playwright runner on main")
+    base = patch.git(repo, "rev-parse", "HEAD").stdout.strip()
+    patch.git(repo, "switch", "--detach", head)
+    request = patch.prepare(repo, head, base)
+    assert request["rebase_conflicted"] is False
+    assert "ubuntu-24.04" in workflow.read_text()
+    # Publication accepts the inherited workflow fix: the proposal itself has
+    # no workflow edits, and rebasing alone has already produced a new head.
+    patch.validate_bundle(
+        tmp_path / "publisher.git", bundle(repo, tmp_path / "result.bundle"), base
+    )
+    assert patch.git(repo, "rev-parse", "HEAD").stdout.strip() != head
+    assert patch.git(repo, "log", "--format=%s", f"{base}..HEAD").stdout.strip() == (
+        "Original PR feature"
+    )
+
+
+def test_both_ci_monitors_receive_the_resolved_main_snapshot():
+    root = Path(__file__).resolve().parents[3]
+    jobs = yaml.safe_load((root / ".github/workflows/pr-rebase.yml").read_text())["jobs"]
+    initial = next(step for step in jobs["rebase"]["steps"] if step.get("id") == "checks")
+    verify = jobs["verify"]["steps"][-1]
+    assert initial["env"]["PATCH_BASE"] == "${{ steps.command.outputs.base }}"
+    assert verify["env"]["PATCH_BASE"] == "${{ needs.rebase.outputs.base }}"
+    for step in (initial, verify):
+        assert "base: process.env.PATCH_BASE" in step["with"]["script"]

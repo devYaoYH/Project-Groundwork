@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const rebasePR = require('../rebase_pr.cjs');
 
 function fixture(options = {}) {
-  const calls = { mutations: [], reruns: [], comments: [], reactions: [], failures: [], waits: [] };
+  const calls = { mutations: [], reruns: [], comments: [], reactions: [], failures: [], waits: [], comparisons: [], outputs: {} };
   const pr = {
     state: 'open', node_id: 'PR_node',
     base: { ref: 'main', sha: 'base' },
@@ -27,9 +27,16 @@ function fixture(options = {}) {
   });
   const github = {
     rest: {
+      git: { getRef: async args => {
+        assert.equal(args.ref, 'heads/main');
+        return { data: { object: { sha: options.main || 'base' } } };
+      } },
       repos: {
         getCollaboratorPermissionLevel: async () => ({ data: { permission: options.permission || 'write' } }),
-        compareCommits: async () => ({ data: { status: options.behind && !mutated ? 'diverged' : 'ahead' } }),
+        compareCommits: async args => {
+          calls.comparisons.push(args);
+          return { data: { status: options.behind && !mutated ? 'diverged' : 'ahead' } };
+        },
       },
       pulls: {
         get: async () => ({
@@ -62,7 +69,7 @@ function fixture(options = {}) {
   };
   const input = {
     github, feedback: github, context, hasToken: true,
-    core: { info() {}, setFailed(message) { calls.failures.push(message); } },
+    core: { info() {}, setOutput(key, value) { calls.outputs[key] = value; }, setFailed(message) { calls.failures.push(message); } },
     sleep: async ms => { calls.waits.push(ms); },
   };
   return { calls, input, pr, context, github };
@@ -300,4 +307,65 @@ test('a clean rebase still uses the workflow-token client for the branch mutatio
   assert.equal(calls.mutations.length, 1);
   assert.equal(calls.reactions.length, 1);
   assert.equal(calls.failures.length, 0);
+});
+
+
+test('a stale PR base SHA cannot skip rebasing onto the actual main ref', async () => {
+  const { calls, input, github } = fixture({
+    main: 'current-main', pr: { base: { ref: 'main', sha: 'stale-base' } },
+  });
+  github.rest.repos.compareCommits = async args => {
+    calls.comparisons.push(args);
+    // The stale base is already an ancestor, but current main has missing fixes.
+    return { data: { status: args.base === 'current-main' && args.head === 'old' ? 'diverged' : 'ahead' } };
+  };
+  await rebasePR(input);
+  assert.equal(calls.mutations.length, 1);
+  assert.equal(calls.outputs.base, 'current-main');
+  assert.equal(calls.outputs.head, 'new');
+  assert.equal(calls.outputs.repair, 'false');
+  assert.ok(calls.comparisons.every(args => args.base === 'current-main'));
+  assert.deepEqual(calls.reruns, []);
+  assert.deepEqual(calls.failures, []);
+});
+
+test('a conflict hands Codex the current main ref despite a stale PR base SHA', async () => {
+  const { calls, input, pr } = fixture({
+    behind: true, mutationError: 'Conflicts', main: 'current-main',
+    pr: { base: { ref: 'main', sha: 'stale-base' } },
+  });
+  pr.rebaseable = false;
+  input.enableRepair = true;
+  await rebasePR(input);
+  assert.equal(calls.outputs.base, 'current-main');
+  assert.equal(calls.outputs.repair, 'true');
+  assert.deepEqual(calls.failures, []);
+});
+
+for (const when of ['before mutation', 'after mutation', 'on conflict']) {
+  test(`main advancing ${when} stops the command without a paid repair handoff`, async () => {
+    const { calls, input, github, pr } = fixture({
+      behind: true, mutationError: when === 'on conflict' ? 'Conflicts' : undefined,
+    });
+    input.enableRepair = true;
+    pr.rebaseable = false;
+    let reads = 0;
+    github.rest.git.getRef = async () => ({
+      data: { object: { sha: ++reads >= (when === 'before mutation' ? 2 : 3) ? 'changed' : 'base' } },
+    });
+    await rebasePR(input);
+    assert.equal(calls.mutations.length, when === 'before mutation' ? 0 : 1);
+    assert.equal(calls.failures.length, 1);
+    assert.notEqual(calls.outputs.repair, 'true');
+    assert.deepEqual(calls.reruns, []);
+  });
+}
+
+test('failure to resolve main stops before any rebase or CI rerun', async () => {
+  const { calls, input, github } = fixture({ behind: true });
+  github.rest.git.getRef = async () => { throw new Error('main ref unavailable'); };
+  await rebasePR(input);
+  assert.match(calls.failures[0], /main ref unavailable/);
+  assert.deepEqual(calls.mutations, []);
+  assert.deepEqual(calls.reruns, []);
 });
