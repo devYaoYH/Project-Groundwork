@@ -94,7 +94,13 @@ def test_pull_by_digest_records_only_the_downloaded_candidate_configs(
     )
     monkeypatch.setattr(images, "image_config_id", images.image_id)
     if containerd:
-        monkeypatch.setattr(images, "image_id", lambda ref: DIGEST if ref in (PLATFORM, images.LOCAL_IMAGES["platform"]) else SCI_DIGEST)
+        monkeypatch.setattr(
+            images,
+            "image_id",
+            lambda ref: (
+                DIGEST if ref in (PLATFORM, images.LOCAL_IMAGES["platform"]) else SCI_DIGEST
+            ),
+        )
     if wrong_download:
         with pytest.raises(ValueError, match="Downloaded image differs"):
             cloud.pull("project", "us-central1", SOURCE, SCIENCE, BUILD)
@@ -227,12 +233,18 @@ def test_failed_cloud_submission_still_records_latency(tmp_path, monkeypatch):
     monkeypatch.setattr(latency, "ROOT", tmp_path)
     monkeypatch.setattr(latency.subprocess, "check_output", lambda *a, **k: SOURCE)
 
-    def denied(*args, **kwargs):
+    calls = []
+
+    def denied(args, **kwargs):
+        calls.append(args)
         raise subprocess.CalledProcessError(1, ["gcloud"], stderr="PERMISSION_DENIED")
 
     monkeypatch.setattr(latency, "command", denied)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(RuntimeError, match="maintainer must review/apply") as failure:
         latency.submit("build", "project", "us-central1", SOURCE, SCIENCE, False)
+    assert isinstance(failure.value.__cause__, subprocess.CalledProcessError)
+    assert len(calls) == 1 and calls[0][:2] == ["builds", "submit"]
+    assert not any("iam" in args or "add-iam-policy-binding" in args for args in calls)
     assert json.loads((tmp_path / "cloud-build.json").read_text())["status"] == "SUBMISSION_FAILED"
 
 

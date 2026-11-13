@@ -16,6 +16,19 @@ concurrency:
   group: platform-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.5'
+          terraform_wrapper: false
+      - run: terraform -chdir=deploy/terraform fmt -check -recursive
+      - run: terraform -chdir=deploy/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=deploy/terraform validate
+      - run: terraform -chdir=deploy/terraform test
+
   platform-tests:
     runs-on: ubuntu-latest
     steps:
@@ -154,16 +167,22 @@ jobs:
 
   validate:
     if: always()
-    needs: [platform-tests, platform-stack]
+    needs: [platform-tests, platform-stack, terraform-validate]
     runs-on: ubuntu-latest
     steps:
-      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success
+      - run: test "$TEST_RESULT" = success && test "$STACK_RESULT" = success && test "$TERRAFORM_RESULT" = success
         env:
           TEST_RESULT: ${{ needs.platform-tests.result }}
           STACK_RESULT: ${{ needs.platform-stack.result }}
+          TERRAFORM_RESULT: ${{ needs.terraform-validate.result }}
 
   deploy:
-    if: github.event_name != 'pull_request' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+    # IAM is provisioned by maintainers. Only application validation gates release.
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' &&
+      needs.validate.result == 'success' && needs.platform-stack.result == 'success'
     needs: [validate, platform-stack]
     runs-on: ubuntu-latest
     permissions:
@@ -209,7 +228,7 @@ jobs:
 
   latencies:
     if: always()
-    needs: [platform-tests, platform-stack, validate, deploy]
+    needs: [platform-tests, platform-stack, terraform-validate, validate, deploy]
     runs-on: ubuntu-latest
     permissions:
       contents: read

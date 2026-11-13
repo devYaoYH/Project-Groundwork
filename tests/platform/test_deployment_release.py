@@ -344,21 +344,3 @@ def test_catalog_permission_or_network_failure_prevents_api_rollout(monkeypatch,
     assert not any(arguments[:3] == ["run", "deploy", "groundwork-control"] for arguments in calls)
     assert not any(arguments[0] == "storage" for arguments in calls)
     assert "private-build-token" not in "".join(capsys.readouterr())
-
-
-@pytest.mark.parametrize("existing", [False, True])
-def test_vertex_adc_setup_grants_prediction_only_to_the_runtime_identity(monkeypatch, existing):
-    from deploy import bootstrap
-
-    commands, grants = [], []
-    monkeypatch.setattr(bootstrap, "command", lambda args, **kwargs: commands.append(args))
-    monkeypatch.setattr(bootstrap, "exists", lambda args: existing)
-    monkeypatch.setattr(bootstrap, "grant", lambda *args: grants.append(args))
-    bootstrap.enable_vertex_adc("test-project", "groundwork-worker@test-project.iam.gserviceaccount.com")
-    assert commands[0] == ["services", "enable", "aiplatform.googleapis.com", "--project", "test-project", "--quiet"]
-    role = commands[1]
-    assert role[:3] == ["iam", "roles", "update" if existing else "create"]
-    permissions = next(value for value in role if value.startswith("--permissions=")).split("=", 1)[1]
-    assert set(permissions.split(",")) == {"aiplatform.endpoints.predict", "serviceusage.services.use"}
-    assert grants == [("test-project", "serviceAccount:groundwork-worker@test-project.iam.gserviceaccount.com",
-                       "projects/test-project/roles/groundworkVertexPredictor")]

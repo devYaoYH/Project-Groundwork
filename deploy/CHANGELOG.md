@@ -1,5 +1,17 @@
 # Platform deployment changelog
 
+## Maintainer-run Terraform and automatic releases — 2026-11-13
+
+- Keep application IAM in pinned Terraform with private versioned state and locking;
+  maintainers review/apply it using human credentials. Remove the GitHub IAM apply
+  job, infrastructure federation and backend variables.
+- Preserve automatic application release gates and exact image/source evidence.
+  Missing permissions fail with maintainer provisioning guidance.
+- Add concrete deployment ownership, repository-rule rollout instructions, the
+  three human groups, and revocation/adoption for older infrastructure trust.
+- Backend setup creates only its private state bucket; it creates no privileged
+  account or role. Offline Terraform validation remains credential-free.
+
 ## Cloud Build candidates with GitHub validation — 2026-10-19
 
 - Preserve PR #32 as the GitHub-builder alternative and implement PR #33 with
