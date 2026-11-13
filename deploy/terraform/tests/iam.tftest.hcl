@@ -66,6 +66,24 @@ run "runtime_prediction_boundary" {
     ])
     error_message = "Catalogue publication must remain create-only with read-back."
   }
+  assert {
+    condition = toset([for grant in google_project_iam_member.grants : grant.role]) == toset([
+      "roles/datastore.user", "roles/logging.logWriter", "roles/cloudtasks.enqueuer",
+      "roles/run.jobsExecutorWithOverrides", "roles/run.developer",
+      "roles/cloudbuild.builds.editor", "roles/serviceusage.serviceUsageConsumer",
+      google_project_iam_custom_role.roles["vertex"].name,
+      google_project_iam_custom_role.roles["catalogue"].name,
+    ])
+    error_message = "Application identities must not acquire project IAM or infrastructure administration."
+  }
+  assert {
+    condition = alltrue(concat(
+      [for grant in google_storage_bucket_iam_member.objects : grant.bucket != "${var.project_id}-groundwork-tfstate"],
+      [for grant in google_storage_bucket_iam_member.prefixes : grant.bucket != "${var.project_id}-groundwork-tfstate"],
+      [for grant in google_service_account_iam_member.act_as : !strcontains(grant.service_account_id, "groundwork-infra@")],
+    ))
+    error_message = "No application principal may gain Terraform state access or infrastructure execution authority."
+  }
 }
 
 run "another_project_and_existing_secrets" {

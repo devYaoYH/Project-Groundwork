@@ -1,0 +1,21 @@
+# Infrastructure-aware owner. Enforce required code-owner review and fresh
+# approvals through main's ruleset; this file alone does not enforce reviews.
+# Environment/web/configuration contributions retain ordinary maintainer review.
+/.github/CODEOWNERS @devYaoYH
+/.github/workflows/ @devYaoYH
+/.github/actions/ @devYaoYH
+/.github/ci/ @devYaoYH
+/.github/codex/ @devYaoYH
+/deploy/ @devYaoYH
+/cloudbuild*.yaml @devYaoYH
+/cloud_platform/publish_catalogue.py @devYaoYH
+/Dockerfile* @devYaoYH
+/.dockerignore @devYaoYH
+/.gcloudignore @devYaoYH
+/scripts/install_workspace.py @devYaoYH
+/scripts/workspace.py @devYaoYH
+/scripts/export_catalogue.py @devYaoYH
+/scripts/export_environment_ids.py @devYaoYH
+/requirements-platform.txt @devYaoYH
+/tests/platform/test_infrastructure_setup.py @devYaoYH
+/docs/DEPLOYMENT_TRUST.md @devYaoYH

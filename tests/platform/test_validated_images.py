@@ -172,12 +172,18 @@ def test_workflow_validates_cloud_candidates_before_the_second_cloud_request():
     jobs = workflow["jobs"]
     stack = jobs["platform-stack"]["steps"]
     names = [step.get("name", "") for step in stack]
-    ordered = ["Build candidates and caches in Cloud Build", "Download the exact Cloud Build candidates",
-               "Verify the paired local worker and science runtime", "Test the release images without rebuilding",
-               "Verify validation did not replace either image"]
+    ordered = [
+        "Build candidates and caches in Cloud Build",
+        "Download the exact Cloud Build candidates",
+        "Verify the paired local worker and science runtime",
+        "Test the release images without rebuilding",
+        "Verify validation did not replace either image",
+    ]
     assert [names.index(name) for name in ordered] == sorted(names.index(name) for name in ordered)
-    assert set(jobs["deploy"]["needs"]) == {"validate", "platform-stack", "infrastructure"}
-    assert any(step.get("uses") == "actions/download-artifact@v4" for step in jobs["deploy"]["steps"])
+    assert set(jobs["deploy"]["needs"]) == {"validate", "platform-stack"}
+    assert any(
+        step.get("uses") == "actions/download-artifact@v4" for step in jobs["deploy"]["steps"]
+    )
     assert "deploy/latency.py submit publish" in str(jobs["deploy"]["steps"])
 
 
@@ -191,12 +197,22 @@ def test_registry_replacement_after_push_aborts_without_a_deployment_record(reco
     assert "published" not in json.loads(path.read_text())
 
 
-@pytest.mark.parametrize("descriptor", [None, {"mediaType": "application/vnd.oci.image.manifest.v1+json"},
-                                      {"mediaType": "application/vnd.oci.image.index.v1+json"}])
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        None,
+        {"mediaType": "application/vnd.oci.image.manifest.v1+json"},
+        {"mediaType": "application/vnd.oci.image.index.v1+json"},
+    ],
+)
 def test_local_handle_and_configuration_identity_are_distinguished(monkeypatch, descriptor):
     calls = []
-    monkeypatch.setattr(images, "docker", lambda *args: json.dumps({"Id": PLATFORM_ID, "Descriptor": descriptor}))
-    monkeypatch.setattr(images, "saved_config_id", lambda value: calls.append(value) or PLATFORM_DIGEST)
+    monkeypatch.setattr(
+        images, "docker", lambda *args: json.dumps({"Id": PLATFORM_ID, "Descriptor": descriptor})
+    )
+    monkeypatch.setattr(
+        images, "saved_config_id", lambda value: calls.append(value) or PLATFORM_DIGEST
+    )
     assert images.image_config_id("fixture") == (PLATFORM_DIGEST if descriptor else PLATFORM_ID)
     assert calls == ([PLATFORM_ID] if descriptor else [])
 
@@ -223,9 +239,13 @@ def test_ambiguous_or_non_content_addressed_exports_are_rejected(configs):
         images.archive_config_id(docker_archive(configs))
 
 
-def test_containerd_publication_tags_the_validated_handle_and_checks_the_config(tmp_path, monkeypatch):
+def test_containerd_publication_tags_the_validated_handle_and_checks_the_config(
+    tmp_path, monkeypatch
+):
     configs = dict(zip(images.LOCAL_IMAGES.values(), (PLATFORM_ID, RUNTIME_ID), strict=True))
-    handles = dict(zip(images.LOCAL_IMAGES.values(), (PLATFORM_DIGEST, RUNTIME_DIGEST), strict=True))
+    handles = dict(
+        zip(images.LOCAL_IMAGES.values(), (PLATFORM_DIGEST, RUNTIME_DIGEST), strict=True)
+    )
     monkeypatch.setattr(images, "image_id", handles.__getitem__)
     monkeypatch.setattr(images, "image_config_id", configs.__getitem__)
     path = tmp_path / "validated.json"
@@ -240,20 +260,29 @@ def test_containerd_publication_tags_the_validated_handle_and_checks_the_config(
 
 
 def test_manifest_digest_cannot_substitute_for_a_mismatched_configuration(monkeypatch):
-    monkeypatch.setattr(images, "docker", lambda *args: json.dumps({"config": {"digest": RUNTIME_ID}}))
+    monkeypatch.setattr(
+        images, "docker", lambda *args: json.dumps({"config": {"digest": RUNTIME_ID}})
+    )
     with pytest.raises(ValueError, match="differs from the image"):
         images.verify_registry_image(PLATFORM_IMAGE, PLATFORM_DIGEST)
 
 
 @pytest.mark.parametrize("containerd", [False, True])
-def test_historic_validation_records_keep_their_config_id_contract(recorded, monkeypatch, containerd):
+def test_historic_validation_records_keep_their_config_id_contract(
+    recorded, monkeypatch, containerd
+):
     path, _ = recorded
     record = json.loads(path.read_text())
     record.pop("local_images")
     images.write_record(path, record)
     if containerd:
-        handles = dict(zip(images.LOCAL_IMAGES.values(), (PLATFORM_DIGEST, RUNTIME_DIGEST), strict=True))
+        handles = dict(
+            zip(images.LOCAL_IMAGES.values(), (PLATFORM_DIGEST, RUNTIME_DIGEST), strict=True)
+        )
         monkeypatch.setattr(images, "image_id", handles.__getitem__)
     images.verify_images(path, SOURCE)
     registry(monkeypatch)
-    assert images.publish_images(path, "project", "us-central1", SOURCE, "123-1")["runtime-image"] == RUNTIME_IMAGE
+    assert (
+        images.publish_images(path, "project", "us-central1", SOURCE, "123-1")["runtime-image"]
+        == RUNTIME_IMAGE
+    )

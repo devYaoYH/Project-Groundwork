@@ -162,7 +162,8 @@ immutable runtime history described above.
 
 No provider secret is created with an empty value. To enable a provider, add a
 Secret Manager secret with its real value, then declare its name in Terraform
-`provider_secret_names` and the GitHub `GCP_PROVIDER_SECRET_NAMES` JSON list. Terraform grants `groundwork-worker`
+`provider_secret_names` for the maintainer plan/apply. Terraform grants
+`groundwork-worker`
 `roles/secretmanager.secretAccessor` **on that secret** and build metadata Viewer.
 Supported names are
 `groundwork-openai-api-key`, `groundwork-anthropic-api-key`,
@@ -179,8 +180,9 @@ requirements on its [model card](https://docs.cloud.google.com/gemini-enterprise
 
 The runtime identity (`groundwork-worker@PROJECT_ID.iam.gserviceaccount.com` in
 this deployment) needs `aiplatform.endpoints.predict` and `serviceusage.services.use`.
-Terraform now owns the prediction-only custom role and worker membership and
-reconciles them on every production release. The former `--vertex-adc` bootstrap
+Terraform owns the prediction-only custom role and worker membership; an
+infrastructure maintainer reviews/applies changes before the application needs
+them. The former `--vertex-adc` bootstrap
 flag and `enable_vertex_adc` IAM writer are retired; follow the
 [existing-role adoption instructions](terraform/README.md#initial-setup-and-adoption-administrator-once-per-project)
 before the first Terraform-enabled release. Terraform enables Vertex without
@@ -261,22 +263,24 @@ image's manifest, not a catalogue discovered from a different local checkout.
 ## GitHub → Cloud Build → shared release
 
 ```sh
-python deploy/configure_github.py \
+python deploy/configure_github.py --project cicl-487801 --region us-central1 \
   --oauth-client-id CLIENT.apps.googleusercontent.com
 ```
 
-After the administrator provisions `groundwork-infra` and its versioned state
-bucket and adopts existing IAM, this writes nonsecret repository variables and
-provisions Workload Identity Federation restricted to the numeric repository and owner IDs, the platform
+After a maintainer prepares the private state backend and reviews/applies
+Terraform, this writes the five application repository variables and
+provisions Workload Identity Federation restricted to the numeric repository and
+owner IDs, the platform
 workflow, and `main` push/manual events. No service-account key is stored in
 GitHub. Pull requests run platform tests without cloud credentials. Trusted main
 pushes submit a Cloud Build candidate request, download the exact output digests
 for GitHub validation, then submit a second Cloud Build request for promotion and
-deployment. Cloud Build owns image builds and registry cache writes; GitHub needs
-only registry Reader access. Production IAM reconciliation uses the dedicated
-infrastructure account with IAM-management permissions and a separate main-only
-federation pool; application identities do not gain IAM administration. All
-checked-in game packages declaring `a2a_engine.environments` are automatically installed. The
+deployment. Cloud Build owns image builds and registry cache writes; GitHub's
+registry access is Reader, while its effective build authority follows the CI
+service-account delegation. IAM changes remain maintainer-run. GitHub gets no
+infrastructure federation, state access or IAM administration. See
+[deployment trust and required review](../docs/DEPLOYMENT_TRUST.md). All checked-in
+game packages declaring `a2a_engine.environments` are automatically installed. The
 image first installs those packages, then exports route IDs from the same
 registered release declarations used by the API catalog. Next builds static
 environment and item pages from that generated JSON, so adding a trusted game
@@ -307,9 +311,9 @@ diagnostic artifact ID and retains provenance and timing data in
 
 Before using the flow, complete [Terraform setup and adoption](terraform/README.md).
 Terraform owns the repository-scoped CI Reader and conditional candidate-manifest
-grant formerly written by bootstrap. Routine production releases reconcile IAM
-alongside building/testing, then wait for both successful validation and apply.
-Publish-only runs skip infrastructure reconciliation and hosted rollout.
+grant formerly written by bootstrap. A maintainer applies reviewed IAM first;
+routine releases wait for application/offline validation without a Terraform
+apply or per-release administrator click. Publish-only runs skip hosted rollout.
 
 If PR #32's CI Writer grants were previously applied, remove those two Writer
 bindings after adding Reader; adding Reader alone does not revoke Writer.
@@ -359,9 +363,11 @@ python deploy/latency.py submit publish --project cicl-487801 --region us-centra
 Omit `--publish-only` only for an authorized hosted release and supply
 `GOOGLE_OAUTH_CLIENT_ID`. Do not fabricate validation records to skip tests.
 
-Workload Identity Federation permits application impersonation of `groundwork-ci`
-and infrastructure impersonation of `groundwork-infra` through separate pools; API
-permissions still come from that service account's roles. Terraform grants CI
+Workload Identity Federation permits only application impersonation of
+`groundwork-ci`; effective permissions include its Cloud Build delegation.
+Infrastructure maintainers use human ADC for Terraform. Revoke older
+infrastructure federation before configuring the new route, following the
+[adoption/revocation runbook](terraform/README.md). Terraform grants CI
 Cloud Build submission, use of the build identity, access to its source bucket,
 repository-scoped Artifact Registry Reader on `groundwork` and
 `groundwork-runtime`, and `roles/serviceusage.serviceUsageConsumer`. Its source-bucket access includes

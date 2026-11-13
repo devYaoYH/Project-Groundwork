@@ -34,6 +34,20 @@ live-provider work; keep existing private configuration when setting them up.
 Read [AGENTS.md](AGENTS.md) for scientific pins, shared lifecycle, and ownership
 invariants.
 
+## Reviews and cloud access
+
+Environment, web-console and experiment contributions use normal PR review and
+CI; contributors need no cloud administration. Infrastructure-aware maintainers
+review the deployment/IAM paths named in `.github/CODEOWNERS`. Enforced code-owner
+review and fresh approvals must be enabled in main's repository rules; ownership
+alone is advisory. See [deployment trust](docs/DEPLOYMENT_TRUST.md).
+
+Accepted application changes deploy automatically after validation. Terraform
+and cloud IAM changes are reviewed/applied separately by infrastructure
+maintainers using human credentials. Experiment users work through application
+ownership/validation rather than repository or GCP access. Missing self-service
+configuration/item-bank flows are separate application work.
+
 ## The four things a researcher does
 
 **A) Keys in `.env`.** Never in YAML. Experiment files reference `${VAR}`;

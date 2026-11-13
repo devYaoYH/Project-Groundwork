@@ -1,4 +1,4 @@
-"""Configure short-lived GitHub OIDC credentials; no service account key exists.
+"""Configure application-only GitHub OIDC; Terraform remains maintainer-run.
 
 The deployment workflow on main is trusted. --verification-branch allows exactly
 one additional branch for initial verification; rerun without it after merging.
@@ -82,28 +82,87 @@ def configure_provider(project, repository, repo, pool, provider, branches):
     )
 
 
+def require_application_only_trust(project):
+    """Fail before changing trust/variables if the retired GitHub IAM path remains.
+
+    Checked list/read calls distinguish permission failures from missing objects.
+    Alternate project-wide or custom-role grants still need the maintainer audit
+    documented in terraform/README.md; this is not an effective-IAM proof.
+    """
+    pools = json.loads(
+        command(
+            [
+                "iam",
+                "workload-identity-pools",
+                "list",
+                "--project",
+                project,
+                "--location=global",
+                "--format=json",
+            ],
+            capture=True,
+        )
+    )
+    if any(
+        pool["name"].endswith("/groundwork-infrastructure") and pool.get("state") != "DELETED"
+        for pool in pools
+    ):
+        raise ValueError(
+            "Retired infrastructure federation remains. A maintainer must revoke "
+            "GitHub infrastructure access using deploy/terraform/README.md before "
+            "configuring application releases. No IAM repair is run by CI."
+        )
+    accounts = json.loads(
+        command(
+            [
+                "iam",
+                "service-accounts",
+                "list",
+                "--project",
+                project,
+                "--format=json",
+            ],
+            capture=True,
+        )
+    )
+    infrastructure = f"groundwork-infra@{project}.iam.gserviceaccount.com"
+    if any(account["email"] == infrastructure for account in accounts):
+        policy = json.loads(
+            command(
+                [
+                    "iam",
+                    "service-accounts",
+                    "get-iam-policy",
+                    infrastructure,
+                    "--project",
+                    project,
+                    "--format=json",
+                ],
+                capture=True,
+            )
+        )
+        application_accounts = {
+            f"serviceAccount:groundwork-{name}@{project}.iam.gserviceaccount.com"
+            for name in ("api", "worker", "dispatch", "build", "ci")
+        }
+        if any(
+            "/workloadIdentityPools/" in member or member in application_accounts
+            for binding in policy.get("bindings", [])
+            for member in binding.get("members", [])
+        ):
+            raise ValueError(
+                "Infrastructure account still trusts application/workload identities. Revoke "
+                "that binding as a maintainer; application setup cannot retain it."
+            )
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", default="cicl-487801")
+    parser.add_argument("--project", required=True)
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--repository", default="devYaoYH/Project-Groundwork")
     parser.add_argument("--oauth-client-id", required=True)
     parser.add_argument("--verification-branch")
-    parser.add_argument(
-        "--terraform-state-bucket",
-        help="Existing private versioned GCS bucket; defaults to PROJECT-groundwork-tfstate",
-    )
-    parser.add_argument(
-        "--provider-secret-names",
-        nargs="*",
-        choices=[
-            "groundwork-openai-api-key",
-            "groundwork-anthropic-api-key",
-            "groundwork-google-api-key",
-            "groundwork-openrouter-api-key",
-        ],
-        help="Existing Groundwork provider secret names, never secret values",
-    )
     args = parser.parse_args()
     repo = json.loads(github(["api", f"repos/{args.repository}"], capture=True))
     project, pool, provider = args.project, "groundwork-github", "github"
@@ -113,11 +172,8 @@ def main():
     branches = ["main"]
     if args.verification_branch and args.verification_branch != "main":
         branches.append(args.verification_branch)
+    require_application_only_trust(project)
     configure_provider(project, args.repository, repo, pool, provider, branches)
-    # A separate pool prevents a temporary application verification branch from
-    # impersonating the more privileged infrastructure account via a peer provider.
-    infra_pool = "groundwork-infrastructure"
-    configure_provider(project, args.repository, repo, infra_pool, provider, ["main"])
     ci = f"groundwork-ci@{project}.iam.gserviceaccount.com"
     principal = f"principalSet://iam.googleapis.com/projects/{number}/locations/global/workloadIdentityPools/{pool}/attribute.repository_id/{repo['id']}"
     command(
@@ -134,22 +190,6 @@ def main():
         ],
         capture=True,
     )
-    infrastructure = f"groundwork-infra@{project}.iam.gserviceaccount.com"
-    infra_principal = f"principalSet://iam.googleapis.com/projects/{number}/locations/global/workloadIdentityPools/{infra_pool}/attribute.repository_id/{repo['id']}"
-    command(
-        [
-            "iam",
-            "service-accounts",
-            "add-iam-policy-binding",
-            infrastructure,
-            "--project",
-            project,
-            "--role=roles/iam.workloadIdentityUser",
-            "--member",
-            infra_principal,
-        ],
-        capture=True,
-    )
     resource = (
         f"projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{provider}"
     )
@@ -159,13 +199,7 @@ def main():
         "GCP_WORKLOAD_IDENTITY_PROVIDER": resource,
         "GCP_CI_SERVICE_ACCOUNT": ci,
         "GOOGLE_OAUTH_CLIENT_ID": args.oauth_client_id,
-        "GCP_INFRA_WORKLOAD_IDENTITY_PROVIDER": f"projects/{number}/locations/global/workloadIdentityPools/{infra_pool}/providers/{provider}",
-        "GCP_INFRA_SERVICE_ACCOUNT": infrastructure,
-        "GCP_TERRAFORM_STATE_BUCKET": args.terraform_state_bucket
-        or f"{project}-groundwork-tfstate",
     }
-    if args.provider_secret_names is not None:
-        variables["GCP_PROVIDER_SECRET_NAMES"] = json.dumps(args.provider_secret_names)
     for name, value in variables.items():
         github(["variable", "set", name, "--repo", args.repository, "--body", value])
     print(

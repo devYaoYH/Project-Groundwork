@@ -14,6 +14,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.5'
+          terraform_wrapper: false
+      - run: terraform -chdir=deploy/terraform fmt -check -recursive
+      - run: terraform -chdir=deploy/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=deploy/terraform validate
+      - run: terraform -chdir=deploy/terraform test
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -129,13 +142,14 @@ jobs:
   # Preserve the required check name and fail closed if any shard is cancelled.
   test:
     if: always()
-    needs: [python-tests, package-tests]
+    needs: [python-tests, package-tests, terraform]
     runs-on: ubuntu-latest
     steps:
-      - run: test "$PYTHON_RESULT" = success && test "$PACKAGE_RESULT" = success
+      - run: test "$PYTHON_RESULT" = success && test "$PACKAGE_RESULT" = success && test "$TERRAFORM_RESULT" = success
         env:
           PYTHON_RESULT: ${{ needs.python-tests.result }}
           PACKAGE_RESULT: ${{ needs.package-tests.result }}
+          TERRAFORM_RESULT: ${{ needs.terraform.result }}
 
   runtime-tests:
     runs-on: ubuntu-latest

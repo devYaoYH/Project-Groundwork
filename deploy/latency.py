@@ -149,6 +149,12 @@ def submit(phase, project, region, source, runtime_source, publish_only):
         if phase == "build":
             with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a") as output:
                 output.write(f"build-id={build['id']}\n")
+    except (subprocess.CalledProcessError, RuntimeError) as error:
+        raise RuntimeError(
+            f"Application Cloud Build {phase} failed; inspect the build/logs. "
+            "If access is missing, an infrastructure maintainer must review/apply "
+            "deploy/terraform first. Releases never grant IAM or retry as an administrator."
+        ) from error
     finally:
         result = describe_timings(build) if build else {"status": "SUBMISSION_FAILED"}
         result.update(
